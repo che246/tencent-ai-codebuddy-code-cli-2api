@@ -17,6 +17,7 @@ const USER_AGENT = `CLI/${CURRENT_VERSION} CodeBuddy/${CURRENT_VERSION}`;
 
 const CONFIG_PATH = path.resolve('config.json');
 const ACCOUNTS_PATH = path.resolve('accounts.json');
+const LOG_FILE_PATH = path.resolve('gateway.log');
 
 let config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 let accounts = fs.existsSync(ACCOUNTS_PATH) ? JSON.parse(fs.readFileSync(ACCOUNTS_PATH, 'utf8')) : [];
@@ -31,6 +32,45 @@ function getTodayString() {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+// ─── 统一诊断日志系统 (Logger & Ring Buffer) ─────────────────────────────
+class Logger {
+  static ringBuffer = [];
+  static maxBufferSize = 1000;
+
+  static write(level, category, message, meta = null) {
+    const time = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const id = crypto.randomUUID().slice(0, 8);
+    const logItem = {
+      id,
+      time,
+      level: level.toUpperCase(),
+      category: category.toUpperCase(),
+      message,
+      meta
+    };
+
+    this.ringBuffer.unshift(logItem);
+    if (this.ringBuffer.length > this.maxBufferSize) {
+      this.ringBuffer.pop();
+    }
+
+    const metaStr = meta ? ` | ${JSON.stringify(meta)}` : '';
+    const line = `[${time}] [${logItem.level.padEnd(5)}] [${logItem.category}] ${message}${metaStr}\n`;
+
+    if (level === 'error') {
+      process.stderr.write(line);
+    } else {
+      process.stdout.write(line);
+    }
+
+    fs.appendFile(LOG_FILE_PATH, line, () => {});
+  }
+
+  static info(category, message, meta) { this.write('info', category, message, meta); }
+  static warn(category, message, meta) { this.write('warn', category, message, meta); }
+  static error(category, message, meta) { this.write('error', category, message, meta); }
 }
 
 // 会话粘性映射: sessionKey -> { uid, lastActive } (带 1 小时 TTL 自动清理)
@@ -56,6 +96,7 @@ class AccountScheduler {
         const isModelCooling = requestedModel && acc.modelCooldowns?.[requestedModel] && now < acc.modelCooldowns[requestedModel];
         if (!isModelCooling) {
           sticky.lastActive = now;
+          Logger.info('DISPATCH', `粘性会话复用账号 [${acc.email} (${acc.uid})]`, { sessionKey: sessionKey.slice(0, 8), model: requestedModel });
           return acc;
         }
       }
@@ -84,6 +125,7 @@ class AccountScheduler {
     if (sessionKey) {
       sessionStickyMap.set(sessionKey, { uid: chosen.uid, lastActive: now });
     }
+    Logger.info('DISPATCH', `调度选中账号 [${chosen.email} (${chosen.uid})] (在途并发: ${chosen.inFlight || 0}, 剩余积分: ${chosen.creditsRemain || 0})`, { model: requestedModel });
     return chosen;
   }
 
@@ -91,18 +133,17 @@ class AccountScheduler {
     const acc = accounts.find(a => a.uid === uid);
     if (acc) {
       acc.cooldownUntil = Date.now() + seconds * 1000;
-      console.warn(`[Cooldown:Account] ${uid} (${acc.email}) cooled down for ${seconds}s. Reason: ${reason}`);
+      Logger.warn('COOLDOWN', `账号 [${acc.email} (${uid})] 全局冷却 ${seconds}秒`, { reason });
       saveAccounts();
     }
   }
 
-  // 6. 模型级限流 (错误码 6004)：仅冷却单模型，不株连整个账号
   static cooldownModel(uid, modelId, seconds = 600, reason = '') {
     const acc = accounts.find(a => a.uid === uid);
     if (acc) {
       if (!acc.modelCooldowns) acc.modelCooldowns = {};
       acc.modelCooldowns[modelId] = Date.now() + seconds * 1000;
-      console.warn(`[Cooldown:Model] ${uid} (${acc.email}) model [${modelId}] cooled down for ${seconds}s. Reason: ${reason}`);
+      Logger.warn('COOLDOWN', `账号 [${acc.email} (${uid})] 模型 [${modelId}] 局部冷却 ${seconds}秒`, { reason });
       saveAccounts();
     }
   }
@@ -134,7 +175,7 @@ class AccountScheduler {
         saveAccounts();
       }
     } catch (e) {
-      console.error(`Failed to refresh credits for ${acc.uid}:`, e.message);
+      Logger.error('BILLING', `账号 [${acc.uid}] 刷新积分失败: ${e.message}`);
     }
   }
 
@@ -173,46 +214,35 @@ class AccountScheduler {
         userMsg = rawMsg || '签到失败';
       }
 
-      console.log(`[Checkin] Account ${acc.uid} (${acc.email}): ${userMsg}`);
+      Logger.info('CHECKIN', `账号 [${acc.email} (${acc.uid})] 签到: ${userMsg}`);
       await this.refreshCredits(acc);
       saveAccounts();
       return { success: isSuccess || isAlready, msg: userMsg };
     } catch (e) {
+      Logger.error('CHECKIN', `账号 [${acc.uid}] 签到网络异常: ${e.message}`);
       return { success: false, msg: `网络错误: ${e.message}` };
     }
   }
 }
 
-// 针对腾讯上游 11-128 渠道指纹检测的语义等价清洗 (解决 DSH、Claude Code 等被拒问题)
+// 针对腾讯上游 11-128 渠道指纹检测的语义等价清洗
 function sanitizeChannelFingerprints(text, role) {
   if (typeof text !== 'string') return text;
   if (role !== 'system' && role !== 'developer' && role !== 'assistant') {
     return text;
   }
 
-  // 1. DSH 触发源一：文件引用段里的 @ 字形
   text = text.replace(/(Tokens\s+prefixed\s+with\s+)@(\s+are\s+paths)/gi, '$1(at)$2');
-
-  // 2. DSH 触发源二：内核身份句中性化
   text = text.replace(/You\s+are\s+an\s+AI\s+agent\s+powered\s+by\s+DeepSeek[\s\u200B]+Harness\./gi, 'You are a helpful AI assistant.');
-
-  // 3. DSH 触发源三：coding agent 句式
   text = text.replace(/You\s+are\s+a\s+coding\s+agent\s+powered\s+by\s+/gi, 'You are a coding agent running on ');
-
-  // 4. DSH 触发源四：Web GUI 段
   text = text.replace(/DeepSeek[\s\u200B]+Harness\s+Web\s+GUI/gi, 'Web GUI');
-
-  // 5. Claude Code 触发源：身份句与 Git 分支句
   text = text.replace(/You\s+are\s+Claude\s+Code,\s+Anthropic's\s+official\s+CLI\s+tool\s+for\s+Claude\./gi, 'You are an interactive AI assistant for coding.');
   text = text.replace(/Default\s+branch\s+\(you\s+will\s+usually\s+use\s+this\s+for\s+PRs\)/gi, 'Default branch (you will usually use this for PRs)');
-
-  // 6. 兜底清洗残留品牌组合指纹
   text = text.replace(/DeepSeek[\s\u200B]+Harness/gi, 'DeepSeek-Harness');
 
   return text;
 }
 
-// ─── 消息序列化与格式标准化 ─────────────────────────────────────────────
 function formatMessagesForUpstream(messages) {
   return messages.map(m => {
     let content = m.content ?? '';
@@ -228,17 +258,12 @@ function formatMessagesForUpstream(messages) {
     }
 
     const item = { role: m.role, content };
-    if (m.tool_calls) {
-      item.tool_calls = m.tool_calls;
-    }
-    if (m.role === 'tool') {
-      item.tool_call_id = m.tool_call_id;
-    }
+    if (m.tool_calls) item.tool_calls = m.tool_calls;
+    if (m.role === 'tool') item.tool_call_id = m.tool_call_id;
     return item;
   });
 }
 
-// 3. 模型能力前置守卫：校验 supportsImages 与 supportsToolCall，避免触发 400
 function applyModelCapabilityGuards(upstreamPayload, modelMeta) {
   if (!modelMeta) return upstreamPayload;
 
@@ -246,12 +271,15 @@ function applyModelCapabilityGuards(upstreamPayload, modelMeta) {
     if (upstreamPayload.tools) {
       delete upstreamPayload.tools;
       delete upstreamPayload.tool_choice;
+      Logger.info('GUARD', `模型 [${modelMeta.id}] 声明不支持工具调用，已前置剥离 tools 参数避免 400`);
     }
   }
 
   if (modelMeta.supportsImages === false && Array.isArray(upstreamPayload.messages)) {
+    let flattened = false;
     upstreamPayload.messages = upstreamPayload.messages.map(m => {
       if (Array.isArray(m.content)) {
+        flattened = true;
         const flatText = m.content.map(part => {
           if (part.type === 'text') return part.text;
           if (part.type === 'image_url') return `[图片附件: 当前模型 ${modelMeta.id} 不支持视觉识图]`;
@@ -261,12 +289,14 @@ function applyModelCapabilityGuards(upstreamPayload, modelMeta) {
       }
       return m;
     });
+    if (flattened) {
+      Logger.info('GUARD', `模型 [${modelMeta.id}] 声明不支持多模态视觉，已将图片附件安全扁平化为说明文本`);
+    }
   }
 
   return upstreamPayload;
 }
 
-// 2. 官方专属请求头族：注入完整的上下文追踪头
 function buildOfficialUpstreamHeaders(accessToken, targetModel, sessionKey) {
   const reqId = crypto.randomUUID();
   const convReqId = crypto.randomUUID();
@@ -331,6 +361,7 @@ async function fetchDetailedModels(forceRefresh = false) {
         if (models.length > 0) {
           cachedRawUpstreamModels = models;
           lastModelFetchTimestamp = now;
+          Logger.info('CONFIG', `成功从腾讯云上游拉取全量模型矩阵 (共 ${models.length} 款)`);
           return attachProbeStatus(models);
         }
       }
@@ -421,6 +452,7 @@ const server = http.createServer(async (req, res) => {
     const xApiKey = req.headers['x-api-key'] || '';
     const token = authHeader.replace(/^Bearer\s+/i, '') || xApiKey;
     if (config.apiKey && token !== config.apiKey) {
+      Logger.warn('AUTH', `非法 API Key 访问: ${url.pathname}`, { ip: req.socket.remoteAddress });
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: { message: 'Invalid API Key', type: 'auth_error' } }));
     }
@@ -438,6 +470,7 @@ const server = http.createServer(async (req, res) => {
     let rawBody = '';
     req.on('data', c => rawBody += c);
     req.on('end', async () => {
+      const startTime = Date.now();
       try {
         const bodyObj = JSON.parse(rawBody || '{}');
         const acc = AccountScheduler.selectAccount();
@@ -445,6 +478,9 @@ const server = http.createServer(async (req, res) => {
           res.writeHead(503, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: 'No available account for search' }));
         }
+
+        const queryStr = bodyObj.query || '';
+        Logger.info('SEARCH', `发起联网检索 [${queryStr}]`, { account: acc.email });
 
         const searchRes = await fetch(SEARCH_URL, {
           method: 'POST',
@@ -454,15 +490,18 @@ const server = http.createServer(async (req, res) => {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            query: bodyObj.query || '',
+            query: queryStr,
             max_results: bodyObj.max_results || bodyObj.count || 5
           })
         });
 
         const searchData = await searchRes.text();
+        const latency = Date.now() - startTime;
+        Logger.info('SEARCH', `检索完成 [${queryStr}] 耗时 ${latency}ms (HTTP ${searchRes.status})`);
         res.writeHead(searchRes.status, { 'Content-Type': 'application/json' });
         return res.end(searchData);
       } catch (e) {
+        Logger.error('SEARCH', `检索异常: ${e.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
       }
@@ -475,6 +514,7 @@ const server = http.createServer(async (req, res) => {
     let rawBody = '';
     req.on('data', c => rawBody += c);
     req.on('end', async () => {
+      const startTime = Date.now();
       try {
         const bodyObj = JSON.parse(rawBody || '{}');
         const acc = AccountScheduler.selectAccount();
@@ -483,6 +523,9 @@ const server = http.createServer(async (req, res) => {
           return res.end(JSON.stringify({ error: 'No available account for webfetch' }));
         }
 
+        const targetUrl = bodyObj.url || '';
+        Logger.info('FETCH', `发起网页内容抓取 [${targetUrl}]`, { account: acc.email });
+
         const fetchRes = await fetch(WEBFETCH_URL, {
           method: 'POST',
           headers: {
@@ -490,15 +533,16 @@ const server = http.createServer(async (req, res) => {
             'User-Agent': USER_AGENT,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            url: bodyObj.url || ''
-          })
+          body: JSON.stringify({ url: targetUrl })
         });
 
         const fetchData = await fetchRes.text();
+        const latency = Date.now() - startTime;
+        Logger.info('FETCH', `抓取完成 [${targetUrl}] 耗时 ${latency}ms (HTTP ${fetchRes.status})`);
         res.writeHead(fetchRes.status, { 'Content-Type': 'application/json' });
         return res.end(fetchData);
       } catch (e) {
+        Logger.error('FETCH', `网页抓取异常: ${e.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
       }
@@ -511,6 +555,7 @@ const server = http.createServer(async (req, res) => {
     let rawBody = '';
     req.on('data', chunk => rawBody += chunk);
     req.on('end', async () => {
+      const startTime = Date.now();
       try {
         const anthropicPayload = JSON.parse(rawBody);
         const isClientStream = Boolean(anthropicPayload.stream);
@@ -519,6 +564,11 @@ const server = http.createServer(async (req, res) => {
         if (targetModel.includes('claude') || targetModel.includes('sonnet') || targetModel.includes('opus')) {
           targetModel = 'deepseek-v4.1-flash';
         }
+
+        Logger.info('ANTHROPIC', `收到 Claude Code 协议请求 [${targetModel}] (流式: ${isClientStream})`, {
+          clientIp: req.socket.remoteAddress,
+          toolsCount: anthropicPayload.tools?.length || 0
+        });
 
         const openAiMessages = [];
         if (anthropicPayload.system) {
@@ -588,6 +638,7 @@ const server = http.createServer(async (req, res) => {
 
         const acc = AccountScheduler.selectAccount(targetModel);
         if (!acc) {
+          Logger.warn('OVERLOAD', `无可用账号服务 [${targetModel}]`);
           res.writeHead(503, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'All accounts busy or in cooldown' } }));
         }
@@ -629,6 +680,7 @@ const server = http.createServer(async (req, res) => {
         if (!upstreamRes.ok) {
           acc.inFlight = Math.max(0, acc.inFlight - 1);
           const errText = await upstreamRes.text();
+          Logger.error('ANTHROPIC', `上游报错 HTTP ${upstreamRes.status}: ${errText}`);
           res.writeHead(upstreamRes.status, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: errText } }));
         }
@@ -740,6 +792,8 @@ const server = http.createServer(async (req, res) => {
 
           res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
           acc.inFlight = Math.max(0, acc.inFlight - 1);
+          const latency = Date.now() - startTime;
+          Logger.info('ANTHROPIC', `流式回复完成 [${targetModel}] 耗时 ${latency}ms (结束原因: ${stopReason})`);
           return res.end();
 
         } else {
@@ -803,6 +857,10 @@ const server = http.createServer(async (req, res) => {
             });
           }
 
+          const latency = Date.now() - startTime;
+          const stopReason = toolCallsMap.size > 0 ? 'tool_use' : 'end_turn';
+          Logger.info('ANTHROPIC', `非流式完成 [${targetModel}] 耗时 ${latency}ms (结束原因: ${stopReason})`);
+
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             id: msgId,
@@ -810,13 +868,14 @@ const server = http.createServer(async (req, res) => {
             role: 'assistant',
             content: contentBlocks,
             model: targetModel,
-            stop_reason: toolCallsMap.size > 0 ? 'tool_use' : 'end_turn',
+            stop_reason: stopReason,
             stop_sequence: null,
             usage: { input_tokens: 0, output_tokens: fullContent.length }
           }));
         }
 
       } catch (err) {
+        Logger.error('ANTHROPIC', `处理异常: ${err.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: err.message } }));
       }
@@ -829,6 +888,7 @@ const server = http.createServer(async (req, res) => {
     let rawBody = '';
     req.on('data', chunk => rawBody += chunk);
     req.on('end', async () => {
+      const startTime = Date.now();
       try {
         const payload = JSON.parse(rawBody);
         const isClientStream = Boolean(payload.stream);
@@ -838,8 +898,15 @@ const server = http.createServer(async (req, res) => {
 
         let targetModel = payload.model || 'deepseek-v4.1-flash';
 
+        Logger.info('CHAT', `收到 OpenAI 对话请求 [${targetModel}] (流式: ${isClientStream})`, {
+          clientIp: req.socket.remoteAddress,
+          toolsCount: payload.tools?.length || 0,
+          messagesCount: payload.messages?.length || 0
+        });
+
         const acc = AccountScheduler.selectAccount(targetModel, sessionKey);
         if (!acc) {
+          Logger.warn('OVERLOAD', `无可用账号服务模型 [${targetModel}]`);
           res.writeHead(503, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: { message: 'All upstream accounts are busy or cooling down for this model.', type: 'server_error' } }));
         }
@@ -896,11 +963,17 @@ const server = http.createServer(async (req, res) => {
             let parsedErr = {};
             try { parsedErr = JSON.parse(errText); } catch (_) {}
 
+            Logger.error('UPSTREAM', `上游报错 HTTP ${upstreamRes.status} (模型: ${curModel})`, {
+              code: parsedErr.code,
+              msg: parsedErr.msg,
+              account: acc.email
+            });
+
             if (parsedErr.code === 6004) {
               AccountScheduler.cooldownModel(acc.uid, curModel, 600, 'Upstream 6004 Model Limit Exceeded');
               const fallback = config.modelFallback?.[curModel];
               if (fallback && fallback !== curModel && !isRetry) {
-                console.log(`[Reroute] Account ${acc.uid} model ${curModel} hit 6004, rerouting to ${fallback}...`);
+                Logger.warn('REROUTE', `账号 [${acc.email}] 模型 [${curModel}] 触发 6004 限量，自动无感改道至备用模型 [${fallback}]`);
                 return await executeCall(fallback, true);
               }
             }
@@ -919,7 +992,7 @@ const server = http.createServer(async (req, res) => {
             AccountScheduler.cooldown(acc.uid, 86400, 'Credits Exhausted');
           } else if (callResult.status === 401) {
             acc.status = 'unauthorized';
-            console.error(`[Auth] Account ${acc.uid} token expired or revoked!`);
+            Logger.error('AUTH', `账号 [${acc.email}] Token 已失效或被收回 (HTTP 401)`);
           }
           res.writeHead(callResult.status, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify(formatOpenAIError(callResult.status, callResult.errText)));
@@ -937,14 +1010,19 @@ const server = http.createServer(async (req, res) => {
 
           const reader = upstreamRes.body.getReader();
           const decoder = new TextDecoder();
+          let toolCallObserved = false;
 
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            res.write(decoder.decode(value, { stream: true }));
+            const str = decoder.decode(value, { stream: true });
+            if (str.includes('"tool_calls"')) toolCallObserved = true;
+            res.write(str);
           }
 
           acc.inFlight = Math.max(0, acc.inFlight - 1);
+          const latency = Date.now() - startTime;
+          Logger.info('CHAT', `流式输出完成 [${upstreamPayload.model}] 耗时 ${latency}ms (是否含工具调用: ${toolCallObserved})`);
           return res.end();
 
         } else {
@@ -1019,7 +1097,13 @@ const server = http.createServer(async (req, res) => {
           if (toolCallsMap.size > 0) {
             assembledMessage.tool_calls = Array.from(toolCallsMap.values());
             finishReason = 'tool_calls';
+            Logger.info('TOOLS', `模型决定下发工具调用 (共 ${toolCallsMap.size} 个)`, {
+              tools: Array.from(toolCallsMap.values()).map(t => t.function.name)
+            });
           }
+
+          const latency = Date.now() - startTime;
+          Logger.info('CHAT', `非流式回复完成 [${upstreamPayload.model}] 耗时 ${latency}ms (结束原因: ${finishReason})`);
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
@@ -1041,6 +1125,7 @@ const server = http.createServer(async (req, res) => {
         }
 
       } catch (err) {
+        Logger.error('CHAT', `请求处理异常: ${err.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: { message: err.message } }));
       }
@@ -1051,6 +1136,37 @@ const server = http.createServer(async (req, res) => {
   // 8. 控制面板管理 API
   if (url.pathname.startsWith('/api/')) {
     const today = getTodayString();
+
+    // 日志查询接口
+    if (url.pathname === '/api/logs' && req.method === 'GET') {
+      const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        total: Logger.ringBuffer.length,
+        logs: Logger.ringBuffer.slice(0, limit)
+      }));
+    }
+
+    // 日志全量下载导出
+    if (url.pathname === '/api/logs/export' && req.method === 'GET') {
+      if (fs.existsSync(LOG_FILE_PATH)) {
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="gateway.log"'
+        });
+        return fs.createReadStream(LOG_FILE_PATH).pipe(res);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        return res.end('# 日志文件暂为空');
+      }
+    }
+
+    // 清空内存日志
+    if (url.pathname === '/api/logs/clear' && req.method === 'POST') {
+      Logger.ringBuffer = [];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true }));
+    }
 
     if (url.pathname === '/api/accounts' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1084,9 +1200,11 @@ const server = http.createServer(async (req, res) => {
         const state = oauthData.state || oauthData.data?.state;
         const loginUrl = oauthData.login_url || oauthData.data?.login_url || `https://copilot.tencent.com/login?state=${state}`;
 
+        Logger.info('OAUTH', `发起设备码授权, state: ${state}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ state, loginUrl }));
       } catch (e) {
+        Logger.error('OAUTH', `生成登录链接失败: ${e.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
       }
@@ -1126,6 +1244,7 @@ const server = http.createServer(async (req, res) => {
             };
             accounts.push(newAcc);
             saveAccounts();
+            Logger.info('OAUTH', `新账号授权成功录入: [${newAcc.email} (${newAcc.uid})]`);
             AccountScheduler.refreshCredits(newAcc);
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1182,8 +1301,10 @@ const server = http.createServer(async (req, res) => {
       req.on('data', c => b += c);
       req.on('end', () => {
         const { uid } = JSON.parse(b);
+        const removed = accounts.find(a => a.uid === uid);
         accounts = accounts.filter(a => a.uid !== uid);
         saveAccounts();
+        Logger.warn('ACCOUNTS', `已从账号池移除账号: [${removed?.email || uid}]`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
       });
@@ -1207,7 +1328,7 @@ if (config.autoCheckin) {
     const hour = new Date().getHours();
     const minute = new Date().getMinutes();
     if ((hour === 9 || hour === 21) && minute === 0) {
-      console.log('[Scheduler] Running automatic daily checkin...');
+      Logger.info('SCHEDULER', '定时打卡排程触发，开始全员每日签到...');
       for (const acc of accounts) {
         AccountScheduler.dailyCheckin(acc);
       }
@@ -1220,6 +1341,7 @@ for (const acc of accounts) {
 }
 
 server.listen(config.port, () => {
+  Logger.info('SYSTEM', `CodeBuddy 国内版生产级网关已启动，监听端口: ${config.port}`);
   console.log(`\n======================================================`);
   console.log(`🚀 CodeBuddy 国内版生产级多协议网关已启动!`);
   console.log(`📡 监听地址: http://127.0.0.1:${config.port}`);
@@ -1227,12 +1349,11 @@ server.listen(config.port, () => {
   console.log(`✨ 协议支持: OpenAI (/v1/chat/completions) + Anthropic (/v1/messages)`);
   console.log(`🌐 联网扩展: POST /v1/search & POST /v1/fetch`);
   console.log(`🛠️  已开启: 客户端自定义 tools 透传与 tool_calls 回传`);
-  console.log(`🛡️  已开启: 官方头族注入 + 模型守卫 + 6004限流改道 + 缓存标记`);
-  console.log(`📋 模型清单: Web 控制台直连上游 100% 原始数据 + 繁忙度探针`);
+  console.log(`📜 日志系统: 内存环形缓冲 + gateway.log 自动持久化 + Web实时诊断看板`);
   console.log(`======================================================\n`);
 });
 
-// ─── 极致现代化单页 Web 管理控制台 (参考 workbuddy2api-panel 设计) ─────────────
+// ─── 极致现代化单页 Web 管理控制台 ───────────────────────────────────────────────
 function renderDashboardHTML() {
   return `<!DOCTYPE html>
 <html lang="zh-CN" class="dark">
@@ -1337,6 +1458,18 @@ function renderDashboardHTML() {
     .search-input { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--card-border); background: var(--code-bg); color: var(--text-main); font-size: 13px; width: 220px; outline: none; }
     .search-input:focus { border-color: var(--accent); }
 
+    /* Log Viewer Terminal Styles */
+    .log-container { background: var(--code-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 12px; max-height: 420px; overflow-y: auto; font-family: "JetBrains Mono", Consolas, Menlo, monospace; font-size: 12px; line-height: 1.6; }
+    .log-row { display: flex; gap: 10px; padding: 3px 6px; border-radius: 4px; border-bottom: 1px solid rgba(255,255,255,0.03); align-items: baseline; word-break: break-all; }
+    .log-row:hover { background: rgba(255,255,255,0.04); }
+    .log-time { color: #64748b; font-size: 11px; white-space: nowrap; }
+    .log-badge-info { color: #38bdf8; font-weight: bold; width: 44px; text-align: center; }
+    .log-badge-warn { color: #facc15; font-weight: bold; width: 44px; text-align: center; }
+    .log-badge-error { color: #f87171; font-weight: bold; width: 44px; text-align: center; }
+    .log-cat { color: #a78bfa; font-weight: 600; width: 80px; white-space: nowrap; }
+    .log-msg { color: #e2e8f0; flex: 1; }
+    .log-meta { color: #94a3b8; font-size: 11px; background: rgba(255,255,255,0.05); padding: 1px 4px; border-radius: 3px; margin-left: 6px; }
+
     /* Modals & Alerts */
     .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center; z-index: 100; }
     .modal-content { background: var(--card-bg); padding: 26px; border-radius: 12px; border: 1px solid var(--card-border); max-width: 760px; width: 90%; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); }
@@ -1436,6 +1569,42 @@ function renderDashboardHTML() {
       </table>
     </div>
 
+    <!-- 实时运行日志 / 问题排查诊断面板 (New Live Logging Diagnostic Panel) -->
+    <div class="card">
+      <div class="card-title">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span>📜 实时运行日志与问题诊断 (Live Diagnostics)</span>
+          <span class="badge badge-blue" id="logCountBadge">0 条记录</span>
+        </div>
+        <div style="display:flex; gap:10px;">
+          <input id="logSearch" class="search-input" placeholder="🔍 检索日志关键字 / 状态码..." oninput="filterLogs()" style="width:200px;">
+          <button class="btn-outline" onclick="toggleAutoScroll()" id="btnAutoScroll">⏸ 滚动锁定: 开</button>
+          <button class="btn-outline" onclick="clearLiveLogs()">🧹 清屏</button>
+          <button class="btn-primary" onclick="exportLogFile()">📥 导出完整日志</button>
+        </div>
+      </div>
+      
+      <!-- 日志分类筛选器 -->
+      <div class="filter-bar">
+        <button class="filter-btn active" onclick="setLogCategory('ALL', this)">全部类别</button>
+        <button class="filter-btn" onclick="setLogCategory('CHAT', this)">CHAT 对话</button>
+        <button class="filter-btn" onclick="setLogCategory('ANTHROPIC', this)">ANTHROPIC 协议</button>
+        <button class="filter-btn" onclick="setLogCategory('UPSTREAM', this)">UPSTREAM 上游</button>
+        <button class="filter-btn" onclick="setLogCategory('TOOLS', this)">TOOLS 工具</button>
+        <button class="filter-btn" onclick="setLogCategory('DISPATCH', this)">DISPATCH 调度</button>
+        <button class="filter-btn" onclick="setLogCategory('CHECKIN', this)">CHECKIN 签到</button>
+        <span style="color:var(--card-border); margin: 0 4px;">|</span>
+        <button class="filter-btn" onclick="setLogLevel('ALL', this)">所有级别</button>
+        <button class="filter-btn" onclick="setLogLevel('ERROR', this)">仅看错误 🔴</button>
+        <button class="filter-btn" onclick="setLogLevel('WARN', this)">仅看警告 🟡</button>
+      </div>
+
+      <!-- 终端级代码日志视窗 -->
+      <div class="log-container" id="logBox">
+        <div style="color:var(--text-muted); text-align:center; padding:20px;">正在连接日志引擎...</div>
+      </div>
+    </div>
+
     <!-- 上游模型全量矩阵看板 -->
     <div class="card">
       <div class="card-title">
@@ -1517,6 +1686,12 @@ function renderDashboardHTML() {
     let pollTimer = null;
     let allModels = [];
     let currentFilter = 'all';
+
+    // 日志系统前端状态
+    let allLogs = [];
+    let logCatFilter = 'ALL';
+    let logLevelFilter = 'ALL';
+    let autoScrollEnabled = true;
 
     const guides = {
       openai: \`# OpenAI 兼容客户端配置 (如 Cursor / NextChat / Chatbox / LobeChat)
@@ -1622,6 +1797,107 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
       }).join('');
     }
 
+    // ── 日志系统前端逻辑 ────────────────────────────────────────────────
+    async function fetchLogs() {
+      try {
+        const res = await fetch('/api/logs?limit=250');
+        const data = await res.json();
+        allLogs = data.logs || [];
+        document.getElementById('logCountBadge').innerText = \`最近 \${allLogs.length} 条记录\`;
+        renderLogs();
+      } catch (_) {}
+    }
+
+    function renderLogs() {
+      const query = document.getElementById('logSearch').value.toLowerCase().trim();
+      const logBox = document.getElementById('logBox');
+
+      const filtered = allLogs.filter(item => {
+        if (logCatFilter !== 'ALL' && item.category !== logCatFilter) return false;
+        if (logLevelFilter !== 'ALL' && item.level !== logLevelFilter) return false;
+        if (query) {
+          const matchMsg = (item.message || '').toLowerCase().includes(query);
+          const matchCat = (item.category || '').toLowerCase().includes(query);
+          const matchMeta = item.meta ? JSON.stringify(item.meta).toLowerCase().includes(query) : false;
+          if (!matchMsg && !matchCat && !matchMeta) return false;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        logBox.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:30px;">暂无符合条件的日志记录</div>';
+        return;
+      }
+
+      logBox.innerHTML = filtered.map(item => {
+        const badgeClass = item.level === 'ERROR' ? 'log-badge-error' : item.level === 'WARN' ? 'log-badge-warn' : 'log-badge-info';
+        const metaHtml = item.meta ? \`<span class="log-meta">\${escapeHtml(JSON.stringify(item.meta))}</span>\` : '';
+
+        return \`
+          <div class="log-row">
+            <span class="log-time">\${item.time.slice(11)}</span>
+            <span class="\${badgeClass}">\${item.level}</span>
+            <span class="log-cat">[\${item.category}]</span>
+            <span class="log-msg">\${escapeHtml(item.message)}\${metaHtml}</span>
+          </div>
+        \`;
+      }).join('');
+
+      if (autoScrollEnabled) {
+        logBox.scrollTop = 0;
+      }
+    }
+
+    function setLogCategory(cat, el) {
+      logCatFilter = cat;
+      el.parentElement.querySelectorAll('.filter-btn').forEach(b => {
+        if (b.innerText.includes('类别') || b.innerText.includes('CHAT') || b.innerText.includes('ANTHROPIC') || b.innerText.includes('UPSTREAM') || b.innerText.includes('TOOLS') || b.innerText.includes('DISPATCH') || b.innerText.includes('CHECKIN')) {
+          b.classList.remove('active');
+        }
+      });
+      el.classList.add('active');
+      renderLogs();
+    }
+
+    function setLogLevel(lvl, el) {
+      logLevelFilter = lvl;
+      el.parentElement.querySelectorAll('.filter-btn').forEach(b => {
+        if (b.innerText.includes('级别') || b.innerText.includes('错误') || b.innerText.includes('警告')) {
+          b.classList.remove('active');
+        }
+      });
+      el.classList.add('active');
+      renderLogs();
+    }
+
+    function filterLogs() {
+      renderLogs();
+    }
+
+    function toggleAutoScroll() {
+      autoScrollEnabled = !autoScrollEnabled;
+      document.getElementById('btnAutoScroll').innerText = autoScrollEnabled ? '⏸ 滚动锁定: 开' : '▶ 滚动锁定: 关';
+    }
+
+    async function clearLiveLogs() {
+      await fetch('/api/logs/clear', { method: 'POST' });
+      allLogs = [];
+      renderLogs();
+    }
+
+    function exportLogFile() {
+      window.open('/api/logs/export', '_blank');
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // ── 模型全景矩阵 ────────────────────────────────────────────────────
     async function loadModels(force = false) {
       try {
         document.getElementById('modelTotalBadge').innerText = '正在同步...';
@@ -1769,6 +2045,7 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
 
         window.scrollTo({ top: 0, behavior: 'smooth' });
         loadAccounts();
+        fetchLogs();
       } catch (e) {
         alert('全员签到失败: ' + e.message);
       } finally {
@@ -1787,6 +2064,7 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
         const data = await res.json();
         alert(\`[单号签到反馈] \${data.msg}\`);
         loadAccounts();
+        fetchLogs();
       } catch (e) {
         alert('签到失败: ' + e.message);
       }
@@ -1812,7 +2090,7 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
         if (pData.ok) {
           clearInterval(pollTimer);
           document.getElementById('pollStatus').innerText = '✅ 登录成功，账号已录入池！';
-          setTimeout(() => { closeModal(); loadAccounts(); loadModels(true); }, 1200);
+          setTimeout(() => { closeModal(); loadAccounts(); loadModels(true); fetchLogs(); }, 1200);
         }
       }, 2000);
     }
@@ -1830,11 +2108,14 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
         body: JSON.stringify({ uid })
       });
       loadAccounts();
+      fetchLogs();
     }
 
     loadAccounts();
     loadModels();
+    fetchLogs();
     setInterval(loadAccounts, 5000);
+    setInterval(fetchLogs, 2500);
   </script>
 </body>
 </html>`;
