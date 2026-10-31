@@ -49,12 +49,10 @@ class AccountScheduler {
   static selectAccount(requestedModel, sessionKey) {
     const now = Date.now();
 
-    // 1. 优先尝试会话粘性
     if (sessionKey && sessionStickyMap.has(sessionKey)) {
       const sticky = sessionStickyMap.get(sessionKey);
       const acc = accounts.find(a => a.uid === sticky.uid);
       if (acc && acc.status === 'healthy' && now > (acc.cooldownUntil || 0) && (acc.inFlight || 0) < 3) {
-        // 校验该模型是否在该账号处于单模型冷却
         const isModelCooling = requestedModel && acc.modelCooldowns?.[requestedModel] && now < acc.modelCooldowns[requestedModel];
         if (!isModelCooling) {
           sticky.lastActive = now;
@@ -63,7 +61,6 @@ class AccountScheduler {
       }
     }
 
-    // 2. 过滤有效账号（排除账号全局冷却与该模型的单模型冷却）
     const candidates = accounts.filter(a => {
       if (a.status !== 'healthy') return false;
       if (now < (a.cooldownUntil || 0)) return false;
@@ -76,7 +73,6 @@ class AccountScheduler {
 
     if (candidates.length === 0) return null;
 
-    // 3. 排序：并发最低、剩余积分最多
     candidates.sort((a, b) => {
       if ((a.inFlight || 0) !== (b.inFlight || 0)) {
         return (a.inFlight || 0) - (b.inFlight || 0);
@@ -190,46 +186,27 @@ class AccountScheduler {
 // 针对腾讯上游 11-128 渠道指纹检测的语义等价清洗 (解决 DSH、Claude Code 等被拒问题)
 function sanitizeChannelFingerprints(text, role) {
   if (typeof text !== 'string') return text;
-  // 安全边界：仅清洗 system / developer / assistant 消息，绝对不碰 user 与 tool 消息
   if (role !== 'system' && role !== 'developer' && role !== 'assistant') {
     return text;
   }
 
-  // 1. DSH 触发源一：文件引用段里的 @ 字形 (Tokens prefixed with @ are paths...)
-  text = text.replace(
-    /(Tokens\s+prefixed\s+with\s+)@(\s+are\s+paths)/gi,
-    '$1(at)$2'
-  );
+  // 1. DSH 触发源一：文件引用段里的 @ 字形
+  text = text.replace(/(Tokens\s+prefixed\s+with\s+)@(\s+are\s+paths)/gi, '$1(at)$2');
 
-  // 2. DSH 触发源二：内核身份句 (You are an AI agent powered by DeepSeek Harness.)
-  text = text.replace(
-    /You\s+are\s+an\s+AI\s+agent\s+powered\s+by\s+DeepSeek[\s\u200B]+Harness\./gi,
-    'You are a helpful AI assistant.'
-  );
+  // 2. DSH 触发源二：内核身份句中性化
+  text = text.replace(/You\s+are\s+an\s+AI\s+agent\s+powered\s+by\s+DeepSeek[\s\u200B]+Harness\./gi, 'You are a helpful AI assistant.');
 
-  // 3. DSH 触发源三：coding agent 句式 (You are a coding agent powered by ...)
-  text = text.replace(
-    /You\s+are\s+a\s+coding\s+agent\s+powered\s+by\s+/gi,
-    'You are a coding agent running on '
-  );
+  // 3. DSH 触发源三：coding agent 句式
+  text = text.replace(/You\s+are\s+a\s+coding\s+agent\s+powered\s+by\s+/gi, 'You are a coding agent running on ');
 
   // 4. DSH 触发源四：Web GUI 段
-  text = text.replace(
-    /DeepSeek[\s\u200B]+Harness\s+Web\s+GUI/gi,
-    'Web GUI'
-  );
+  text = text.replace(/DeepSeek[\s\u200B]+Harness\s+Web\s+GUI/gi, 'Web GUI');
 
   // 5. Claude Code 触发源：身份句与 Git 分支句
-  text = text.replace(
-    /You\s+are\s+Claude\s+Code,\s+Anthropic's\s+official\s+CLI\s+tool\s+for\s+Claude\./gi,
-    'You are an interactive AI assistant for coding.'
-  );
-  text = text.replace(
-    /Default\s+branch\s+\(you\s+will\s+usually\s+use\s+this\s+for\s+PRs\)/gi,
-    'Main branch (you will usually use this for PRs)'
-  );
+  text = text.replace(/You\s+are\s+Claude\s+Code,\s+Anthropic's\s+official\s+CLI\s+tool\s+for\s+Claude\./gi, 'You are an interactive AI assistant for coding.');
+  text = text.replace(/Default\s+branch\s+\(you\s+will\s+usually\s+use\s+this\s+for\s+PRs\)/gi, 'Default branch (you will usually use this for PRs)');
 
-  // 6. 兜底清洗残留品牌组合指纹 (DeepSeek + Harness)
+  // 6. 兜底清洗残留品牌组合指纹
   text = text.replace(/DeepSeek[\s\u200B]+Harness/gi, 'DeepSeek-Harness');
 
   return text;
@@ -265,7 +242,6 @@ function formatMessagesForUpstream(messages) {
 function applyModelCapabilityGuards(upstreamPayload, modelMeta) {
   if (!modelMeta) return upstreamPayload;
 
-  // 若模型不支持工具调用，剥离 tools 和 tool_choice
   if (modelMeta.supportsToolCall === false) {
     if (upstreamPayload.tools) {
       delete upstreamPayload.tools;
@@ -273,7 +249,6 @@ function applyModelCapabilityGuards(upstreamPayload, modelMeta) {
     }
   }
 
-  // 若模型不支持视觉，扁平化图片附件为纯文本
   if (modelMeta.supportsImages === false && Array.isArray(upstreamPayload.messages)) {
     upstreamPayload.messages = upstreamPayload.messages.map(m => {
       if (Array.isArray(m.content)) {
@@ -373,11 +348,9 @@ async function fetchDetailedModels(forceRefresh = false) {
   return attachProbeStatus([]);
 }
 
-// 7. 模型繁忙度探针：结合账号池单模型冷却状态计算各模型实时可用性
 function attachProbeStatus(models) {
   const now = Date.now();
   return models.map(m => {
-    // 检查是否有账号对该模型处于冷却退避状态
     let coolingCount = 0;
     for (const acc of accounts) {
       if (acc.modelCooldowns?.[m.id] && now < acc.modelCooldowns[m.id]) {
@@ -628,7 +601,6 @@ const server = http.createServer(async (req, res) => {
           temperature: anthropicPayload.temperature ?? 1.0,
           max_tokens: anthropicPayload.max_tokens,
           stream_options: { include_usage: true },
-          // 4. 缓存保留标记 (上游 Go struct 严格校验为 string)
           cache_retention: 'auto'
         };
 
@@ -636,7 +608,6 @@ const server = http.createServer(async (req, res) => {
           upstreamPayload.tools = openAiTools;
         }
 
-        // 3. 模型能力前置守卫
         const allMeta = await fetchDetailedModels();
         const modelMeta = allMeta.find(m => m.id === targetModel);
         upstreamPayload = applyModelCapabilityGuards(upstreamPayload, modelMeta);
@@ -647,7 +618,6 @@ const server = http.createServer(async (req, res) => {
           upstreamPayload.reasoning = { effort: 'high', summary: 'auto' };
         }
 
-        // 2. 官方专属请求头族
         const upstreamHeaders = buildOfficialUpstreamHeaders(acc.accessToken, targetModel);
 
         const upstreamRes = await fetch(UPSTREAM_URL, {
@@ -868,7 +838,6 @@ const server = http.createServer(async (req, res) => {
 
         let targetModel = payload.model || 'deepseek-v4.1-flash';
 
-        // 挑选账号
         const acc = AccountScheduler.selectAccount(targetModel, sessionKey);
         if (!acc) {
           res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -877,7 +846,6 @@ const server = http.createServer(async (req, res) => {
 
         acc.inFlight = (acc.inFlight || 0) + 1;
 
-        // 构造上游 Payload
         let upstreamPayload = {
           model: targetModel,
           messages: formatMessagesForUpstream(payload.messages || []),
@@ -885,7 +853,6 @@ const server = http.createServer(async (req, res) => {
           temperature: payload.temperature ?? 1.0,
           max_tokens: payload.max_tokens,
           stream_options: { include_usage: true },
-          // 4. 缓存保留标记 (上游 Go struct 严格校验为 string)
           cache_retention: typeof payload.cache_retention === 'string' ? payload.cache_retention : 'auto'
         };
 
@@ -896,12 +863,10 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        // 3. 模型能力前置守卫
         const allMeta = await fetchDetailedModels();
         const modelMeta = allMeta.find(m => m.id === targetModel);
         upstreamPayload = applyModelCapabilityGuards(upstreamPayload, modelMeta);
 
-        // 思考模式配置
         const effort = payload.reasoning_effort || payload.reasoning?.effort;
         const isReasoningOff = effort === 'none' || effort === 'off' || payload.thinking?.type === 'disabled';
 
@@ -916,7 +881,6 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        // 执行上游请求（支持 6004 自动改道重试）
         async function executeCall(curModel, isRetry = false) {
           upstreamPayload.model = curModel;
           const headers = buildOfficialUpstreamHeaders(acc.accessToken, curModel, sessionKey);
@@ -927,7 +891,6 @@ const server = http.createServer(async (req, res) => {
             body: JSON.stringify(upstreamPayload)
           });
 
-          // 6. 模型级限流 (错误码 6004) 改道处理
           if (!upstreamRes.ok) {
             const errText = await upstreamRes.text();
             let parsedErr = {};
@@ -1269,161 +1232,285 @@ server.listen(config.port, () => {
   console.log(`======================================================\n`);
 });
 
-// ─── 内置单页 Web 管理控制台 ───────────────────────────────────────────────
+// ─── 极致现代化单页 Web 管理控制台 (参考 workbuddy2api-panel 设计) ─────────────
 function renderDashboardHTML() {
   return `<!DOCTYPE html>
-<html>
+<html lang="zh-CN" class="dark">
 <head>
   <meta charset="utf-8">
-  <title>CodeBuddy 国内多账号网关</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodeBuddy 2API 控制台 · 官方模型网关</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 30px auto; max-width: 1240px; background: #0f172a; color: #f8fafc; line-height: 1.5; padding: 0 15px; }
-    h1 { font-size: 22px; color: #38bdf8; display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-    .card { background: #1e293b; border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid #334155; }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #334155; font-size: 13px; }
-    th { color: #94a3b8; font-weight: 600; }
-    .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
-    .badge-ok { background: #166534; color: #bbf7d0; }
-    .badge-cool { background: #854d0e; color: #fef08a; }
-    .badge-err { background: #991b1b; color: #fecaca; }
-    .badge-purple { background: #581c87; color: #e9d5ff; }
-    .badge-blue { background: #1e3a8a; color: #bfdbfe; }
-    button { padding: 7px 14px; border-radius: 5px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.15s; }
-    .btn-primary { background: #0284c7; color: white; }
-    .btn-primary:hover { background: #0369a1; }
-    .btn-danger { background: #991b1b; color: white; padding: 4px 8px; font-size: 12px; }
-    .btn-danger:hover { background: #7f1d1d; }
-    .btn-success { background: #15803d; color: white; }
-    .btn-success:hover { background: #166534; }
-    .filter-btn { padding: 4px 10px; background: #334155; color: #cbd5e1; border-radius: 4px; font-size: 12px; cursor: pointer; border: 1px solid transparent; }
-    .filter-btn.active { background: #0284c7; color: #fff; font-weight: bold; }
-    .btn-copy { background: #334155; color: #38bdf8; padding: 4px 8px; font-size: 12px; border-radius: 4px; }
-    .btn-copy:hover { background: #475569; }
-    .btn-json { background: #1e293b; color: #a78bfa; border: 1px solid #6d28d9; padding: 4px 8px; font-size: 12px; border-radius: 4px; }
-    .btn-json:hover { background: #4c1d95; color: #fff; }
-    code { background: #0f172a; padding: 3px 6px; border-radius: 4px; color: #38bdf8; font-family: monospace; font-size: 12px; }
-    input { padding: 6px 10px; border-radius: 4px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 13px; }
-    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); align-items: center; justify-content: center; z-index: 100; }
-    .modal-content { background: #1e293b; padding: 25px; border-radius: 8px; max-width: 750px; width: 90%; border: 1px solid #475569; max-height: 85vh; overflow-y: auto; text-align: left; }
-    pre { background: #090d16; padding: 12px; border-radius: 6px; overflow-x: auto; color: #38bdf8; font-size: 12px; max-height: 400px; }
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --card-border: #1f2937;
+      --card-hover: #1e293b;
+      --text-main: #f9fafb;
+      --text-muted: #9ca3af;
+      --primary: #0284c7;
+      --primary-hover: #0369a1;
+      --accent: #38bdf8;
+      --code-bg: #030712;
+      --table-border: #1f2937;
+    }
+    html.light {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --card-border: #e2e8f0;
+      --card-hover: #f1f5f9;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --primary: #0284c7;
+      --primary-hover: #0369a1;
+      --accent: #0284c7;
+      --code-bg: #f1f5f9;
+      --table-border: #e2e8f0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; background: var(--bg); color: var(--text-main); line-height: 1.5; padding: 24px; transition: background 0.2s, color 0.2s; }
+    .container { max-width: 1280px; margin: 0 auto; }
+    
+    /* Header */
+    header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 24px; border-bottom: 1px solid var(--card-border); margin-bottom: 24px; }
+    .logo-area { display: flex; align-items: center; gap: 12px; }
+    .logo-icon { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, #0284c7, #38bdf8); display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; color: #fff; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3); }
+    .brand-title { font-size: 20px; font-weight: 700; color: var(--text-main); letter-spacing: -0.02em; }
+    .brand-sub { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; display: inline-block; box-shadow: 0 0 8px #22c55e; }
+    
+    /* Top Actions */
+    .top-actions { display: flex; gap: 10px; align-items: center; }
+    button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.15s; }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-success { background: #16a34a; color: white; }
+    .btn-success:hover { background: #15803d; }
+    .btn-outline { background: transparent; border: 1px solid var(--card-border); color: var(--text-muted); }
+    .btn-outline:hover { background: var(--card-hover); color: var(--text-main); }
+    .btn-danger { background: #dc2626; color: white; padding: 4px 8px; font-size: 12px; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-copy { background: var(--code-bg); color: var(--accent); border: 1px solid var(--card-border); padding: 4px 8px; font-size: 11px; border-radius: 4px; }
+    .btn-copy:hover { border-color: var(--accent); }
+    .btn-json { background: transparent; color: #a855f7; border: 1px solid #7e22ce; padding: 4px 8px; font-size: 11px; border-radius: 4px; }
+    .btn-json:hover { background: #581c87; color: #fff; }
+
+    /* KPI Cards */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .kpi-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 18px 20px; transition: transform 0.15s, border-color 0.15s; }
+    .kpi-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+    .kpi-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px; }
+    .kpi-value { font-size: 26px; font-weight: 700; color: var(--text-main); display: flex; align-items: baseline; gap: 8px; }
+    .kpi-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+    
+    /* Card Standard */
+    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 22px; margin-bottom: 24px; }
+    .card-title { font-size: 16px; font-weight: 700; color: var(--text-main); margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+
+    /* Quick Guide Tabs */
+    .guide-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--card-border); padding-bottom: 10px; margin-bottom: 16px; }
+    .guide-tab-btn { background: transparent; color: var(--text-muted); padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+    .guide-tab-btn.active { background: var(--card-hover); color: var(--accent); border-color: var(--card-border); }
+    .guide-content { background: var(--code-bg); padding: 14px 18px; border-radius: 8px; border: 1px solid var(--card-border); position: relative; font-family: monospace; font-size: 13px; line-height: 1.6; color: #e2e8f0; }
+    .guide-copy-btn { position: absolute; top: 10px; right: 10px; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--table-border); font-size: 13px; }
+    th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+    tr:hover td { background: var(--card-hover); }
+    code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; color: var(--accent); font-family: monospace; font-size: 12px; border: 1px solid var(--card-border); }
+
+    /* Badges */
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .badge-ok { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+    .badge-cool { background: rgba(234, 179, 8, 0.15); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.3); }
+    .badge-err { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .badge-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+    .badge-blue { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+
+    /* Filter Bar */
+    .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
+    .filter-btn { padding: 4px 12px; background: var(--card-bg); color: var(--text-muted); border-radius: 6px; font-size: 12px; cursor: pointer; border: 1px solid var(--card-border); }
+    .filter-btn:hover { background: var(--card-hover); color: var(--text-main); }
+    .filter-btn.active { background: var(--primary); color: #fff; font-weight: bold; border-color: var(--primary); }
+    .search-input { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--card-border); background: var(--code-bg); color: var(--text-main); font-size: 13px; width: 220px; outline: none; }
+    .search-input:focus { border-color: var(--accent); }
+
+    /* Modals & Alerts */
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center; z-index: 100; }
+    .modal-content { background: var(--card-bg); padding: 26px; border-radius: 12px; border: 1px solid var(--card-border); max-width: 760px; width: 90%; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); }
+    pre { background: var(--code-bg); padding: 14px; border-radius: 8px; overflow-x: auto; color: var(--accent); font-size: 12px; line-height: 1.5; border: 1px solid var(--card-border); margin: 12px 0; }
+    #checkinAlert { display: none; margin-bottom: 20px; padding: 14px 18px; border-radius: 8px; border: 1px solid rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.1); color: #86efac; animation: fadeIn 0.2s ease-in-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
-  <h1>
-    <span>🇨🇳 CodeBuddy 国内版多协议网关</span>
-    <div>
-      <button id="btnAllCheckin" class="btn-success" onclick="runCheckin()">⚡ 全员签到</button>
-      <button class="btn-primary" onclick="startOAuth()">➕ 扫码添加账号</button>
-    </div>
-  </h1>
-
-  <div id="checkinAlert" style="display:none; margin-bottom:20px; padding:15px; border-radius:8px; border:1px solid #15803d; background:#064e3b; color:#ecfdf5;">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-      <b id="checkinAlertTitle" style="font-size:14px;"></b>
-      <button onclick="document.getElementById('checkinAlert').style.display='none'" style="background:transparent; color:#a7f3d0; padding:0 5px; font-size:16px;">✕</button>
-    </div>
-    <div id="checkinAlertDetail" style="margin-top:8px; font-size:13px; line-height:1.6; white-space:pre-wrap;"></div>
-  </div>
-
-  <div class="card">
-    <h3 style="margin-top:0;">接入配置指引</h3>
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-      <div>
-        <p><b>OpenAI 协议:</b> <code>http://127.0.0.1:${config.port}/v1</code></p>
-        <p><b>Anthropic 协议:</b> <code>http://127.0.0.1:${config.port}</code> (供 Claude Code)</p>
-        <p><b>联网检索端点:</b> <code>POST /v1/search</code>、<code>POST /v1/fetch</code></p>
+  <div class="container">
+    <!-- Top Header -->
+    <header>
+      <div class="logo-area">
+        <div class="logo-icon">⚡</div>
+        <div>
+          <div class="brand-title">CodeBuddy 2API 网关</div>
+          <div class="brand-sub"><span class="status-dot"></span> 官方链路直连 · 客户端 Agent 纯模型通道 · v${CURRENT_VERSION}</div>
+        </div>
       </div>
-      <div>
-        <p><b>API 密钥:</b> <code>${config.apiKey}</code></p>
-        <p><b>官方版本:</b> <code>${CURRENT_VERSION}</code> (已注入官方请求头族与上下文追踪)</p>
-        <p><b>6004 自动改道:</b> 已开启 (遇到单模型限量时同账号自动切换到备用模型)</p>
+      <div class="top-actions">
+        <button id="btnAllCheckin" class="btn-success" onclick="runCheckin()">⚡ 全员打卡签到</button>
+        <button class="btn-primary" onclick="startOAuth()">➕ 扫码添加账号</button>
+        <button class="btn-outline" onclick="toggleTheme()" title="切换明暗主题">🌓 主题</button>
       </div>
-    </div>
-  </div>
+    </header>
 
-  <div class="card">
-    <h3 style="margin-top:0;">账号池状态</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>UID</th>
-          <th>账号昵称</th>
-          <th>可用积分</th>
-          <th>今日签到</th>
-          <th>在途并发</th>
-          <th>状态</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="accBody"></tbody>
-    </table>
-  </div>
-
-  <!-- 模型全量清单 -->
-  <div class="card">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-      <h3 style="margin:0;">📋 腾讯云上游模型全量矩阵 (<span id="modelCount" style="color:#38bdf8;">加载中...</span>)</h3>
-      <div style="display:flex; gap:10px;">
-        <input id="modelSearch" placeholder="🔍 搜索模型 ID 或名称..." oninput="filterModels()" style="width:200px;">
-        <button class="btn-primary" onclick="loadModels(true)">🔄 刷新上游</button>
-        <button class="btn-primary" style="background:#475569;" onclick="exportAllRawJson()">📥 导出全量 JSON</button>
-      </div>
-    </div>
-    <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">
-      <button class="filter-btn active" onclick="setFilter('all', this)">全部 (All)</button>
-      <button class="filter-btn" onclick="setFilter('1m', this)">1M 上下文</button>
-      <button class="filter-btn" onclick="setFilter('free', this)">免费 / 低倍率</button>
-      <button class="filter-btn" onclick="setFilter('tool', this)">支持工具 🛠️</button>
-      <button class="filter-btn" onclick="setFilter('vision', this)">支持视觉 👁️</button>
-      <button class="filter-btn" onclick="setFilter('reasoning', this)">支持思考 🧠</button>
-      <button class="filter-btn" onclick="setFilter('idle', this)">🟢 畅通可用</button>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>模型 ID</th>
-          <th>官方名称</th>
-          <th>状态 / 探针</th>
-          <th>官方说明与版本</th>
-          <th>计费倍率</th>
-          <th>上下文窗口</th>
-          <th>最大输出</th>
-          <th>思考档位 (Reasoning)</th>
-          <th>特性</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="modelBody"></tbody>
-    </table>
-  </div>
-
-  <!-- 原始数据查看 Modal -->
-  <div class="modal" id="rawModal">
-    <div class="modal-content">
+    <!-- 全员签到反馈横幅 -->
+    <div id="checkinAlert">
       <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h3 style="margin:0; color:#38bdf8;">上游模型 100% 原始数据 (<span id="rawModalTitle"></span>)</h3>
-        <button onclick="closeRawModal()" style="background:#475569; color:#fff; padding:3px 8px;">✕</button>
+        <b id="checkinAlertTitle" style="font-size:14px;"></b>
+        <button onclick="document.getElementById('checkinAlert').style.display='none'" style="background:transparent; color:#86efac; padding:0 4px; font-size:16px;">✕</button>
       </div>
-      <p style="color:#94a3b8; font-size:12px; margin: 8px 0;">以下内容为腾讯云 <code>/v3/config</code> 下发的完整字段，未做任何裁剪或修改：</p>
-      <pre id="rawModalCode"></pre>
-      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:10px;">
-        <button class="btn-primary" onclick="copyRawCode()">📋 复制 JSON</button>
-        <button onclick="closeRawModal()" style="background:#334155; color:#fff;">关闭</button>
-      </div>
+      <div id="checkinAlertDetail" style="margin-top:8px; font-size:12px; line-height:1.6; white-space:pre-wrap;"></div>
     </div>
-  </div>
 
-  <!-- OAuth 扫码弹窗 -->
-  <div class="modal" id="oauthModal">
-    <div class="modal-content" style="text-align:center; max-width:420px;">
-      <h3>腾讯云官方扫码登录</h3>
-      <p style="color:#94a3b8; font-size:13px;">请点击下方按钮在浏览器打开登录页，完成微信/腾讯云扫码：</p>
-      <p style="margin: 20px 0;"><a id="loginLink" href="#" target="_blank" style="color: #38bdf8; font-size: 16px; font-weight: bold;">[ 点击跳转到腾讯云登录页面 ]</a></p>
-      <div id="pollStatus" style="color: #facc15; font-size: 14px;">等待完成扫码中...</div>
-      <br>
-      <button onclick="closeModal()" style="background:#475569; color:#fff;">关闭</button>
+    <!-- KPI 指标概览卡片 -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">健康账号总数</div>
+        <div class="kpi-value"><span id="kpiActiveAcc">-</span> <span style="font-size:13px; font-weight:normal; color:var(--text-muted);">/ <span id="kpiTotalAcc">-</span> 总计</span></div>
+        <div class="kpi-hint">多账号智能加权轮换与并发削峰</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">账号池可用积分合计</div>
+        <div class="kpi-value" style="color:#4ade80;"><span id="kpiTotalCredits">-</span> <span style="font-size:13px; font-weight:normal; color:var(--text-muted);">credits</span></div>
+        <div class="kpi-hint">已自动同步腾讯云官方套餐与免费包</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">实时在途请求并发</div>
+        <div class="kpi-value" style="color:var(--accent);"><span id="kpiInFlight">-</span> <span style="font-size:13px; font-weight:normal; color:var(--text-muted);">活跃线程</span></div>
+        <div class="kpi-hint">单账号限流保护与 6004 自动改道</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">已同步上游官方模型</div>
+        <div class="kpi-value" style="color:#c084fc;"><span id="kpiModelsCount">-</span> <span style="font-size:13px; font-weight:normal; color:var(--text-muted);">款可用</span></div>
+        <div class="kpi-hint">100% 官方原始元数据 · 支持 1M 上下文</div>
+      </div>
     </div>
+
+    <!-- 客户端接入指引 (Interactive Guide) -->
+    <div class="card">
+      <div class="card-title">
+        <span>🔌 客户端接入配置指引</span>
+        <span style="font-size:12px; font-weight:normal; color:var(--text-muted);">点击 Tab 查看不同工具的配置方法</span>
+      </div>
+      <div class="guide-tabs">
+        <button class="guide-tab-btn active" onclick="switchGuide('openai', this)">OpenAI 标准 (Cursor / NextChat)</button>
+        <button class="guide-tab-btn" onclick="switchGuide('claude', this)">Claude Code 命令行</button>
+        <button class="guide-tab-btn" onclick="switchGuide('search', this)">官方免费联网检索</button>
+        <button class="guide-tab-btn" onclick="switchGuide('curl', this)">cURL 冒烟测试</button>
+      </div>
+      <div class="guide-content" id="guideContent">
+        <button class="btn-copy guide-copy-btn" onclick="copyCurrentGuide()">📋 复制代码</button>
+        <pre style="margin:0; background:transparent; border:none; padding:0;" id="guideCodeText"></pre>
+      </div>
+    </div>
+
+    <!-- 账号池可视化运维表 -->
+    <div class="card">
+      <div class="card-title">
+        <span>👥 账号池运维状态</span>
+        <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadAccounts()">🔄 刷新状态</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>UID / 标识</th>
+            <th>账号昵称</th>
+            <th>可用积分 (Credits)</th>
+            <th>今日签到</th>
+            <th>实时并发</th>
+            <th>健康状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="accBody"></tbody>
+      </table>
+    </div>
+
+    <!-- 上游模型全量矩阵看板 -->
+    <div class="card">
+      <div class="card-title">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span>📋 腾讯云上游模型矩阵</span>
+          <span class="badge badge-purple" id="modelTotalBadge">加载中...</span>
+        </div>
+        <div style="display:flex; gap:10px;">
+          <input id="modelSearch" class="search-input" placeholder="🔍 搜索模型 ID 或名称..." oninput="filterModels()">
+          <button class="btn-primary" onclick="loadModels(true)">🔄 刷新上游</button>
+          <button class="btn-outline" onclick="exportAllRawJson()">📥 导出全量 JSON</button>
+        </div>
+      </div>
+      
+      <!-- 快捷分类筛选 -->
+      <div class="filter-bar">
+        <button class="filter-btn active" onclick="setFilter('all', this)">全部</button>
+        <button class="filter-btn" onclick="setFilter('1m', this)">1M 上下文</button>
+        <button class="filter-btn" onclick="setFilter('free', this)">免费 / 低倍率</button>
+        <button class="filter-btn" onclick="setFilter('tool', this)">支持工具 🛠️</button>
+        <button class="filter-btn" onclick="setFilter('vision', this)">支持视觉 👁️</button>
+        <button class="filter-btn" onclick="setFilter('reasoning', this)">支持思考 🧠</button>
+        <button class="filter-btn" onclick="setFilter('idle', this)">🟢 畅通可用</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>模型 ID</th>
+            <th>显示名称</th>
+            <th>实时探针</th>
+            <th>官方修订说明</th>
+            <th>计费倍率</th>
+            <th>上下文窗口</th>
+            <th>最大输出</th>
+            <th>思考档位 (Reasoning)</th>
+            <th>特性标签</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="modelBody"></tbody>
+      </table>
+    </div>
+
+    <!-- 原始数据查看 Modal -->
+    <div class="modal" id="rawModal">
+      <div class="modal-content">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h3 style="margin:0; font-size:16px; color:var(--accent);">腾讯云官方原始数据 · <span id="rawModalTitle"></span></h3>
+          <button onclick="closeRawModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
+        </div>
+        <p style="color:var(--text-muted); font-size:12px; margin-bottom:10px;">以下为上游 <code>copilot.tencent.com/v3/config</code> 下发的 100% 原始未裁剪键值对：</p>
+        <pre id="rawModalCode"></pre>
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px;">
+          <button class="btn-primary" onclick="copyRawCode()">📋 复制 JSON</button>
+          <button class="btn-outline" onclick="closeRawModal()">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- OAuth 扫码登录 Modal -->
+    <div class="modal" id="oauthModal">
+      <div class="modal-content" style="text-align:center; max-width:440px;">
+        <h3 style="margin-bottom:8px; font-size:18px;">腾讯云官方扫码登录</h3>
+        <p style="color:var(--text-muted); font-size:13px; margin-bottom:20px;">点击下方按钮在浏览器打开官方登录页，使用微信或腾讯云扫码授权：</p>
+        <p style="margin: 20px 0;">
+          <a id="loginLink" href="#" target="_blank" style="display:inline-block; padding:10px 20px; background:var(--primary); color:#fff; border-radius:8px; text-decoration:none; font-weight:bold; box-shadow:0 4px 12px rgba(2, 132, 199, 0.3);">
+            👉 点击跳转至腾讯云授权登录页
+          </a>
+        </p>
+        <div id="pollStatus" style="color:#facc15; font-size:13px; margin: 12px 0;">等待手机扫码授权中...</div>
+        <button class="btn-outline" onclick="closeModal()">取消</button>
+      </div>
+    </div>
+
   </div>
 
   <script>
@@ -1431,32 +1518,105 @@ function renderDashboardHTML() {
     let allModels = [];
     let currentFilter = 'all';
 
+    const guides = {
+      openai: \`# OpenAI 兼容客户端配置 (如 Cursor / NextChat / Chatbox / LobeChat)
+Base URL: http://127.0.0.1:${config.port}/v1
+API Key : ${config.apiKey}
+常用模型: deepseek-v4.1-flash (100万上下文/思考模式), hy4-preview, hy3 (免费)\`,
+      claude: \`# Claude Code 官方命令行原生适配 (零配置直连)
+export ANTHROPIC_BASE_URL=http://127.0.0.1:${config.port}
+export ANTHROPIC_API_KEY=${config.apiKey}
+export ANTHROPIC_MODEL=deepseek-v4.1-flash
+
+claude\`,
+      search: \`# 官方免费服务端联网检索与抓取
+curl http://127.0.0.1:${config.port}/v1/search \\\\
+  -H "Authorization: Bearer ${config.apiKey}" \\\\
+  -H "Content-Type: application/json" \\\\
+  -d '{"query": "腾讯云 CodeBuddy", "max_results": 3}'\`,
+      curl: \`# 终端 cURL 快速测试 (带思维链与客户端工具)
+curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
+  -H "Authorization: Bearer ${config.apiKey}" \\\\
+  -H "Content-Type: application/json" \\\\
+  -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"你好"}],"stream":false}'\`
+    };
+
+    function switchGuide(type, el) {
+      document.querySelectorAll('.guide-tab-btn').forEach(b => b.classList.remove('active'));
+      el.classList.add('active');
+      document.getElementById('guideCodeText').innerText = guides[type];
+    }
+    document.getElementById('guideCodeText').innerText = guides.openai;
+
+    function copyCurrentGuide() {
+      const txt = document.getElementById('guideCodeText').innerText;
+      navigator.clipboard.writeText(txt);
+      alert('接入配置代码已复制到剪贴板！');
+    }
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      if (html.classList.contains('dark')) {
+        html.classList.remove('dark');
+        html.classList.add('light');
+        localStorage.setItem('theme', 'light');
+      } else {
+        html.classList.remove('light');
+        html.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
+      }
+    }
+    if (localStorage.getItem('theme') === 'light') {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+    }
+
     async function loadAccounts() {
       const res = await fetch('/api/accounts');
       const data = await res.json();
+      
+      let totalCredits = 0;
+      let inFlightTotal = 0;
+      let activeAccCount = 0;
+
+      data.forEach(a => {
+        totalCredits += (a.creditsRemain || 0);
+        inFlightTotal += (a.inFlight || 0);
+        if (a.status === 'healthy' && !a.isCooldown) activeAccCount++;
+      });
+
+      document.getElementById('kpiTotalAcc').innerText = data.length;
+      document.getElementById('kpiActiveAcc').innerText = activeAccCount;
+      document.getElementById('kpiTotalCredits').innerText = totalCredits.toLocaleString('en-US', { minimumFractionDigits: 2 });
+      document.getElementById('kpiInFlight').innerText = inFlightTotal;
+
       const tbody = document.getElementById('accBody');
       if (data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#64748b;">暂无账号，请点击右上角「扫码添加账号」</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px;">暂无可用账号，请点击右上角「➕ 扫码添加账号」</td></tr>';
         return;
       }
+
       tbody.innerHTML = data.map(a => {
         const checkinBadge = a.isCheckedInToday
-          ? \`<span class="badge badge-ok" title="\${a.lastCheckinMsg}">✅ 今日已签到</span>\`
-          : \`<span class="badge badge-cool">⏳ 今日未签</span> <button class="btn-primary" style="padding:2px 8px; font-size:11px; margin-left:4px;" onclick="runCheckinSingle('\${a.uid}')">签到</button>\`;
+          ? \`<span class="badge badge-ok" title="\${a.lastCheckinMsg}">✅ 已签到</span>\`
+          : \`<span class="badge badge-cool">⏳ 未签到</span> <button class="btn-primary" style="padding:2px 8px; font-size:11px; margin-left:6px;" onclick="runCheckinSingle('\${a.uid}')">打卡</button>\`;
 
         return \`
           <tr>
-            <td>\${a.uid}</td>
+            <td><code>\${a.uid}</code></td>
             <td><b>\${a.email}</b></td>
-            <td><b style="color:#4ade80;">\${a.creditsRemain}</b></td>
+            <td><b style="color:#4ade80; font-size:14px;">\${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b></td>
             <td>\${checkinBadge}</td>
-            <td>\${a.inFlight}</td>
+            <td><span class="badge \${a.inFlight > 0 ? 'badge-blue' : ''}">\${a.inFlight || 0} / 3</span></td>
             <td>
               \${a.status === 'unauthorized' ? '<span class="badge badge-err">Token失效</span>' : 
                 a.isCooldown ? '<span class="badge badge-cool">冷却退避</span>' : 
-                '<span class="badge badge-ok">健康</span>'}
+                '<span class="badge badge-ok">健康活跃</span>'}
             </td>
-            <td><button class="btn-danger" onclick="deleteAccount('\${a.uid}')">删除</button></td>
+            <td>
+              <button class="btn-outline" style="padding:3px 8px; font-size:11px;" onclick="runCheckinSingle('\${a.uid}')" title="同步积分">🔄 刷新</button>
+              <button class="btn-danger" onclick="deleteAccount('\${a.uid}')">删除</button>
+            </td>
           </tr>
         \`;
       }).join('');
@@ -1464,13 +1624,14 @@ function renderDashboardHTML() {
 
     async function loadModels(force = false) {
       try {
-        document.getElementById('modelCount').innerText = '正在从上游拉取...';
+        document.getElementById('modelTotalBadge').innerText = '正在同步...';
         const res = await fetch('/api/models-detail' + (force ? '?refresh=1' : ''));
         allModels = await res.json();
-        document.getElementById('modelCount').innerText = \`共 \${allModels.length} 款模型\`;
+        document.getElementById('kpiModelsCount').innerText = allModels.length;
+        document.getElementById('modelTotalBadge').innerText = \`已同步 \${allModels.length} 款模型\`;
         renderModels();
       } catch (e) {
-        document.getElementById('modelCount').innerText = '加载失败';
+        document.getElementById('modelTotalBadge').innerText = '加载失败';
       }
     }
 
@@ -1503,7 +1664,7 @@ function renderDashboardHTML() {
       });
 
       if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#64748b;">未找到匹配的模型</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
         return;
       }
 
@@ -1517,11 +1678,11 @@ function renderDashboardHTML() {
           m.maxInputTokens >= 1000 ? \`\${(m.maxInputTokens/1000).toFixed(0)}K\` : (m.maxInputTokens || '-');
         const outFmt = m.maxOutputTokens >= 1000 ? \`\${(m.maxOutputTokens/1000).toFixed(0)}K\` : (m.maxOutputTokens || '-');
 
-        let reasoningHtml = '<span style="color:#64748b;">不支持</span>';
+        let reasoningHtml = '<span style="color:var(--text-muted);">不支持</span>';
         if (m.reasoning || m.supportsReasoning || m.onlyReasoning) {
           const r = m.reasoning || {};
           const efforts = Array.isArray(r.supportedEfforts) ? r.supportedEfforts.join('/') : (r.defaultEffort || 'high');
-          const disableTag = r.canDisableThinking ? '<span style="color:#94a3b8;font-size:10px;">(可关)</span>' : '<span style="color:#f59e0b;font-size:10px;">(强制)</span>';
+          const disableTag = r.canDisableThinking ? '<span style="color:var(--text-muted);font-size:10px;">(可关)</span>' : '<span style="color:#f59e0b;font-size:10px;">(强制)</span>';
           reasoningHtml = \`<span class="badge badge-purple">🧠 \${efforts}</span> \${disableTag}\`;
         }
 
@@ -1537,7 +1698,7 @@ function renderDashboardHTML() {
             <td><code>\${m.id}</code></td>
             <td><b>\${m.name || m.id}</b></td>
             <td>\${probeHtml}</td>
-            <td style="color:#cbd5e1; font-size:12px; max-width:240px;">\${desc}</td>
+            <td style="color:var(--text-muted); font-size:12px; max-width:240px;">\${desc}</td>
             <td>\${badgeCredit}</td>
             <td><span class="badge \${m.maxInputTokens >= 900000 ? 'badge-purple' : ''}">\${ctxFmt}</span></td>
             <td>\${outFmt}</td>
@@ -1547,8 +1708,8 @@ function renderDashboardHTML() {
               \${m.supportsImages ? '<span class="badge badge-ok" title="支持多模态视觉">👁️ 视觉</span> ' : ''}
             </td>
             <td style="white-space:nowrap;">
-              <button class="btn-copy" onclick="copyText('\${m.id}')">📋 复制ID</button>
-              <button class="btn-json" onclick="showRawJson(\${idx})">🔍 原始数据</button>
+              <button class="btn-copy" onclick="copyText('\${m.id}')">📋 复制</button>
+              <button class="btn-json" onclick="showRawJson(\${idx})">🔍 原始JSON</button>
             </td>
           </tr>
         \`;
@@ -1569,7 +1730,7 @@ function renderDashboardHTML() {
     function copyRawCode() {
       const code = document.getElementById('rawModalCode').innerText;
       navigator.clipboard.writeText(code);
-      alert('上游原始 JSON 已复制到剪贴板！');
+      alert('上游原始 JSON 已成功复制到剪贴板！');
     }
 
     function exportAllRawJson() {
@@ -1602,7 +1763,7 @@ function renderDashboardHTML() {
         const alertTitle = document.getElementById('checkinAlertTitle');
         const alertDetail = document.getElementById('checkinAlertDetail');
 
-        alertTitle.innerText = \`🎉 全员签到反馈：共 \${results.length} 个账号，\${successList.length} 个成功/已处于今日签到状态\`;
+        alertTitle.innerText = \`🎉 全员打卡完成：共 \${results.length} 个账号，\${successList.length} 个成功/已处于今日签到状态\`;
         alertDetail.innerText = results.map(r => \`• 账号 [\${r.email || r.uid}]：\${r.msg}\`).join('\\n');
         alertBox.style.display = 'block';
 
@@ -1612,7 +1773,7 @@ function renderDashboardHTML() {
         alert('全员签到失败: ' + e.message);
       } finally {
         btn.disabled = false;
-        btn.innerText = '⚡ 全员签到';
+        btn.innerText = '⚡ 全员打卡签到';
       }
     }
 
@@ -1638,7 +1799,7 @@ function renderDashboardHTML() {
 
       document.getElementById('loginLink').href = data.loginUrl;
       document.getElementById('oauthModal').style.display = 'flex';
-      document.getElementById('pollStatus').innerText = '等待手机扫码授权...';
+      document.getElementById('pollStatus').innerText = '等待手机扫码授权中...';
 
       if (pollTimer) clearInterval(pollTimer);
       pollTimer = setInterval(async () => {
