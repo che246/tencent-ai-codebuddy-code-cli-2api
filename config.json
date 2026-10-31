@@ -2,7 +2,11 @@
   "port": 8317,
   "apiKey": "sk-codebuddy-gateway-token",
   "autoCheckin": true,
+  "concurrencyLimitEnabled": true,
+  "maxInFlightPerAccount": 3,
+  "modelFallbackEnabled": true,
   "modelFallback": {
-    "deepseek-v4.1-flash": "deepseek-v4-flash"
+    "deepseek-v4.1-flash": "deepseek-v4-flash",
+    "hy4-preview": "hy3"
   }
 }

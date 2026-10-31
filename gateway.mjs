@@ -88,11 +88,12 @@ setInterval(() => {
 class AccountScheduler {
   static selectAccount(requestedModel, sessionKey) {
     const now = Date.now();
+    const maxLimit = config.concurrencyLimitEnabled !== false ? (config.maxInFlightPerAccount || 3) : 9999;
 
     if (sessionKey && sessionStickyMap.has(sessionKey)) {
       const sticky = sessionStickyMap.get(sessionKey);
       const acc = accounts.find(a => a.uid === sticky.uid);
-      if (acc && acc.status === 'healthy' && now > (acc.cooldownUntil || 0) && (acc.inFlight || 0) < 3) {
+      if (acc && acc.status === 'healthy' && now > (acc.cooldownUntil || 0) && (acc.inFlight || 0) < maxLimit) {
         const isModelCooling = requestedModel && acc.modelCooldowns?.[requestedModel] && now < acc.modelCooldowns[requestedModel];
         if (!isModelCooling) {
           sticky.lastActive = now;
@@ -108,7 +109,10 @@ class AccountScheduler {
       if (requestedModel && a.modelCooldowns?.[requestedModel] && now < a.modelCooldowns[requestedModel]) {
         return false;
       }
-      if ((a.inFlight || 0) >= 3) return false;
+      // 单账号限流保护开关：开启时限制并发，关闭时不设上限
+      if (config.concurrencyLimitEnabled !== false) {
+        if ((a.inFlight || 0) >= maxLimit) return false;
+      }
       return true;
     });
 
@@ -948,6 +952,7 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
+        // 6. 模型级限流 (6004) 改道执行器
         async function executeCall(curModel, isRetry = false) {
           upstreamPayload.model = curModel;
           const headers = buildOfficialUpstreamHeaders(acc.accessToken, curModel, sessionKey);
@@ -971,10 +976,16 @@ const server = http.createServer(async (req, res) => {
 
             if (parsedErr.code === 6004) {
               AccountScheduler.cooldownModel(acc.uid, curModel, 600, 'Upstream 6004 Model Limit Exceeded');
-              const fallback = config.modelFallback?.[curModel];
+              
+              // 检查 6004 自动改道开关
+              const isFallbackEnabled = config.modelFallbackEnabled !== false;
+              const fallback = isFallbackEnabled ? config.modelFallback?.[curModel] : null;
+
               if (fallback && fallback !== curModel && !isRetry) {
                 Logger.warn('REROUTE', `账号 [${acc.email}] 模型 [${curModel}] 触发 6004 限量，自动无感改道至备用模型 [${fallback}]`);
                 return await executeCall(fallback, true);
+              } else if (!isFallbackEnabled && parsedErr.code === 6004) {
+                Logger.warn('REROUTE', `账号 [${acc.email}] 模型 [${curModel}] 触发 6004 限量 (改道开关已关闭，直接返回错误)`);
               }
             }
             return { ok: false, status: upstreamRes.status, errText };
@@ -1136,6 +1147,50 @@ const server = http.createServer(async (req, res) => {
   // 8. 控制面板管理 API
   if (url.pathname.startsWith('/api/')) {
     const today = getTodayString();
+
+    // 策略设置读取接口
+    if (url.pathname === '/api/settings' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        concurrencyLimitEnabled: config.concurrencyLimitEnabled !== false,
+        maxInFlightPerAccount: config.maxInFlightPerAccount || 3,
+        modelFallbackEnabled: config.modelFallbackEnabled !== false,
+        modelFallback: config.modelFallback || {},
+        autoCheckin: Boolean(config.autoCheckin)
+      }));
+    }
+
+    // 策略设置更新接口 (热更新生效并落盘)
+    if (url.pathname === '/api/settings' && req.method === 'POST') {
+      let b = '';
+      req.on('data', c => b += c);
+      req.on('end', () => {
+        try {
+          const body = JSON.parse(b);
+          if (typeof body.concurrencyLimitEnabled === 'boolean') {
+            config.concurrencyLimitEnabled = body.concurrencyLimitEnabled;
+          }
+          if (typeof body.modelFallbackEnabled === 'boolean') {
+            config.modelFallbackEnabled = body.modelFallbackEnabled;
+          }
+          if (typeof body.maxInFlightPerAccount === 'number') {
+            config.maxInFlightPerAccount = Math.max(1, body.maxInFlightPerAccount);
+          }
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+          Logger.info('CONFIG', `网关运行策略已更新 (热生效)`, {
+            concurrencyLimitEnabled: config.concurrencyLimitEnabled,
+            modelFallbackEnabled: config.modelFallbackEnabled,
+            maxInFlightPerAccount: config.maxInFlightPerAccount
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: true, config }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
 
     // 日志查询接口
     if (url.pathname === '/api/logs' && req.method === 'GET') {
@@ -1349,6 +1404,7 @@ server.listen(config.port, () => {
   console.log(`✨ 协议支持: OpenAI (/v1/chat/completions) + Anthropic (/v1/messages)`);
   console.log(`🌐 联网扩展: POST /v1/search & POST /v1/fetch`);
   console.log(`🛠️  已开启: 客户端自定义 tools 透传与 tool_calls 回传`);
+  console.log(`🛡️  策略开关: 单账号限流保护与 6004 改道支持动态开关`);
   console.log(`📜 日志系统: 内存环形缓冲 + gateway.log 自动持久化 + Web实时诊断看板`);
   console.log(`======================================================\n`);
 });
@@ -1427,6 +1483,14 @@ function renderDashboardHTML() {
     /* Card Standard */
     .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 22px; margin-bottom: 24px; }
     .card-title { font-size: 16px; font-weight: 700; color: var(--text-main); margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+
+    /* Toggle Switch */
+    .switch { position: relative; display: inline-block; width: 44px; height: 24px; vertical-align: middle; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; inset: 0; background-color: #334155; transition: .2s; border-radius: 24px; }
+    .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; }
+    input:checked + .slider { background-color: #0284c7; }
+    input:checked + .slider:before { transform: translateX(20px); }
 
     /* Quick Guide Tabs */
     .guide-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--card-border); padding-bottom: 10px; margin-bottom: 16px; }
@@ -1529,6 +1593,47 @@ function renderDashboardHTML() {
       </div>
     </div>
 
+    <!-- 策略控制开关面板 (Policy & Safety Toggles) -->
+    <div class="card">
+      <div class="card-title">
+        <span>🛡️ 网关运行策略与防护开关</span>
+        <span style="font-size:12px; font-weight:normal; color:var(--text-muted);">热更新配置，修改即刻在内存生效并持久化</span>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;">
+        <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+              <span>单账号限流保护 (并发削峰)</span>
+              <span id="badgeConcurrency" class="badge badge-ok">已开启</span>
+            </div>
+            <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+              限制单个账号同时处理的在途并发不超过 <span id="valMaxInFlight" style="color:var(--accent); font-weight:bold;">3</span> 个，防止并发过高触发风控。
+            </div>
+          </div>
+          <label class="switch" style="margin-left:15px; flex-shrink:0;">
+            <input type="checkbox" id="chkConcurrency" onchange="togglePolicy('concurrency')">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+              <span>6004 自动改道 (模型降级)</span>
+              <span id="badgeFallback" class="badge badge-ok">已开启</span>
+            </div>
+            <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+              遇到 6004（单模型超限）时，仅局部冷却该模型，并在同账号下自动重试改道至备用模型。
+            </div>
+          </div>
+          <label class="switch" style="margin-left:15px; flex-shrink:0;">
+            <input type="checkbox" id="chkFallback" onchange="togglePolicy('fallback')">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
     <!-- 客户端接入指引 (Interactive Guide) -->
     <div class="card">
       <div class="card-title">
@@ -1569,7 +1674,7 @@ function renderDashboardHTML() {
       </table>
     </div>
 
-    <!-- 实时运行日志 / 问题排查诊断面板 (New Live Logging Diagnostic Panel) -->
+    <!-- 实时运行日志 / 问题排查诊断面板 -->
     <div class="card">
       <div class="card-title">
         <div style="display:flex; align-items:center; gap:10px;">
@@ -1687,7 +1792,6 @@ function renderDashboardHTML() {
     let allModels = [];
     let currentFilter = 'all';
 
-    // 日志系统前端状态
     let allLogs = [];
     let logCatFilter = 'ALL';
     let logLevelFilter = 'ALL';
@@ -1746,6 +1850,39 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
       document.documentElement.classList.add('light');
     }
 
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/settings');
+        const s = await res.json();
+        
+        document.getElementById('chkConcurrency').checked = s.concurrencyLimitEnabled;
+        document.getElementById('badgeConcurrency').className = 'badge ' + (s.concurrencyLimitEnabled ? 'badge-ok' : 'badge-cool');
+        document.getElementById('badgeConcurrency').innerText = s.concurrencyLimitEnabled ? '已开启' : '已关闭';
+        document.getElementById('valMaxInFlight').innerText = s.maxInFlightPerAccount || 3;
+
+        document.getElementById('chkFallback').checked = s.modelFallbackEnabled;
+        document.getElementById('badgeFallback').className = 'badge ' + (s.modelFallbackEnabled ? 'badge-ok' : 'badge-cool');
+        document.getElementById('badgeFallback').innerText = s.modelFallbackEnabled ? '已开启' : '已关闭';
+      } catch (_) {}
+    }
+
+    async function togglePolicy(kind) {
+      const isConc = document.getElementById('chkConcurrency').checked;
+      const isFall = document.getElementById('chkFallback').checked;
+
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          concurrencyLimitEnabled: isConc,
+          modelFallbackEnabled: isFall
+        })
+      });
+
+      loadSettings();
+      fetchLogs();
+    }
+
     async function loadAccounts() {
       const res = await fetch('/api/accounts');
       const data = await res.json();
@@ -1782,7 +1919,7 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
             <td><b>\${a.email}</b></td>
             <td><b style="color:#4ade80; font-size:14px;">\${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b></td>
             <td>\${checkinBadge}</td>
-            <td><span class="badge \${a.inFlight > 0 ? 'badge-blue' : ''}">\${a.inFlight || 0} / 3</span></td>
+            <td><span class="badge \${a.inFlight > 0 ? 'badge-blue' : ''}">\${a.inFlight || 0} / \${config.concurrencyLimitEnabled !== false ? (config.maxInFlightPerAccount || 3) : '无限制'}</span></td>
             <td>
               \${a.status === 'unauthorized' ? '<span class="badge badge-err">Token失效</span>' : 
                 a.isCooldown ? '<span class="badge badge-cool">冷却退避</span>' : 
@@ -1797,7 +1934,6 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
       }).join('');
     }
 
-    // ── 日志系统前端逻辑 ────────────────────────────────────────────────
     async function fetchLogs() {
       try {
         const res = await fetch('/api/logs?limit=250');
@@ -1897,7 +2033,6 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
         .replace(/"/g, '&quot;');
     }
 
-    // ── 模型全景矩阵 ────────────────────────────────────────────────────
     async function loadModels(force = false) {
       try {
         document.getElementById('modelTotalBadge').innerText = '正在同步...';
@@ -2113,6 +2248,7 @@ curl http://127.0.0.1:${config.port}/v1/chat/completions \\\\
 
     loadAccounts();
     loadModels();
+    loadSettings();
     fetchLogs();
     setInterval(loadAccounts, 5000);
     setInterval(fetchLogs, 2500);
