@@ -1,0 +1,8 @@
+{
+  "port": 8317,
+  "apiKey": "sk-codebuddy-gateway-token",
+  "autoCheckin": true,
+  "modelFallback": {
+    "deepseek-v4.1-flash": "deepseek-v4-flash"
+  }
+}

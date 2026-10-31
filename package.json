@@ -1,0 +1,17 @@
+{
+  "name": "codebuddy-gateway",
+  "version": "1.0.0",
+  "description": "Lightweight OpenAI-compatible multi-account API gateway based on Tencent CodeBuddy Domestic",
+  "type": "module",
+  "main": "gateway.mjs",
+  "scripts": {
+    "start": "node gateway.mjs"
+  },
+  "keywords": [
+    "codebuddy",
+    "openai-api",
+    "gateway",
+    "deepseek"
+  ],
+  "license": "MIT"
+}

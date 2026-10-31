@@ -1,0 +1,13 @@
+# 凭据与敏感数据（严禁提交）
+accounts.json
+.env
+*.log
+
+# 依赖与打包归档
+node_modules/
+*.tgz
+extracted/
+
+# 系统临时文件
+.DS_Store
+Thumbs.db

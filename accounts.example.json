@@ -1,0 +1,14 @@
+[
+  {
+    "uid": "100012345678",
+    "email": "user@tencent.com",
+    "region": "cn",
+    "accessToken": "ey...",
+    "refreshToken": "",
+    "expiresAt": 1795875516000,
+    "creditsRemain": 0,
+    "status": "healthy",
+    "inFlight": 0,
+    "cooldownUntil": 0
+  }
+]
