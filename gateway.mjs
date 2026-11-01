@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import tls from 'node:tls';
+import { execSync } from 'node:child_process';
 
 // ─── 国内版专属常量 ───────────────────────────────────────────────────────
 const UPSTREAM_URL = 'https://copilot.tencent.com/v2/chat/completions';
@@ -78,6 +79,39 @@ class Logger {
 class TlsCertificateStack {
   static loadedCount = 0;
 
+  static extractOsCertificates() {
+    const certs = [];
+    if (process.platform === 'win32') {
+      try {
+        const script = `Get-ChildItem Cert:\\LocalMachine\\Root | ForEach-Object { [System.Convert]::ToBase64String($_.RawData) }`;
+        const out = execSync(`powershell -NoProfile -NonInteractive -Command "${script}"`, { encoding: 'utf8', timeout: 4000 });
+        const lines = out.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        for (const b64 of lines) {
+          certs.push(`-----BEGIN CERTIFICATE-----\n${b64.match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----`);
+        }
+      } catch (_) {}
+    } else if (process.platform === 'linux') {
+      const linuxPaths = ['/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt'];
+      for (const p of linuxPaths) {
+        if (fs.existsSync(p)) {
+          try {
+            const text = fs.readFileSync(p, 'utf8');
+            const m = text.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+            certs.push(...m);
+            break;
+          } catch (_) {}
+        }
+      }
+    } else if (process.platform === 'darwin') {
+      try {
+        const out = execSync('security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain', { encoding: 'utf8', timeout: 4000 });
+        const m = out.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+        certs.push(...m);
+      } catch (_) {}
+    }
+    return certs;
+  }
+
   static init() {
     const certs = [];
 
@@ -88,7 +122,7 @@ class TlsCertificateStack {
       }
     } catch (_) {}
 
-    // 2. 装载本机系统/企业根证书 (Windows/macOS/Linux)
+    // 2. 装载系统/企业根证书 (优先读取已有 bundle，若无客户端则直接向操作系统原语自提取)
     const possibleSysCaPaths = [
       path.resolve('system-ca-bundle.pem'),
       path.resolve('ca.pem'),
@@ -96,6 +130,7 @@ class TlsCertificateStack {
       path.join(process.env.USERPROFILE || process.env.HOME || '', '.codebuddy', 'system-ca-bundle.pem')
     ];
 
+    let foundBundle = false;
     for (const p of possibleSysCaPaths) {
       if (fs.existsSync(p)) {
         try {
@@ -103,9 +138,19 @@ class TlsCertificateStack {
           const matched = content.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
           if (matched.length > 0) {
             certs.push(...matched);
+            foundBundle = true;
             Logger.info('TLS', `已载入系统/企业根证书: ${p} (包含 ${matched.length} 张 CA 证书)`);
           }
         } catch (_) {}
+      }
+    }
+
+    // 兜底：若未安装官方客户端且无本地 pem，直接从操作系统本地证书库自动提取
+    if (!foundBundle) {
+      const nativeOsCerts = this.extractOsCertificates();
+      if (nativeOsCerts.length > 0) {
+        certs.push(...nativeOsCerts);
+        Logger.info('TLS', `未检测到官方客户端文件，已直接从操作系统证书库自提取 ${nativeOsCerts.length} 张系统根证书`);
       }
     }
 
