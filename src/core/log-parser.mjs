@@ -1,10 +1,11 @@
 import fs from 'node:fs';
+import { LOG_FILE_PATH } from '../config.mjs';
 
 export function rebuildRealStatsFromLog() {
-  if (!fs.existsSync('gateway.log')) {
+  if (!fs.existsSync(LOG_FILE_PATH)) {
     return null;
   }
-  const lines = fs.readFileSync('gateway.log', 'utf8').split('\n');
+  const lines = fs.readFileSync(LOG_FILE_PATH, 'utf8').split('\n');
 
   let totalRequests = 0;
   let successRequests = 0;

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ─── 腾讯云 CodeBuddy 国内版专属端点 ─────────────────────────────────────────
 export const UPSTREAM_URL = 'https://copilot.tencent.com/v2/chat/completions';
@@ -13,22 +14,51 @@ export const WEBFETCH_URL = 'https://copilot.tencent.com/agenttool/v1/webfetch';
 export const CURRENT_VERSION = '2.179.0';
 export const USER_AGENT = `CLI/${CURRENT_VERSION} CodeBuddy/${CURRENT_VERSION}`;
 
-// 2. 本地持久化文件路径定义
-export const ROOT_DIR = process.cwd();
+// 2. 本地持久化文件绝对路径锁定 (基于当前模块物理位置，不受运行环境 cwd 漂移影响)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+export const ROOT_DIR = path.resolve(__dirname, '..');
 export const CONFIG_PATH = path.resolve(ROOT_DIR, 'config.json');
 export const ACCOUNTS_PATH = path.resolve(ROOT_DIR, 'accounts.json');
 export const LOG_FILE_PATH = path.resolve(ROOT_DIR, 'gateway.log');
 
-// 3. 配置与账号加载
-export let config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {};
-export let accounts = fs.existsSync(ACCOUNTS_PATH) ? JSON.parse(fs.readFileSync(ACCOUNTS_PATH, 'utf8')) : [];
+// 3. 配置与账号加载 (含双重 .bak 备份自动容灾恢复)
+function loadJsonWithBackup(mainPath, defaultValue) {
+  if (fs.existsSync(mainPath)) {
+    try {
+      const raw = fs.readFileSync(mainPath, 'utf8');
+      if (raw && raw.trim().length > 1) {
+        return JSON.parse(raw);
+      }
+    } catch (_) {}
+  }
+  const bakPath = mainPath + '.bak';
+  if (fs.existsSync(bakPath)) {
+    try {
+      const raw = fs.readFileSync(bakPath, 'utf8');
+      if (raw && raw.trim().length > 1) {
+        const data = JSON.parse(raw);
+        fs.writeFileSync(mainPath, JSON.stringify(data, null, 2), 'utf8');
+        return data;
+      }
+    } catch (_) {}
+  }
+  return defaultValue;
+}
+
+export let config = loadJsonWithBackup(CONFIG_PATH, {});
+export let accounts = loadJsonWithBackup(ACCOUNTS_PATH, []);
 
 export function saveAccounts() {
-  fs.writeFileSync(ACCOUNTS_PATH, JSON.stringify(accounts, null, 2), 'utf8');
+  const content = JSON.stringify(accounts, null, 2);
+  fs.writeFileSync(ACCOUNTS_PATH, content, 'utf8');
+  try { fs.writeFileSync(ACCOUNTS_PATH + '.bak', content, 'utf8'); } catch (_) {}
 }
 
 export function saveConfig() {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  const content = JSON.stringify(config, null, 2);
+  fs.writeFileSync(CONFIG_PATH, content, 'utf8');
+  try { fs.writeFileSync(CONFIG_PATH + '.bak', content, 'utf8'); } catch (_) {}
 }
 
 export function updateAccounts(newAccounts) {

@@ -44,47 +44,60 @@ let statsData = null;
 
 export function loadStats(forceReload = false) {
   if (statsData && !forceReload) return statsData;
-  if (fs.existsSync(STATS_PATH) && !forceReload) {
+
+  // 1. 尝试从现有持久化文件 stats.json 读取
+  if (fs.existsSync(STATS_PATH)) {
     try {
-      statsData = JSON.parse(fs.readFileSync(STATS_PATH, 'utf8'));
-      // 如果现有文件缺少 accounts 字段或 daily 缺少 models/accounts 明细，从日志重构补充
-      const hasDailyDetail = statsData.daily && Object.values(statsData.daily).some(d => d.models && Object.keys(d.models).length > 0);
-      if (!statsData.accounts || Object.keys(statsData.accounts).length === 0 || !hasDailyDetail) {
-        const fromLog = rebuildRealStatsFromLog();
-        if (fromLog) {
-          if (fromLog.accounts) statsData.accounts = fromLog.accounts;
-          if (fromLog.daily) statsData.daily = fromLog.daily;
-          if (fromLog.models) statsData.models = fromLog.models;
-          if (fromLog.summary) statsData.summary = fromLog.summary;
-          saveStatsSync();
+      const raw = fs.readFileSync(STATS_PATH, 'utf8');
+      if (raw && raw.trim().length > 5) {
+        const parsed = JSON.parse(raw);
+        if (parsed.summary && typeof parsed.summary.totalRequests === 'number') {
+          statsData = parsed;
+          if (!statsData.models) statsData.models = {};
+          if (!statsData.accounts) statsData.accounts = {};
+          if (!statsData.daily) statsData.daily = {};
+          return statsData;
         }
       }
-      // 如果现有文件包含之前的参考 mock 假数据 (220000000)，自动重置为真实数据
-      if (statsData.summary?.totalTokens === 220000000 && statsData.summary?.totalRequests === 579) {
-        statsData = getInitialStats();
-        saveStatsSync();
-      }
-      return statsData;
     } catch (_) {}
   }
+
+  // 2. 尝试从容灾备份 stats.json.bak 自动恢复
+  const bakPath = STATS_PATH + '.bak';
+  if (fs.existsSync(bakPath)) {
+    try {
+      const rawBak = fs.readFileSync(bakPath, 'utf8');
+      if (rawBak && rawBak.trim().length > 5) {
+        const parsedBak = JSON.parse(rawBak);
+        if (parsedBak.summary && typeof parsedBak.summary.totalRequests === 'number') {
+          statsData = parsedBak;
+          if (!statsData.models) statsData.models = {};
+          if (!statsData.accounts) statsData.accounts = {};
+          if (!statsData.daily) statsData.daily = {};
+          saveStatsSync();
+          return statsData;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 3. 仅当文件完全不存在且无备份时，首次从日志动态重构初始化
   statsData = getInitialStats();
   saveStatsSync();
   return statsData;
 }
 
 export function saveStatsSync() {
+  if (!statsData) return;
   try {
-    fs.writeFileSync(STATS_PATH, JSON.stringify(statsData, null, 2), 'utf8');
+    const content = JSON.stringify(statsData, null, 2);
+    fs.writeFileSync(STATS_PATH, content, 'utf8');
+    try { fs.writeFileSync(STATS_PATH + '.bak', content, 'utf8'); } catch (_) {}
   } catch (_) {}
 }
 
-let saveTimer = null;
 export function saveStats() {
-  if (saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    saveStatsSync();
-  }, 1000);
+  saveStatsSync();
 }
 
 export function recordApiCall({ accountUid = null, accountName = null, model = 'unknown', isSuccess = true, inputTokens = 0, outputTokens = 0 }) {

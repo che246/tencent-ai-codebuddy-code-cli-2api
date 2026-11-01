@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { config, accounts } from './config.mjs';
+import { config, accounts, saveAccounts, saveConfig } from './config.mjs';
 import { Logger } from './core/logger.mjs';
 import { TlsCertificateStack } from './core/tls-certs.mjs';
 import { AccountScheduler } from './core/scheduler.mjs';
@@ -7,6 +7,27 @@ import { handleOpenAiModels, handleOpenAiChatCompletions } from './adapters/open
 import { handleAnthropicMessages } from './adapters/anthropic.mjs';
 import { handleSearch, handleWebFetch } from './adapters/tools.mjs';
 import { handleDashboard, handleApiRoutes } from './web/routes.mjs';
+import { saveStatsSync } from './core/metrics.mjs';
+
+// 0. 优雅停机与进程退出数据保护钩子 (杜绝重启/强制终止时丢失统计与配置数据)
+function flushAllOnShutdown() {
+  try {
+    saveStatsSync();
+    saveAccounts();
+    saveConfig();
+  } catch (_) {}
+}
+process.on('SIGINT', () => {
+  flushAllOnShutdown();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  flushAllOnShutdown();
+  process.exit(0);
+});
+process.on('beforeExit', () => {
+  flushAllOnShutdown();
+});
 
 // 1. 初始化官方同款 TLS 证书栈
 TlsCertificateStack.init();
