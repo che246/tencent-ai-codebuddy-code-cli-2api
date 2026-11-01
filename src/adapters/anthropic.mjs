@@ -401,6 +401,8 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
       const latency = Date.now() - startTime;
       recordApiCall({
+        accountUid: activeAcc?.uid,
+        accountName: activeAcc?.email || activeAcc?.uid,
         model: actualModel,
         isSuccess: true,
         inputTokens: Math.max(10, Math.round(rawBody.length / 4)),
@@ -480,6 +482,8 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       const latency = Date.now() - startTime;
       const stopReason = toolCallsMap.size > 0 ? 'tool_use' : 'end_turn';
       recordApiCall({
+        accountUid: activeAcc?.uid,
+        accountName: activeAcc?.email || activeAcc?.uid,
         model: actualModel,
         isSuccess: true,
         inputTokens: Math.max(10, Math.round(rawBody.length / 4)),

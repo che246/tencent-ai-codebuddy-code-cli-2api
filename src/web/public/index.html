@@ -391,6 +391,7 @@
                   <th>账号昵称</th>
                   <th>备注说明</th>
                   <th>可用积分 (Credits)</th>
+                  <th>已消耗 Token</th>
                   <th>今日签到</th>
                   <th>实时并发</th>
                   <th>健康状态</th>
@@ -1121,7 +1122,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         const tbody = document.getElementById('accBody');
         if (!tbody) return;
         if (!Array.isArray(data) || data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:30px;">暂无可用账号，请点击右上角「➕ 扫码添加账号」</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px;">暂无可用账号，请点击右上角「➕ 扫码添加账号」</td></tr>';
           return;
         }
 
@@ -1143,6 +1144,8 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             ? `<button class="btn-copy" style="background:#7e22ce; color:#fff; border-color:#a855f7; padding:3px 7px; font-size:11px;" onclick="pinAccount('')" title="当前全局锁定指定！点击取消并恢复自动轮换">⭐ 已指定</button>`
             : `<button class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick="pinAccount('${a.uid}')" title="设置该账号为网关全局优先指定账号">⭐ 设为指定</button>`;
 
+          const tokenTip = `输入: ${(a.inputTokens || 0).toLocaleString()} tokens&#10;输出: ${(a.outputTokens || 0).toLocaleString()} tokens&#10;总计: ${(a.totalTokens || 0).toLocaleString()} tokens`;
+
           return `
             <tr>
               <td><code>${a.uid}</code></td>
@@ -1151,6 +1154,10 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
               <td>
                 <b style="color:#4ade80; font-size:14px; cursor:pointer;" onclick="showCreditDetails('${a.uid}')" title="点击查看官方 plans-usage 积分构成明细">${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b>
                 <button class="btn-copy" style="margin-left:6px; font-size:10px; padding:1px 5px;" onclick="showCreditDetails('${a.uid}')" title="查看官方 plans-usage 积分构成明细">明细</button>
+              </td>
+              <td>
+                <b style="color:var(--accent); font-family:monospace; font-size:13px; cursor:help;" title="${tokenTip}">${a.totalTokensDisplay || '0'}</b>
+                <span style="font-size:11px; color:var(--text-muted); display:block;">${(a.requests || 0)} 次请求</span>
               </td>
               <td>${checkinBadge}</td>
               <td><span class="badge ${a.inFlight > 0 ? 'badge-blue' : ''}">${a.inFlight || 0} / ${maxLimit}</span></td>
@@ -1178,19 +1185,30 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           }).join('');
         }
 
-        // 渲染概览页中的账号排名简表
+        // 渲染概览页中的账号排名简表 (展示真实 Token 消耗与积分状态)
         const accRankBox = document.getElementById('accountRankList');
         if (accRankBox) {
-          accRankBox.innerHTML = data.map(a => {
+          const totalAccTokens = data.reduce((sum, a) => sum + (a.totalTokens || 0), 0);
+          const colors = ['#38bdf8', '#c084fc', '#facc15', '#4ade80', '#fb923c'];
+
+          accRankBox.innerHTML = data.map((a, idx) => {
             const accLabel = a.note ? `${a.email} (${a.note})` : `${a.email}`;
+            const pct = totalAccTokens > 0 
+              ? Math.max(3, Math.round(((a.totalTokens || 0) / totalAccTokens) * 100))
+              : (a.creditsRemain > 0 ? 100 : 0);
+            const pctDisplay = totalAccTokens > 0 
+              ? (((a.totalTokens || 0) / totalAccTokens) * 100).toFixed(1) + '%'
+              : (a.inFlight || 0) + ' 并发';
+            const color = colors[idx % colors.length];
+
             return `
-              <div class="rank-row">
+              <div class="rank-row" title="账号: ${accLabel}&#10;已消耗: ${(a.totalTokens || 0).toLocaleString()} tokens (入: ${(a.inputTokens || 0).toLocaleString()}, 出: ${(a.outputTokens || 0).toLocaleString()})&#10;请求数: ${a.requests || 0} 次&#10;可用积分: ${(a.creditsRemain || 0).toFixed(0)} credits">
                 <span class="rank-name" title="${accLabel}">${accLabel}</span>
                 <div class="rank-track">
-                  <div class="rank-fill" style="width: 100%; background: #4ade80;"></div>
+                  <div class="rank-fill" style="width: ${pct}%; background: ${color};"></div>
                 </div>
-                <span class="rank-val" style="color:#4ade80;">${(a.creditsRemain || 0).toFixed(0)}</span>
-                <span class="rank-pct">${a.inFlight || 0} 并发</span>
+                <span class="rank-val" style="color:var(--accent);">${a.totalTokensDisplay || '0'}</span>
+                <span class="rank-pct">${pctDisplay}</span>
               </div>
             `;
           }).join('');

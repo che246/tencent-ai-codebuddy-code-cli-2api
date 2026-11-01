@@ -15,7 +15,7 @@ import { Logger } from '../core/logger.mjs';
 import { AccountScheduler } from '../core/scheduler.mjs';
 import { TlsCertificateStack } from '../core/tls-certs.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
-import { getMetricsReport } from '../core/metrics.mjs';
+import { getMetricsReport, loadStats, formatTokenNumber } from '../core/metrics.mjs';
 
 const HTML_FILE_PATH = path.resolve(ROOT_DIR, 'src/web/public/index.html');
 
@@ -229,18 +229,30 @@ export async function handleApiRoutes(req, res, url) {
 
   // 6. 账号列表查询
   if (url.pathname === '/api/accounts' && req.method === 'GET') {
+    const stats = loadStats();
+    const accStatsMap = stats.accounts || {};
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify(accounts.map(a => ({
-      uid: a.uid,
-      email: a.email,
-      note: a.note || '',
-      creditsRemain: a.creditsRemain,
-      inFlight: a.inFlight || 0,
-      status: a.status,
-      isCooldown: Date.now() < (a.cooldownUntil || 0),
-      isCheckedInToday: a.lastCheckinDate === today,
-      lastCheckinMsg: a.lastCheckinDate === today ? (a.lastCheckinMsg || '今天已签到') : '今日未签到'
-    }))));
+    return res.end(JSON.stringify(accounts.map(a => {
+      const accStats = accStatsMap[a.uid] || accStatsMap[a.email] || {};
+      const tokens = accStats.totalTokens || 0;
+      return {
+        uid: a.uid,
+        email: a.email,
+        note: a.note || '',
+        creditsRemain: a.creditsRemain,
+        totalTokens: tokens,
+        totalTokensDisplay: formatTokenNumber(tokens),
+        inputTokens: accStats.inputTokens || 0,
+        outputTokens: accStats.outputTokens || 0,
+        requests: accStats.requests || 0,
+        inFlight: a.inFlight || 0,
+        status: a.status,
+        isCooldown: Date.now() < (a.cooldownUntil || 0),
+        isCheckedInToday: a.lastCheckinDate === today,
+        lastCheckinMsg: a.lastCheckinDate === today ? (a.lastCheckinMsg || '今天已签到') : '今日未签到'
+      };
+    })));
   }
 
   // 6.5. 官方 plans-usage 积分构成明细查询接口

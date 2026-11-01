@@ -9,7 +9,10 @@ export const STATS_PATH = path.resolve(ROOT_DIR, 'stats.json');
 function getInitialStats() {
   const fromLog = rebuildRealStatsFromLog();
   if (fromLog && fromLog.summary.totalRequests > 0) {
-    return fromLog;
+    return {
+      ...fromLog,
+      accounts: fromLog.accounts || {}
+    };
   }
 
   const today = getTodayString();
@@ -23,6 +26,7 @@ function getInitialStats() {
       totalTokens: 0
     },
     models: {},
+    accounts: {},
     daily: {
       [today]: {
         requests: 0,
@@ -43,6 +47,16 @@ export function loadStats(forceReload = false) {
   if (fs.existsSync(STATS_PATH) && !forceReload) {
     try {
       statsData = JSON.parse(fs.readFileSync(STATS_PATH, 'utf8'));
+      // 如果现有文件缺少 accounts 字段，从日志重构补充
+      if (!statsData.accounts || Object.keys(statsData.accounts).length === 0) {
+        const fromLog = rebuildRealStatsFromLog();
+        if (fromLog?.accounts) {
+          statsData.accounts = fromLog.accounts;
+          saveStatsSync();
+        } else {
+          statsData.accounts = {};
+        }
+      }
       // 如果现有文件包含之前的参考 mock 假数据 (220000000)，自动重置为真实数据
       if (statsData.summary?.totalTokens === 220000000 && statsData.summary?.totalRequests === 579) {
         statsData = getInitialStats();
@@ -71,7 +85,7 @@ export function saveStats() {
   }, 1000);
 }
 
-export function recordApiCall({ model = 'unknown', isSuccess = true, inputTokens = 0, outputTokens = 0 }) {
+export function recordApiCall({ accountUid = null, accountName = null, model = 'unknown', isSuccess = true, inputTokens = 0, outputTokens = 0 }) {
   const stats = loadStats();
   const today = getTodayString();
   const totalTokens = (inputTokens || 0) + (outputTokens || 0);
@@ -105,7 +119,30 @@ export function recordApiCall({ model = 'unknown', isSuccess = true, inputTokens
   m.outputTokens += outputTokens;
   m.totalTokens += totalTokens;
 
-  // 3. 更新按日统计
+  // 3. 更新按账号统计
+  if (accountUid) {
+    if (!stats.accounts) stats.accounts = {};
+    if (!stats.accounts[accountUid]) {
+      stats.accounts[accountUid] = {
+        uid: accountUid,
+        name: accountName || accountUid,
+        requests: 0,
+        successRequests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0
+      };
+    }
+    const accStat = stats.accounts[accountUid];
+    if (accountName) accStat.name = accountName;
+    accStat.requests += 1;
+    if (isSuccess) accStat.successRequests += 1;
+    accStat.inputTokens += inputTokens;
+    accStat.outputTokens += outputTokens;
+    accStat.totalTokens += totalTokens;
+  }
+
+  // 4. 更新按日统计
   if (!stats.daily[today]) {
     stats.daily[today] = {
       requests: 0,
@@ -237,6 +274,24 @@ export function getMetricsReport() {
     }))
     .sort((a, b) => b.date.localeCompare(a.date));
 
+  // 9. 账号 Token 消耗分布列表 (按 tokens 降序)
+  const accountsList = Object.entries(stats.accounts || {})
+    .map(([uid, a]) => ({
+      uid,
+      name: a.name || uid,
+      requests: a.requests || 0,
+      successRequests: a.successRequests || 0,
+      inputTokens: a.inputTokens || 0,
+      inputTokensDisplay: formatTokenNumber(a.inputTokens || 0),
+      outputTokens: a.outputTokens || 0,
+      outputTokensDisplay: formatTokenNumber(a.outputTokens || 0),
+      totalTokens: a.totalTokens || 0,
+      totalTokensDisplay: formatTokenNumber(a.totalTokens || 0),
+      percentage: totalTokens > 0 ? (((a.totalTokens || 0) / totalTokens) * 100).toFixed(1) + '%' : '0%',
+      percentNum: totalTokens > 0 ? Number((((a.totalTokens || 0) / totalTokens) * 100).toFixed(1)) : 0
+    }))
+    .sort((a, b) => b.totalTokens - a.totalTokens);
+
   return {
     totalTokens,
     totalTokensDisplay: formatTokenNumber(totalTokens),
@@ -262,6 +317,7 @@ export function getMetricsReport() {
       percentage: topModelPercent
     },
     modelsList,
+    accountsList,
     dailyTrend
   };
 }
