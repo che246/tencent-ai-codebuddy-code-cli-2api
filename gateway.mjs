@@ -83,7 +83,7 @@ class TlsCertificateStack {
     const certs = [];
     if (process.platform === 'win32') {
       try {
-        const script = `Get-ChildItem Cert:\\LocalMachine\\Root | ForEach-Object { [System.Convert]::ToBase64String($_.RawData) }`;
+        const script = `$ErrorActionPreference = 'SilentlyContinue'; Get-ChildItem -Path Cert:\\LocalMachine\\Root, Cert:\\LocalMachine\\CA, Cert:\\CurrentUser\\Root, Cert:\\CurrentUser\\CA | ForEach-Object { [System.Convert]::ToBase64String($_.RawData) }`;
         const out = execSync(`powershell -NoProfile -NonInteractive -Command "${script}"`, { encoding: 'utf8', timeout: 4000 });
         const lines = out.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
         for (const b64 of lines) {
