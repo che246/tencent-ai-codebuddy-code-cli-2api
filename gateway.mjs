@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import tls from 'node:tls';
 
 // ─── 国内版专属常量 ───────────────────────────────────────────────────────
 const UPSTREAM_URL = 'https://copilot.tencent.com/v2/chat/completions';
@@ -72,6 +73,76 @@ class Logger {
   static warn(category, message, meta) { this.write('warn', category, message, meta); }
   static error(category, message, meta) { this.write('error', category, message, meta); }
 }
+
+// ─── 官方同款 TLS 运行栈与证书管理器 (CertificateManager 纯血复刻) ─────
+class TlsCertificateStack {
+  static loadedCount = 0;
+
+  static init() {
+    const certs = [];
+
+    // 1. 装载 Node.js 原生 Mozilla 根证书 (约 144 个)
+    try {
+      if (Array.isArray(tls.rootCertificates)) {
+        certs.push(...tls.rootCertificates);
+      }
+    } catch (_) {}
+
+    // 2. 装载本机系统/企业根证书 (Windows/macOS/Linux)
+    const possibleSysCaPaths = [
+      path.resolve('system-ca-bundle.pem'),
+      path.resolve('ca.pem'),
+      path.join(process.env.USERPROFILE || process.env.HOME || '', '.workbuddy', 'system-ca-bundle.pem'),
+      path.join(process.env.USERPROFILE || process.env.HOME || '', '.codebuddy', 'system-ca-bundle.pem')
+    ];
+
+    for (const p of possibleSysCaPaths) {
+      if (fs.existsSync(p)) {
+        try {
+          const content = fs.readFileSync(p, 'utf8');
+          const matched = content.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+          if (matched.length > 0) {
+            certs.push(...matched);
+            Logger.info('TLS', `已载入系统/企业根证书: ${p} (包含 ${matched.length} 张 CA 证书)`);
+          }
+        } catch (_) {}
+      }
+    }
+
+    // 3. 环境变量扩展证书 (NODE_EXTRA_CA_CERTS / WB_CA_BUNDLE)
+    const envCa = process.env.WB_CA_BUNDLE || process.env.NODE_EXTRA_CA_CERTS;
+    if (envCa && fs.existsSync(envCa)) {
+      try {
+        const extra = fs.readFileSync(envCa, 'utf8');
+        const matched = extra.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+        if (matched.length > 0) {
+          certs.push(...matched);
+          Logger.info('TLS', `已载入环境变量额外根证书: ${envCa} (包含 ${matched.length} 张 CA 证书)`);
+        }
+      } catch (_) {}
+    }
+
+    // 4. 调用官方同款底座 API：全局注入 Node TLS 堆栈
+    const uniqueCerts = [...new Set(certs)];
+    this.loadedCount = uniqueCerts.length;
+    if (typeof tls.setDefaultCACertificates === 'function' && uniqueCerts.length > 0) {
+      try {
+        tls.setDefaultCACertificates(uniqueCerts);
+        Logger.info('TLS', `官方同款 TLS 运行栈已全局就绪：共装载 ${uniqueCerts.length} 张根证书（含系统级 CA）`);
+      } catch (err) {
+        Logger.warn('TLS', `setDefaultCACertificates 注入警告: ${err.message}`);
+      }
+    }
+
+    // 5. 校验开关 (NODE_TLS_REJECT_UNAUTHORIZED)
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+      Logger.warn('TLS', '检测到 NODE_TLS_REJECT_UNAUTHORIZED=0，已全局关闭严格证书校验');
+    }
+  }
+}
+
+// 启动时立即装载官方 TLS 证书栈
+TlsCertificateStack.init();
 
 // 会话粘性映射: sessionKey -> { uid, lastActive } (带 1 小时 TTL 自动清理)
 const sessionStickyMap = new Map();
@@ -1403,6 +1474,7 @@ server.listen(config.port, () => {
   console.log(`🔑 网关 API Key: ${config.apiKey}`);
   console.log(`✨ 协议支持: OpenAI (/v1/chat/completions) + Anthropic (/v1/messages)`);
   console.log(`🌐 联网扩展: POST /v1/search & POST /v1/fetch`);
+  console.log(`🔒 TLS 堆栈: 官方同款运行栈已激活 (${TlsCertificateStack.loadedCount} 张 CA 根证书已载入)`);
   console.log(`🛠️  已开启: 客户端自定义 tools 透传与 tool_calls 回传`);
   console.log(`🛡️  策略开关: 单账号限流保护与 6004 改道支持动态开关`);
   console.log(`📜 日志系统: 内存环形缓冲 + gateway.log 自动持久化 + Web实时诊断看板`);
@@ -1550,7 +1622,7 @@ function renderDashboardHTML() {
         <div class="logo-icon">⚡</div>
         <div>
           <div class="brand-title">CodeBuddy 2API 网关</div>
-          <div class="brand-sub"><span class="status-dot"></span> 官方链路直连 · 客户端 Agent 纯模型通道 · v${CURRENT_VERSION}</div>
+          <div class="brand-sub"><span class="status-dot"></span> 官方链路直连 · 客户端 Agent 纯模型通道 · v${CURRENT_VERSION} · 🔒 官方TLS栈 (${TlsCertificateStack.loadedCount}张CA)</div>
         </div>
       </div>
       <div class="top-actions">
