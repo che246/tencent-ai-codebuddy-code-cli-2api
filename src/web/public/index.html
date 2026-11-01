@@ -669,14 +669,18 @@
 
   <!-- OAuth 扫码登录 Modal -->
   <div class="modal" id="oauthModal">
-    <div class="modal-content" style="text-align:center; max-width:440px;">
-      <h3 style="margin-bottom:8px; font-size:18px;">腾讯云官方扫码登录</h3>
-      <p style="color:var(--text-muted); font-size:13px; margin-bottom:20px;">点击下方按钮在浏览器打开官方登录页，使用微信或腾讯云扫码授权：</p>
-      <p style="margin: 20px 0;">
-        <a id="loginLink" href="#" target="_blank" style="display:inline-block; padding:10px 20px; background:var(--primary); color:#fff; border-radius:8px; text-decoration:none; font-weight:bold; box-shadow:0 4px 12px rgba(2, 132, 199, 0.3);">
-          👉 点击跳转至腾讯云授权登录页
+    <div class="modal-content" style="text-align:center; max-width:480px;">
+      <h3 style="margin-bottom:8px; font-size:18px;">腾讯云官方扫码授权</h3>
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">可直接在当前浏览器打开，或复制授权链接发送至手机/微信扫码：</p>
+      <div style="margin: 16px 0;">
+        <a id="loginLink" href="#" target="_blank" style="display:block; padding:10px 18px; background:var(--primary); color:#fff; border-radius:8px; text-decoration:none; font-weight:bold; box-shadow:0 4px 12px rgba(2, 132, 199, 0.3); margin-bottom:12px;">
+          👉 直接在浏览器打开授权页
         </a>
-      </p>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input type="text" id="loginUrlInput" class="search-input" style="flex:1; padding:8px 10px; font-size:12px; font-family:monospace;" readonly onclick="this.select()">
+          <button class="btn-copy" id="btnCopyLoginUrl" style="padding:8px 14px; font-size:12px; white-space:nowrap;" onclick="copyLoginUrl()">📋 复制链接</button>
+        </div>
+      </div>
       <div id="pollStatus" style="color:#facc15; font-size:13px; margin: 12px 0;">等待手机扫码授权中...</div>
       <button class="btn-outline" onclick="closeModal()">取消</button>
     </div>
@@ -1472,6 +1476,11 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       if (!data.state) return alert('获取登录链接失败');
 
       document.getElementById('loginLink').href = data.loginUrl;
+      const urlInput = document.getElementById('loginUrlInput');
+      if (urlInput) urlInput.value = data.loginUrl;
+      const copyBtn = document.getElementById('btnCopyLoginUrl');
+      if (copyBtn) copyBtn.innerText = '📋 复制链接';
+
       document.getElementById('oauthModal').style.display = 'flex';
       document.getElementById('pollStatus').innerText = '等待手机扫码授权中...';
 
@@ -1489,6 +1498,24 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           setTimeout(() => { closeModal(); loadAccounts(); loadModels(true); fetchLogs(); }, 1200);
         }
       }, 2000);
+    }
+
+    function copyLoginUrl() {
+      const urlInput = document.getElementById('loginUrlInput');
+      const url = urlInput ? urlInput.value : '';
+      if (!url) return;
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('btnCopyLoginUrl');
+        if (btn) {
+          const old = btn.innerText;
+          btn.innerText = '✅ 已复制!';
+          setTimeout(() => btn.innerText = old, 2000);
+        }
+      }).catch(() => {
+        if (urlInput) urlInput.select();
+        document.execCommand('copy');
+        alert('授权跳转链接已复制到剪贴板！');
+      });
     }
 
     function closeModal() {
