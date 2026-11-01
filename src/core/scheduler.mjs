@@ -23,26 +23,65 @@ setInterval(() => {
 
 // ─── 账号池调度引擎 ─────────────────────────────────────────────────────
 export class AccountScheduler {
-  static selectAccount(requestedModel, sessionKey) {
+  static rrIndex = 0;
+
+  static selectAccount(requestedModel, sessionKey, options = {}) {
     const now = Date.now();
     const maxLimit = config.concurrencyLimitEnabled !== false ? (config.maxInFlightPerAccount || 3) : 9999;
+    const excludeUids = Array.isArray(options.excludeUids) ? options.excludeUids : [];
+    const strategy = options.strategy || config.routingStrategy || 'least-inflight';
 
+    // 1. 优先检查：网关侧全局指定账号 (config.pinnedAccount)
+    const targetAccount = (!excludeUids.includes(config.pinnedAccount) && config.pinnedAccount) ? config.pinnedAccount : null;
+
+    if (targetAccount) {
+      const target = String(targetAccount).trim().toLowerCase();
+      const matched = accounts.find(a => 
+        (a.uid && a.uid.toLowerCase() === target) ||
+        (a.uin && String(a.uin).toLowerCase() === target) ||
+        (a.email && a.email.toLowerCase() === target) ||
+        (a.note && a.note.toLowerCase().includes(target))
+      );
+
+      if (matched) {
+        if (matched.status !== 'healthy') {
+          Logger.warn('DISPATCH', `网关指定账号 [${target}] 状态异常 (${matched.status})，降级回账号池自动调度`);
+        } else if (now < (matched.cooldownUntil || 0)) {
+          Logger.warn('DISPATCH', `网关指定账号 [${target}] 正处于全局冷却中，降级回账号池自动调度`);
+        } else if (requestedModel && matched.modelCooldowns?.[requestedModel] && now < matched.modelCooldowns[requestedModel]) {
+          Logger.warn('DISPATCH', `网关指定账号 [${target}] 对模型 [${requestedModel}] 限流冷却中，降级回账号池自动调度`);
+        } else if (config.concurrencyLimitEnabled !== false && (matched.inFlight || 0) >= maxLimit) {
+          Logger.warn('DISPATCH', `网关指定账号 [${target}] 达到并发上限 (${matched.inFlight}/${maxLimit})，降级回账号池自动调度`);
+        } else {
+          Logger.info('DISPATCH', `精准路由至网关全局指定账号 [${matched.email} (${matched.uid})]${matched.note ? ' 备注:' + matched.note : ''}`);
+          return matched;
+        }
+      } else {
+        Logger.warn('DISPATCH', `未找到网关指定账号 [${target}]，自动切换至账号池调度`);
+      }
+    }
+
+    // 2. 会话粘性复用 (Sticky Session)
     if (sessionKey && sessionStickyMap.has(sessionKey)) {
       const sticky = sessionStickyMap.get(sessionKey);
-      const acc = accounts.find(a => a.uid === sticky.uid);
-      if (acc && acc.status === 'healthy' && now > (acc.cooldownUntil || 0) && (acc.inFlight || 0) < maxLimit) {
-        const isModelCooling = requestedModel && acc.modelCooldowns?.[requestedModel] && now < acc.modelCooldowns[requestedModel];
-        if (!isModelCooling) {
-          sticky.lastActive = now;
-          Logger.info('DISPATCH', `粘性会话复用账号 [${acc.email} (${acc.uid})]`, { sessionKey: sessionKey.slice(0, 8), model: requestedModel });
-          return acc;
+      if (!excludeUids.includes(sticky.uid)) {
+        const acc = accounts.find(a => a.uid === sticky.uid);
+        if (acc && acc.status === 'healthy' && now > (acc.cooldownUntil || 0) && (acc.inFlight || 0) < maxLimit) {
+          const isModelCooling = requestedModel && acc.modelCooldowns?.[requestedModel] && now < acc.modelCooldowns[requestedModel];
+          if (!isModelCooling) {
+            sticky.lastActive = now;
+            Logger.info('DISPATCH', `粘性会话复用账号 [${acc.email} (${acc.uid})]`, { sessionKey: sessionKey.slice(0, 8), model: requestedModel });
+            return acc;
+          }
         }
       }
     }
 
+    // 3. 候选池过滤
     const candidates = accounts.filter(a => {
       if (a.status !== 'healthy') return false;
       if (now < (a.cooldownUntil || 0)) return false;
+      if (excludeUids.includes(a.uid)) return false;
       if (requestedModel && a.modelCooldowns?.[requestedModel] && now < a.modelCooldowns[requestedModel]) {
         return false;
       }
@@ -55,18 +94,30 @@ export class AccountScheduler {
 
     if (candidates.length === 0) return null;
 
-    candidates.sort((a, b) => {
-      if ((a.inFlight || 0) !== (b.inFlight || 0)) {
-        return (a.inFlight || 0) - (b.inFlight || 0);
-      }
-      return (b.creditsRemain || 0) - (a.creditsRemain || 0);
-    });
+    // 4. 按策略选号 (支持 round-robin 顺序轮换 / least-inflight 最小并发 / credits 积分最多)
+    let chosen = null;
+    if (strategy === 'round-robin') {
+      AccountScheduler.rrIndex = (AccountScheduler.rrIndex || 0) % candidates.length;
+      chosen = candidates[AccountScheduler.rrIndex];
+      AccountScheduler.rrIndex = (AccountScheduler.rrIndex + 1) % candidates.length;
+    } else if (strategy === 'credits') {
+      candidates.sort((a, b) => (b.creditsRemain || 0) - (a.creditsRemain || 0));
+      chosen = candidates[0];
+    } else {
+      // 默认 least-inflight: 最小并发优先，相同时按积分从高到低
+      candidates.sort((a, b) => {
+        if ((a.inFlight || 0) !== (b.inFlight || 0)) {
+          return (a.inFlight || 0) - (b.inFlight || 0);
+        }
+        return (b.creditsRemain || 0) - (a.creditsRemain || 0);
+      });
+      chosen = candidates[0];
+    }
 
-    const chosen = candidates[0];
     if (sessionKey) {
       sessionStickyMap.set(sessionKey, { uid: chosen.uid, lastActive: now });
     }
-    Logger.info('DISPATCH', `调度选中账号 [${chosen.email} (${chosen.uid})] (在途并发: ${chosen.inFlight || 0}, 剩余积分: ${chosen.creditsRemain || 0})`, { model: requestedModel });
+    Logger.info('DISPATCH', `调度选中账号 [${chosen.email} (${chosen.uid})] (策略: ${strategy}, 并发: ${chosen.inFlight || 0}, 剩余积分: ${chosen.creditsRemain || 0})`, { model: requestedModel });
     return chosen;
   }
 

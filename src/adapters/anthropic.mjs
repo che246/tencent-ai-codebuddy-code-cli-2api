@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { UPSTREAM_URL, config } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
-import { AccountScheduler } from '../core/scheduler.mjs';
+import { AccountScheduler, sessionStickyMap } from '../core/scheduler.mjs';
 import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
 import {
   extractStructuredBizCode,
@@ -99,15 +99,6 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       }
     }
 
-    const acc = AccountScheduler.selectAccount(targetModel);
-    if (!acc) {
-      Logger.warn('OVERLOAD', `无可用账号服务 [${targetModel}]`);
-      res.writeHead(503, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'All accounts busy or in cooldown' } }));
-    }
-
-    acc.inFlight = (acc.inFlight || 0) + 1;
-
     let upstreamPayload = {
       model: targetModel,
       messages: formatMessagesForUpstream(openAiMessages),
@@ -135,67 +126,130 @@ export async function handleAnthropicMessages(req, res, rawBody) {
     const sessionKey = req.headers['x-session-id'] || 
       crypto.createHash('md5').update(JSON.stringify(openAiMessages.slice(0, 2))).digest('hex');
 
-    // 模型级限流与改道执行器 (对齐 package: 支持 Gzip 与 6003/6004/6007/6008 自动降级)
-    async function executeCall(curModel, isRetry = false) {
-      upstreamPayload.model = curModel;
-      const { body, isGzip } = prepareUpstreamBody(upstreamPayload);
-      const headers = buildOfficialUpstreamHeaders(acc.accessToken, curModel, sessionKey, acc.uid, isGzip);
+    // 核心执行链路：支持网关全局指定账号/账号池轮询、模型限流自动换号续跑以及备用模型改道
+    async function executeRequestChain(initialModel) {
+      let curModel = initialModel;
+      let attemptedUids = new Set();
+      let modelFallbackTriggered = false;
 
-      let upstreamRes = await fetch(UPSTREAM_URL, {
-        method: 'POST',
-        headers,
-        body
-      });
-
-      if (!upstreamRes.ok) {
-        const errText = await upstreamRes.text();
-        let parsedErr = {};
-        try { parsedErr = JSON.parse(errText); } catch (_) {}
-        const bizCode = extractStructuredBizCode(parsedErr) || parsedErr.code;
-
-        Logger.error('ANTHROPIC', `上游报错 HTTP ${upstreamRes.status} (模型: ${curModel}, 业务码: ${bizCode || '无'})`, {
-          code: bizCode,
-          msg: parsedErr.msg || errText,
-          account: acc.email
+      while (true) {
+        // 1. 账号调度：由网关全局配置或账号池轮转决定，排除已在该模型下遭遇限流的账号
+        const acc = AccountScheduler.selectAccount(curModel, sessionKey, {
+          excludeUids: Array.from(attemptedUids)
         });
 
-        if (MODEL_FALLBACK_CODES.has(bizCode)) {
-          AccountScheduler.cooldownModel(acc.uid, curModel, 600, `Upstream ${bizCode} Limit Exceeded`);
+        if (!acc) {
+          // 账号池所有账号在当前模型下均已受限，进入备用模型判断
           const isFallbackEnabled = config.modelFallbackEnabled !== false;
-          const fallback = isFallbackEnabled ? config.modelFallback?.[curModel] : null;
+          const fallbackModel = isFallbackEnabled ? config.modelFallback?.[curModel] : null;
 
-          if (fallback && fallback !== curModel && !isRetry) {
-            Logger.warn('REROUTE', `Anthropic 协议: 账号 [${acc.email}] 模型 [${curModel}] 触发业务码 [${bizCode}]，自动改道至备用模型 [${fallback}]`);
-            return await executeCall(fallback, true);
+          if (fallbackModel && fallbackModel !== curModel && !modelFallbackTriggered) {
+            Logger.warn('REROUTE', `Anthropic 协议: 账号池所有账号对模型 [${curModel}] 均已限流受限，自动触发模型降级至 [${fallbackModel}]`);
+            curModel = fallbackModel;
+            attemptedUids.clear();
+            modelFallbackTriggered = true;
+            continue;
           }
-        } else if (QUOTA_EXHAUSTED_CODES.has(bizCode)) {
-          AccountScheduler.cooldown(acc.uid, 86400, `Upstream Quota Exhausted (${bizCode})`);
+
+          return {
+            ok: false,
+            status: 429,
+            errText: JSON.stringify({ error: { message: `All upstream accounts in the pool are rate-limited or busy for model [${curModel}].`, type: 'rate_limit_error', code: 'rate_limit_exceeded' } }),
+            bizCode: ServerErrorCode.CraftRateLimit
+          };
         }
 
-        return { ok: false, status: upstreamRes.status, errText, bizCode };
+        acc.inFlight = (acc.inFlight || 0) + 1;
+        attemptedUids.add(acc.uid);
+
+        try {
+          upstreamPayload.model = curModel;
+          const { body, isGzip } = prepareUpstreamBody(upstreamPayload);
+          const headers = buildOfficialUpstreamHeaders(acc.accessToken, curModel, sessionKey, acc.uid, isGzip);
+
+          let upstreamRes = await fetch(UPSTREAM_URL, {
+            method: 'POST',
+            headers,
+            body
+          });
+
+          if (!upstreamRes.ok) {
+            acc.inFlight = Math.max(0, acc.inFlight - 1);
+            const errText = await upstreamRes.text();
+            let parsedErr = {};
+            try { parsedErr = JSON.parse(errText); } catch (_) {}
+            const bizCode = extractStructuredBizCode(parsedErr) || parsedErr.code;
+
+            Logger.error('ANTHROPIC', `上游报错 HTTP ${upstreamRes.status} (账号: [${acc.email}], 模型: [${curModel}], 业务码: ${bizCode || '无'})`, {
+              code: bizCode,
+              msg: parsedErr.msg || errText,
+              account: acc.email
+            });
+
+            // 判断是否为模型限流 (6003:TPH, 6004:TPD, 6007:RPH, 6008:RPD, 429)
+            const isModelLimit = MODEL_FALLBACK_CODES.has(bizCode) || upstreamRes.status === 429 || bizCode === ServerErrorCode.RateLimitError;
+
+            if (isModelLimit) {
+              AccountScheduler.cooldownModel(acc.uid, curModel, 600, `Upstream Rate Limit (${bizCode || 429})`);
+              if (sessionKey && sessionStickyMap.get(sessionKey)?.uid === acc.uid) {
+                sessionStickyMap.delete(sessionKey);
+              }
+
+              // 核心特性：自动检测账号池中是否有其他可用账号继续执行相同模型
+              const canFailoverAccount = config.accountFailoverEnabled !== false;
+              const otherAcc = canFailoverAccount ? AccountScheduler.selectAccount(curModel, sessionKey, { excludeUids: Array.from(attemptedUids) }) : null;
+
+              if (otherAcc) {
+                Logger.warn('FAILOVER', `Anthropic 协议: 账号 [${acc.email}] 模型 [${curModel}] 触发限流，自动切换至账号池中可用账号 [${otherAcc.email}] 续跑该模型！`);
+                continue; // 自动在下一个账号重试相同模型
+              }
+
+              // 账号池所有账号在当前模型下均受限，触发备用模型改道
+              const isFallbackEnabled = config.modelFallbackEnabled !== false;
+              const fallbackModel = isFallbackEnabled ? config.modelFallback?.[curModel] : null;
+              if (fallbackModel && fallbackModel !== curModel && !modelFallbackTriggered) {
+                Logger.warn('REROUTE', `Anthropic 协议: 账号池所有账号对模型 [${curModel}] 均已限流，自动改道至备用模型 [${fallbackModel}]`);
+                curModel = fallbackModel;
+                attemptedUids.clear();
+                modelFallbackTriggered = true;
+                continue;
+              }
+            } else if (QUOTA_EXHAUSTED_CODES.has(bizCode) || upstreamRes.status === 402) {
+              AccountScheduler.cooldown(acc.uid, 86400, `Upstream Quota Exhausted (${bizCode})`);
+              if (sessionKey && sessionStickyMap.get(sessionKey)?.uid === acc.uid) {
+                sessionStickyMap.delete(sessionKey);
+              }
+              continue; // 切换其他账号
+            } else if (upstreamRes.status === 401) {
+              acc.status = 'unauthorized';
+              Logger.error('AUTH', `账号 [${acc.email}] Token 已失效或被收回 (HTTP 401)`);
+              continue; // 切换其他账号
+            }
+
+            return { ok: false, status: upstreamRes.status, errText, bizCode, acc };
+          }
+
+          return { ok: true, res: upstreamRes, model: curModel, acc };
+
+        } catch (networkErr) {
+          acc.inFlight = Math.max(0, acc.inFlight - 1);
+          Logger.error('NETWORK', `请求账号 [${acc.email}] 网络异常: ${networkErr.message}`);
+          continue; // 网络抖动，尝试下一个账号
+        }
       }
-      return { ok: true, res: upstreamRes, model: curModel };
     }
 
-    const callResult = await executeCall(targetModel);
+    const callResult = await executeRequestChain(targetModel);
 
     if (!callResult.ok) {
-      acc.inFlight = Math.max(0, acc.inFlight - 1);
       recordApiCall({ model: targetModel, isSuccess: false });
-      if (callResult.status === 429) {
-        AccountScheduler.cooldown(acc.uid, 600, 'Upstream 429 Rate Limit');
-      } else if (callResult.status === 402 || QUOTA_EXHAUSTED_CODES.has(callResult.bizCode)) {
-        AccountScheduler.cooldown(acc.uid, 86400, 'Credits Exhausted');
-      } else if (callResult.status === 401) {
-        acc.status = 'unauthorized';
-        Logger.error('AUTH', `账号 [${acc.email}] Token 已失效或被收回 (HTTP 401)`);
-      }
       res.writeHead(callResult.status, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: callResult.errText } }));
     }
 
     const upstreamRes = callResult.res;
     const actualModel = callResult.model;
+    const activeAcc = callResult.acc;
     const msgId = 'msg_' + crypto.randomUUID().replace(/-/g, '').slice(0, 24);
 
     if (isClientStream) {
@@ -344,7 +398,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       })}\n\n`);
 
       res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
-      acc.inFlight = Math.max(0, acc.inFlight - 1);
+      activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
       const latency = Date.now() - startTime;
       recordApiCall({
         model: actualModel,
@@ -352,7 +406,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
         inputTokens: Math.max(10, Math.round(rawBody.length / 4)),
         outputTokens: Math.max(1, Math.round(latency / 15))
       });
-      Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (结束原因: ${stopReason})`);
+      Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (账号: [${activeAcc.email}], 结束原因: ${stopReason})`);
       return res.end();
 
     } else {
@@ -403,7 +457,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
         }
       }
 
-      acc.inFlight = Math.max(0, acc.inFlight - 1);
+      activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
 
       const contentBlocks = [];
       if (fullReasoning) {

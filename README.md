@@ -20,7 +20,8 @@
 - **1 小时长效 Prompt 缓存 (`cache_retention: "long"`)**：完全对齐官方 Issue #53191 规范，默认下发 `'long'` 档位，将 Claude / DeepSeek 上游 Prompt 缓存拉长至 1 小时，显著节省计费积分。
 - **请求体 Gzip 压缩传输 (`RequestBodyGzip`)**：当上下文文本较大时，自动以 Gzip 压缩并携带 `Content-Encoding: gzip` 发送至官方网关，上行流量骤减 70%~90%，大幅缩短长上下文 TTFB。
 - **模型能力前置守卫与思考流映射**：自动剥离不支持工具/视觉模型的参数；在 Anthropic `/v1/messages` 协议中原生流式输出 `thinking_delta`，让 Claude Code / Cline 在终端实时展示思考过程。
-- **模型级长窗口限流 (6003/6004/6007/6008) 自动改道**：单模型超限时仅局部冷却该模型，支持同账号内自动无感切换至配置的等价备用模型（如 `deepseek-v4.1-flash -> deepseek-v4-flash`）。
+- **网关侧支持指定全局账号与账号池轮转**：支持在网关控制台一键「设为指定」或在策略设置中选择全局优先账号；未指定时自动按 `least-inflight`（最小并发削峰，默认）、`round-robin`（严格顺序轮流）与 `credits`（最多积分优先）策略进行账号池负载均衡。
+- **模型限流跨账号自动无感续跑 (`Cross-Account Failover`)**：单账号遭遇模型限流（6003/6004/6007/6008/429）时，仅局部冷却该账号，并**自动切换至账号池中另一健康账号无感重试相同模型**；只有在全池账号均达到上限时，才自动触发备用模型降级改道（如 `deepseek-v4.1-flash -> deepseek-v4-flash`）。
 - **多层嵌套业务错误码解析 (`extractStructuredBizCode`)**：递归下钻扫透 SDK 与 JSON-RPC 包装，精准识别 `11115` (上下文超限) 与 `14001..14023` (额度耗尽)。
 - **官方服务端联网工具透出**：
   - `POST /v1/search`：免费透传官方聚合联网搜索
@@ -33,29 +34,175 @@
 
 ---
 
-## 🚀 快速开始
+## 🚀 部署与运行说明
 
-### 1. 克隆与配置
+本项目为 **0 第三方依赖（Zero-Dependency）** 架构，仅依赖 Node.js 原生标准库，**不需要执行 `npm install`**，下载即跑。
+
+### 1. 环境准备
+
+- **操作系统**：Linux / macOS / Windows
+- **Node.js 运行时**：>= 18.0.0（支持原生 `fetch` 与 ES 模块）
+- **网络要求**：服务器或本机能够正常访问 `copilot.tencent.com` 与 `codebuddy.cn`
 
 ```bash
+# 检查 Node.js 版本（确保 >= 18）
+node -v
+```
+
+---
+
+### 2. 获取代码与初始化配置
+
+```bash
+# 克隆仓库
 git clone https://github.com/che246/tencent-ai-codebuddy-code-cli-2api.git
 cd tencent-ai-codebuddy-code-cli-2api
+
+# 复制默认配置文件
 cp config.example.json config.json
 cp accounts.example.json accounts.json
 ```
 
-### 2. 启动网关
+#### `config.json` 核心配置项解析：
+```json
+{
+  "port": 8317,                              // 网关监听端口（默认 8317）
+  "apiKey": "sk-codebuddy-gateway-token",    // 客户端调用的 Bearer API Key，请根据需要修改
+  "autoCheckin": true,                       // 是否开启每日 09:00 与 21:00 全员自动签到
+  "pinnedAccount": "",                       // 网关全局指定账号 UID（置空表示全池自动负载轮换）
+  "routingStrategy": "least-inflight",       // 选号算法：least-inflight(最小并发优先) / round-robin(轮询) / credits(积分优先)
+  "accountFailoverEnabled": true,            // 单账号模型限流时是否自动跨账号换号续跑
+  "concurrencyLimitEnabled": true,           // 是否启用单账号并发削峰限流保护
+  "maxInFlightPerAccount": 3,                // 单账号最大同时处理在途请求数（防止触发风控）
+  "modelFallbackEnabled": true,              // 全池耗尽时是否自动降级至备用模型
+  "modelFallback": {
+    "deepseek-v4.1-flash": "deepseek-v4-flash",
+    "hy4-preview": "hy3"
+  }
+}
+```
+
+---
+
+### 3. 多种部署运行方式
+
+#### 方式 A：前台直接运行（开发 / 快速测试）
 
 ```bash
-# 启动服务（默认监听端口 8317）
+# 直接启动
 node gateway.mjs
-# 或者使用 npm
+
+# 或使用 npm 命令
 npm start
 ```
 
-### 3. 添加账号
+#### 方式 B：PM2 进程守护（生产环境首选推荐）
 
-打开浏览器访问 **`http://localhost:8317`**，点击右上角 **「➕ 扫码添加账号」**，使用微信或腾讯云扫码授权即可自动将账号加入账号池并同步积分。
+适合 Linux / Windows / macOS，支持崩溃自愈重启、开机自启与进程状态监控：
+
+```bash
+# 全局安装 PM2（如未安装）
+npm install -g pm2
+
+# 启动网关守护进程
+pm2 start gateway.mjs --name codebuddy-gateway
+
+# 查看运行状态与资源占用
+pm2 status
+
+# 查看实时日志流
+pm2 logs codebuddy-gateway
+
+# 设置开机自启
+pm2 save
+pm2 startup
+```
+
+#### 方式 C：Linux Systemd 系统服务（VPS / 云服务器标准驻留）
+
+创建服务单元文件 `/etc/systemd/system/codebuddy-gateway.service`：
+
+```ini
+[Unit]
+Description=Tencent CodeBuddy CLI 2API Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/path/to/tencent-ai-codebuddy-code-cli-2api
+ExecStart=/usr/bin/node gateway.mjs
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动并启用开机启动：
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now codebuddy-gateway
+
+# 检查服务运行状态
+sudo systemctl status codebuddy-gateway
+
+# 实时查看日志
+sudo journalctl -u codebuddy-gateway -f
+```
+
+#### 方式 D：Linux nohup 后台静默运行
+
+```bash
+nohup node gateway.mjs > /dev/null 2>&1 &
+
+# 检查进程
+ps aux | grep gateway.mjs
+```
+
+#### 方式 E：Docker 容器化部署
+
+项目中提供极简容器化方案，无需构建笨重环境：
+
+```dockerfile
+# Dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY . .
+EXPOSE 8317
+CMD ["node", "gateway.mjs"]
+```
+
+运行命令：
+```bash
+# 构建镜像
+docker build -t codebuddy-gateway .
+
+# 启动容器（映射持久化配置文件）
+docker run -d \
+  --name codebuddy-gateway \
+  -p 8317:8317 \
+  -v $(pwd)/config.json:/app/config.json \
+  -v $(pwd)/accounts.json:/app/accounts.json \
+  -v $(pwd)/stats.json:/app/stats.json \
+  --restart unless-stopped \
+  codebuddy-gateway
+```
+
+---
+
+### 4. 账号录入与 Web 控制台使用
+
+1. 启动服务后，浏览器打开管理页面：**`http://<服务器IP或127.0.0.1>:8317`**
+2. **添加账号**：点击右上角 **「➕ 扫码添加账号」**，微信或腾讯云扫码授权，完成后账号自动同步入池。
+3. **指定账号与轮转**：
+   - 在「👥 账号运维」页面，点击任意账号的 **「⭐ 设为指定」**，网关将优先锁定该账号处理所有请求。
+   - 点击 **「⭐ 已指定」** 即可取消锁定，无缝切换为全池自动负载轮询。
+4. **账号备注与积分明细**：
+   - 点击 **「➕ 添加备注」** 可直接输入自定义标识（如“开发主号”、“备用VIP”）。
+   - 点击积分数字或 **「明细」** 按钮，实时调取官方 `plans-usage` 三级积分账本（基础积分 / 购买积分 / 平台奖励积分及扣减进度条）。
+5. **打卡打标**：点击 **「📅 全员打卡签到」**，一键为池内所有账号领取每日积分。
 
 ---
 

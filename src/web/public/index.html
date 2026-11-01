@@ -502,6 +502,7 @@
               <span style="font-size:12px; font-weight:normal; color:var(--text-muted);">热更新配置，修改即刻在内存生效并持久化</span>
             </div>
             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;">
+              <!-- 1. 单账号限流保护 -->
               <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
                 <div>
                   <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
@@ -513,25 +514,76 @@
                   </div>
                 </div>
                 <label class="switch" style="margin-left:15px; flex-shrink:0;">
-                  <input type="checkbox" id="chkConcurrency" onchange="togglePolicy('concurrency')">
+                  <input type="checkbox" id="chkConcurrency" onchange="togglePolicy()">
                   <span class="slider"></span>
                 </label>
               </div>
 
+              <!-- 2. 跨账号限流自动切换 (核心新特性) -->
               <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
                 <div>
                   <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
-                    <span>模型限流自动改道 (6003/6004/6007/6008 降级)</span>
-                    <span id="badgeFallback" class="badge badge-ok">已开启</span>
+                    <span>跨账号限流自动切换 (换号续跑)</span>
+                    <span id="badgeFailover" class="badge badge-ok">已开启</span>
                   </div>
                   <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
-                    遇到长窗口限频时，仅局部冷却该模型，并在同账号下自动重试改道至备用模型。
+                    遇到模型限频 (6003/6004/6007/6008/429) 时，仅冷却当前账号，并自动寻找池中其他健康账号继续执行相同模型。
                   </div>
                 </div>
                 <label class="switch" style="margin-left:15px; flex-shrink:0;">
-                  <input type="checkbox" id="chkFallback" onchange="togglePolicy('fallback')">
+                  <input type="checkbox" id="chkFailover" onchange="togglePolicy()">
                   <span class="slider"></span>
                 </label>
+              </div>
+
+              <!-- 3. 模型限流自动改道 (备用模型降级) -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                    <span>备用模型自动降级改道</span>
+                    <span id="badgeFallback" class="badge badge-ok">已开启</span>
+                  </div>
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                    当账号池中所有账号在当前模型下均已耗尽受限时，自动降级至备用模型（如 flash-pro -> flash）。
+                  </div>
+                </div>
+                <label class="switch" style="margin-left:15px; flex-shrink:0;">
+                  <input type="checkbox" id="chkFallback" onchange="togglePolicy()">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <!-- 4. 账号池轮询调度策略 -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                    <span>账号池负载均衡轮换策略</span>
+                  </div>
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                    选择多账号协同调度时的选号算法，实时负载均衡。
+                  </div>
+                </div>
+                <select id="selStrategy" onchange="togglePolicy()" style="background:var(--surface); color:var(--text-main); border:1px solid var(--card-border); padding:6px 10px; border-radius:6px; font-size:12px; outline:none; margin-left:15px;">
+                  <option value="least-inflight">最小在途并发优先</option>
+                  <option value="round-robin">严格顺序轮流 (Round-Robin)</option>
+                  <option value="credits">最多剩余积分优先</option>
+                </select>
+              </div>
+
+              <!-- 5. 网关全局指定账号 -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                    <span>网关全局指定账号</span>
+                    <span id="badgePinnedAccount" class="badge badge-purple">未指定</span>
+                  </div>
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                    锁定网关全局默认调用的特定账号；限流时仍可自动切换至池中其他账号。
+                  </div>
+                </div>
+                <select id="selPinnedAccount" onchange="changePinnedAccountFromSelect()" style="background:var(--surface); color:var(--text-main); border:1px solid var(--card-border); padding:6px 10px; border-radius:6px; font-size:12px; outline:none; margin-left:15px; max-width:180px;">
+                  <option value="">全池自动轮换 (未指定)</option>
+                </select>
               </div>
             </div>
           </div>
@@ -679,7 +731,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       document.documentElement.classList.add('light');
     }
 
-    let currentSettings = { concurrencyLimitEnabled: true, maxInFlightPerAccount: 3, modelFallbackEnabled: true };
+    let currentSettings = { concurrencyLimitEnabled: true, maxInFlightPerAccount: 3, modelFallbackEnabled: true, accountFailoverEnabled: true, routingStrategy: 'least-inflight' };
 
     async function loadSettings() {
       try {
@@ -692,22 +744,48 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         document.getElementById('badgeConcurrency').innerText = s.concurrencyLimitEnabled ? '已开启' : '已关闭';
         document.getElementById('valMaxInFlight').innerText = s.maxInFlightPerAccount || 3;
 
+        document.getElementById('chkFailover').checked = s.accountFailoverEnabled !== false;
+        document.getElementById('badgeFailover').className = 'badge ' + (s.accountFailoverEnabled !== false ? 'badge-ok' : 'badge-cool');
+        document.getElementById('badgeFailover').innerText = s.accountFailoverEnabled !== false ? '已开启' : '已关闭';
+
         document.getElementById('chkFallback').checked = s.modelFallbackEnabled;
         document.getElementById('badgeFallback').className = 'badge ' + (s.modelFallbackEnabled ? 'badge-ok' : 'badge-cool');
         document.getElementById('badgeFallback').innerText = s.modelFallbackEnabled ? '已开启' : '已关闭';
+
+        if (document.getElementById('selStrategy') && s.routingStrategy) {
+          document.getElementById('selStrategy').value = s.routingStrategy;
+        }
+
+        if (document.getElementById('badgePinnedAccount')) {
+          const hasPin = Boolean(s.pinnedAccount);
+          document.getElementById('badgePinnedAccount').className = 'badge ' + (hasPin ? 'badge-purple' : 'badge-cool');
+          document.getElementById('badgePinnedAccount').innerText = hasPin ? '已指定' : '未指定';
+        }
+        if (document.getElementById('selPinnedAccount')) {
+          document.getElementById('selPinnedAccount').value = s.pinnedAccount || '';
+        }
       } catch (_) {}
     }
 
-    async function togglePolicy(kind) {
+    async function changePinnedAccountFromSelect() {
+      const val = document.getElementById('selPinnedAccount').value;
+      await pinAccount(val);
+    }
+
+    async function togglePolicy() {
       const isConc = document.getElementById('chkConcurrency').checked;
+      const isFailover = document.getElementById('chkFailover').checked;
       const isFall = document.getElementById('chkFallback').checked;
+      const strat = document.getElementById('selStrategy').value;
 
       await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           concurrencyLimitEnabled: isConc,
-          modelFallbackEnabled: isFall
+          accountFailoverEnabled: isFailover,
+          modelFallbackEnabled: isFall,
+          routingStrategy: strat
         })
       });
 
@@ -819,6 +897,11 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             ? `<span class="acc-note-tag" onclick="editAccountNote('${a.uid}', '${escapeAttr(a.note)}')" title="点击修改备注">📝 ${escapeHtml(a.note)}</span>` 
             : `<span class="acc-note-empty" onclick="editAccountNote('${a.uid}', '')" title="点击添加备注">➕ 添加备注</span>`;
 
+          const isPinned = currentSettings && currentSettings.pinnedAccount === a.uid;
+          const pinBtn = isPinned
+            ? `<button class="btn-copy" style="background:#7e22ce; color:#fff; border-color:#a855f7; padding:3px 7px; font-size:11px;" onclick="pinAccount('')" title="当前全局锁定指定！点击取消并恢复自动轮换">⭐ 已指定</button>`
+            : `<button class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick="pinAccount('${a.uid}')" title="设置该账号为网关全局优先指定账号">⭐ 设为指定</button>`;
+
           return `
             <tr>
               <td><code>${a.uid}</code></td>
@@ -835,13 +918,24 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
                   a.isCooldown ? '<span class="badge badge-cool">冷却退避</span>' : 
                   '<span class="badge badge-ok">健康活跃</span>'}
               </td>
-              <td>
+              <td style="white-space:nowrap;">
+                ${pinBtn}
                 <button class="btn-outline" style="padding:3px 8px; font-size:11px;" onclick="runCheckinSingle('${a.uid}')" title="同步积分">🔄 刷新</button>
                 <button class="btn-danger" onclick="deleteAccount('${a.uid}')">删除</button>
               </td>
             </tr>
           `;
         }).join('');
+
+        // 同步更新设置页中的指定账号下拉列表
+        const selPinned = document.getElementById('selPinnedAccount');
+        if (selPinned) {
+          const currentVal = (currentSettings && currentSettings.pinnedAccount) || '';
+          selPinned.innerHTML = '<option value="">全池自动轮换 (未指定)</option>' + data.map(a => {
+            const label = (a.email || a.uid) + (a.note ? ' [' + a.note + ']' : '') + ' (' + a.uid.slice(-4) + ')';
+            return `<option value="${a.uid}" ${a.uid === currentVal ? 'selected' : ''}>${label}</option>`;
+          }).join('');
+        }
 
         // 渲染概览页中的账号排名简表
         const accRankBox = document.getElementById('accountRankList');
@@ -1186,6 +1280,26 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           fetchLogs();
         } else {
           alert('更新备注失败: ' + (data.error || '未知错误'));
+        }
+      } catch (e) {
+        alert('网络异常: ' + e.message);
+      }
+    }
+
+    async function pinAccount(uid) {
+      try {
+        const res = await fetch('/api/accounts/pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: uid || '' })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          await loadSettings();
+          loadAccounts();
+          fetchLogs();
+        } else {
+          alert('指定账号设置失败: ' + (data.error || '未知错误'));
         }
       } catch (e) {
         alert('网络异常: ' + e.message);

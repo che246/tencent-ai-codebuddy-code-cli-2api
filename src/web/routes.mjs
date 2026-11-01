@@ -55,6 +55,9 @@ export async function handleApiRoutes(req, res, url) {
       apiKey: config.apiKey,
       concurrencyLimitEnabled: config.concurrencyLimitEnabled !== false,
       maxInFlightPerAccount: config.maxInFlightPerAccount || 3,
+      routingStrategy: config.routingStrategy || 'least-inflight',
+      accountFailoverEnabled: config.accountFailoverEnabled !== false,
+      pinnedAccount: config.pinnedAccount || '',
       modelFallbackEnabled: config.modelFallbackEnabled !== false,
       modelFallback: config.modelFallback || {},
       autoCheckin: Boolean(config.autoCheckin)
@@ -71,6 +74,15 @@ export async function handleApiRoutes(req, res, url) {
         if (typeof body.concurrencyLimitEnabled === 'boolean') {
           config.concurrencyLimitEnabled = body.concurrencyLimitEnabled;
         }
+        if (typeof body.accountFailoverEnabled === 'boolean') {
+          config.accountFailoverEnabled = body.accountFailoverEnabled;
+        }
+        if (typeof body.routingStrategy === 'string') {
+          config.routingStrategy = body.routingStrategy;
+        }
+        if (typeof body.pinnedAccount === 'string') {
+          config.pinnedAccount = body.pinnedAccount.trim();
+        }
         if (typeof body.modelFallbackEnabled === 'boolean') {
           config.modelFallbackEnabled = body.modelFallbackEnabled;
         }
@@ -80,6 +92,9 @@ export async function handleApiRoutes(req, res, url) {
         saveConfig();
         Logger.info('CONFIG', `网关运行策略已更新 (热生效)`, {
           concurrencyLimitEnabled: config.concurrencyLimitEnabled,
+          accountFailoverEnabled: config.accountFailoverEnabled,
+          routingStrategy: config.routingStrategy,
+          pinnedAccount: config.pinnedAccount,
           modelFallbackEnabled: config.modelFallbackEnabled,
           maxInFlightPerAccount: config.maxInFlightPerAccount
         });
@@ -346,6 +361,31 @@ export async function handleApiRoutes(req, res, url) {
         Logger.info('ACCOUNTS', `已更新账号 [${acc.email} (${uid})] 备注为: "${acc.note}"`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, note: acc.note }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 12.6. 网关指定/锁定全局优先账号接口
+  if (url.pathname === '/api/accounts/pin' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const { uid } = JSON.parse(b);
+        config.pinnedAccount = (uid || '').trim();
+        saveConfig();
+        const acc = accounts.find(a => a.uid === config.pinnedAccount);
+        if (config.pinnedAccount && acc) {
+          Logger.info('CONFIG', `网关已锁定全局优先指定账号: [${acc.email} (${acc.uid})]${acc.note ? ' 备注:' + acc.note : ''}`);
+        } else {
+          Logger.info('CONFIG', `网关已取消全局指定账号，恢复全池自动负载轮换`);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, pinnedAccount: config.pinnedAccount }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
