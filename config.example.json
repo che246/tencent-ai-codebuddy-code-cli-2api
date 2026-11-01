@@ -1,6 +1,8 @@
 {
   "port": 8317,
   "apiKey": "sk-codebuddy-gateway-token",
+  "webAuthEnabled": true,
+  "webPassword": "",
   "autoCheckin": true,
   "pinnedAccount": "",
   "routingStrategy": "least-inflight",

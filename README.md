@@ -27,6 +27,7 @@
   - `POST /v1/search`：免费透传官方聚合联网搜索
   - `POST /v1/fetch`：免费透传官方网页抓取与 Markdown 清洗
 - **单页 Web 控制台**：
+  - **访问密码授权保护 (`Web Auth Guard`)**：支持为 Web 控制台设置独立访问密码（或默认复用 `apiKey`），未授权人员严禁查看账号信息与系统配置，模板源码零泄露，一键支持安全退出与会话锁定。
   - 账号池负载、积分状态一览（含今日签到标记与快捷单号签到）
   - 一键扫码添加账号（微信 / 腾讯云官方 OAuth 设备码授权）
   - 一键全员每日签到打卡并弹出结构化通知横幅
@@ -68,6 +69,8 @@ cp accounts.example.json accounts.json
 {
   "port": 8317,                              // 网关监听端口（默认 8317）
   "apiKey": "sk-codebuddy-gateway-token",    // 客户端调用的 Bearer API Key，请根据需要修改
+  "webAuthEnabled": true,                    // 是否开启 Web 控制台密码访问保护
+  "webPassword": "",                         // 控制台独立密码（留空则默认使用 apiKey 登录）
   "autoCheckin": true,                       // 是否开启每日 09:00 与 21:00 全员自动签到
   "pinnedAccount": "",                       // 网关全局指定账号 UID（置空表示全池自动负载轮换）
   "routingStrategy": "least-inflight",       // 选号算法：least-inflight(最小并发优先) / round-robin(轮询) / credits(积分优先)

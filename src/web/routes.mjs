@@ -19,15 +19,33 @@ import { getMetricsReport } from '../core/metrics.mjs';
 
 const HTML_FILE_PATH = path.resolve(ROOT_DIR, 'src/web/public/index.html');
 
+// ─── Web 控制台鉴权校验工具函数 ─────────────────────────────────────────────
+export function getWebAuthPassword() {
+  if (config.webPassword && typeof config.webPassword === 'string' && config.webPassword.trim()) {
+    return config.webPassword.trim();
+  }
+  return (config.apiKey && typeof config.apiKey === 'string') ? config.apiKey.trim() : '';
+}
+
+export function verifyWebAuthToken(token) {
+  if (config.webAuthEnabled === false) return true;
+  const expected = getWebAuthPassword();
+  if (!expected) return true;
+  if (!token || typeof token !== 'string') return false;
+  return token.trim() === expected;
+}
+
 // ─── Web 控制台静态页渲染 ───────────────────────────────────────────────────
 export function handleDashboard(req, res) {
   try {
     let html = fs.readFileSync(HTML_FILE_PATH, 'utf8');
+    const isAuthEnabled = config.webAuthEnabled !== false;
     html = html
       .replace(/{{PORT}}/g, String(config.port || 8317))
-      .replace(/{{API_KEY}}/g, String(config.apiKey || ''))
+      .replace(/{{API_KEY}}/g, isAuthEnabled ? 'sk-****************' : String(config.apiKey || ''))
       .replace(/{{VERSION}}/g, CURRENT_VERSION)
-      .replace(/{{CA_COUNT}}/g, String(TlsCertificateStack.loadedCount));
+      .replace(/{{CA_COUNT}}/g, String(TlsCertificateStack.loadedCount))
+      .replace(/{{WEB_AUTH_ENABLED}}/g, String(isAuthEnabled));
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     return res.end(html);
@@ -41,6 +59,67 @@ export function handleDashboard(req, res) {
 export async function handleApiRoutes(req, res, url) {
   const today = getTodayString();
 
+  // A. Web 控制台登录验证接口 (公开)
+  if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(b);
+        const inputPass = (body.password || body.token || '').trim();
+        const expected = getWebAuthPassword();
+        if (config.webAuthEnabled === false || (expected && inputPass === expected)) {
+          Logger.info('AUTH', `Web 控制台授权成功通过 (IP: ${req.socket.remoteAddress})`);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            ok: true,
+            token: expected,
+            webAuthEnabled: config.webAuthEnabled !== false
+          }));
+        } else {
+          Logger.warn('AUTH', `Web 控制台授权凭据错误 (IP: ${req.socket.remoteAddress})`);
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: '控制台密码或 API Key 不正确，请重新输入' }));
+        }
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // B. Web 控制台授权状态查询接口 (公开)
+  if (url.pathname === '/api/auth/status' && req.method === 'GET') {
+    const authHeader = req.headers['authorization'] || '';
+    let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-web-token'] || '');
+    if (!token && url.searchParams.get('token')) {
+      token = url.searchParams.get('token').trim();
+    }
+    const isAuth = verifyWebAuthToken(token);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      webAuthEnabled: config.webAuthEnabled !== false,
+      authenticated: isAuth
+    }));
+  }
+
+  // ─── Web 控制台 API 安全守卫拦截 ─────────────────────────────────────────
+  if (config.webAuthEnabled !== false) {
+    const authHeader = req.headers['authorization'] || '';
+    let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-web-token'] || '');
+    if (!token && url.searchParams.get('token')) {
+      token = url.searchParams.get('token').trim();
+    }
+    if (!verifyWebAuthToken(token)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        error: 'Unauthorized: Web console authentication required',
+        code: 'UNAUTHORIZED'
+      }));
+    }
+  }
+
   // 0. 报表统计概览接口
   if (url.pathname === '/api/metrics' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -53,6 +132,8 @@ export async function handleApiRoutes(req, res, url) {
     return res.end(JSON.stringify({
       port: config.port,
       apiKey: config.apiKey,
+      webAuthEnabled: config.webAuthEnabled !== false,
+      webPassword: config.webPassword || '',
       concurrencyLimitEnabled: config.concurrencyLimitEnabled !== false,
       maxInFlightPerAccount: config.maxInFlightPerAccount || 3,
       routingStrategy: config.routingStrategy || 'least-inflight',
@@ -77,6 +158,12 @@ export async function handleApiRoutes(req, res, url) {
         if (typeof body.accountFailoverEnabled === 'boolean') {
           config.accountFailoverEnabled = body.accountFailoverEnabled;
         }
+        if (typeof body.webAuthEnabled === 'boolean') {
+          config.webAuthEnabled = body.webAuthEnabled;
+        }
+        if (typeof body.webPassword === 'string') {
+          config.webPassword = body.webPassword.trim();
+        }
         if (typeof body.routingStrategy === 'string') {
           config.routingStrategy = body.routingStrategy;
         }
@@ -91,6 +178,7 @@ export async function handleApiRoutes(req, res, url) {
         }
         saveConfig();
         Logger.info('CONFIG', `网关运行策略已更新 (热生效)`, {
+          webAuthEnabled: config.webAuthEnabled,
           concurrencyLimitEnabled: config.concurrencyLimitEnabled,
           accountFailoverEnabled: config.accountFailoverEnabled,
           routingStrategy: config.routingStrategy,

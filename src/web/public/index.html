@@ -169,6 +169,14 @@
     .guide-tab-btn.active { background: var(--card-hover); color: var(--accent); border-color: var(--card-border); }
     .guide-content { background: var(--code-bg); padding: 14px 18px; border-radius: 8px; border: 1px solid var(--card-border); position: relative; font-family: monospace; font-size: 13px; line-height: 1.6; color: #e2e8f0; }
     .guide-copy-btn { position: absolute; top: 10px; right: 10px; }
+
+    /* Web Console Auth Overlay */
+    .auth-overlay { position: fixed; inset: 0; background: rgba(5, 9, 20, 0.88); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); display: flex; align-items: center; justify-content: center; z-index: 99999; }
+    .auth-card { width: 90%; max-width: 420px; background: var(--surface); border: 1px solid var(--card-border); border-radius: 14px; padding: 32px 28px; text-align: center; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); animation: authSlideUp 0.25s ease; }
+    @keyframes authSlideUp { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .auth-icon { width: 52px; height: 52px; border-radius: 12px; background: linear-gradient(135deg, #0284c7, #38bdf8); display: inline-flex; align-items: center; justify-content: center; font-size: 26px; color: #fff; margin-bottom: 16px; box-shadow: 0 6px 20px rgba(2, 132, 199, 0.4); }
+    .auth-title { font-size: 19px; font-weight: 700; color: var(--text-main); margin-bottom: 6px; }
+    .auth-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 22px; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -235,6 +243,7 @@
         <div class="topbar-actions">
           <button id="btnAllCheckin" class="btn-success" onclick="runCheckin()">⚡ 全员打卡签到</button>
           <button class="btn-primary" onclick="startOAuth()">➕ 扫码添加账号</button>
+          <button id="btnLogoutBtn" class="btn-outline" style="padding:5px 12px; font-size:12px; display:none;" onclick="logoutWebAuth()" title="退出控制台并锁定">🔒 退出</button>
         </div>
       </div>
 
@@ -585,6 +594,39 @@
                   <option value="">全池自动轮换 (未指定)</option>
                 </select>
               </div>
+
+              <!-- 6. Web 控制台访问鉴权保护开关 -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                    <span>Web 控制台访问密码保护</span>
+                    <span id="badgeWebAuth" class="badge badge-ok">已开启</span>
+                  </div>
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                    保护 Web 管理面板与所有 /api/* 运维接口，必须提供正确密钥方可访问。
+                  </div>
+                </div>
+                <label class="switch" style="margin-left:15px; flex-shrink:0;">
+                  <input type="checkbox" id="chkWebAuth" onchange="togglePolicy()">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <!-- 7. Web 控制台专属密码设置 -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                    <span>控制台专属密码 (webPassword)</span>
+                  </div>
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                    留空时默认使用 <code>apiKey</code> 作为密码；也可单独指定控制台管理密码。
+                  </div>
+                </div>
+                <div style="display:flex; gap:6px; margin-left:15px; align-items:center;">
+                  <input type="password" id="inputWebPassword" class="search-input" style="width:160px; padding:6px 10px; font-size:12px;" placeholder="留空则使用 apiKey">
+                  <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveWebPassword()">保存密码</button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -640,10 +682,170 @@
     </div>
   </div>
 
+  <!-- Web 控制台访问密码鉴权 Modal -->
+  <div class="auth-overlay" id="authOverlay" style="display:none;">
+    <div class="auth-card">
+      <div class="auth-icon">🔐</div>
+      <h2 class="auth-title">CodeBuddy 2API 控制台</h2>
+      <p class="auth-subtitle">该网关已启用安全访问保护，请输入访问密码或 API Key</p>
+      <div class="auth-form">
+        <input type="password" id="authPasswordInput" class="search-input" style="width:100%; padding:10px 14px; font-size:14px; margin-bottom:8px;" placeholder="请输入控制台访问密码或 API Key" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuthLogin()">
+        <div id="authErrorMsg" style="color:#f87171; font-size:12px; margin-bottom:8px; display:none;"></div>
+        <button class="btn-primary" style="width:100%; padding:10px; font-size:14px; font-weight:bold;" onclick="submitAuthLogin()">
+          🚀 验证并进入控制台
+        </button>
+      </div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:16px; line-height:1.5;">
+        默认密码即为 <code>config.json</code> 中的 <code>apiKey</code>；可在控制台策略中设置独立密码 <code>webPassword</code>
+      </div>
+    </div>
+  </div>
+
   <script>
     let pollTimer = null;
     let allModels = [];
     let currentFilter = 'all';
+    let pollIntervals = [];
+
+    // ─── 统一 API 客户端鉴权拦截器 ─────────────────────────────────────────────
+    const _nativeFetch = window.fetch;
+    window.fetch = async function(resource, init = {}) {
+      const url = typeof resource === 'string' ? resource : resource?.url || '';
+      if (typeof url === 'string' && url.startsWith('/api/')) {
+        init = init || {};
+        init.headers = init.headers || {};
+        const token = localStorage.getItem('cb_web_token') || '';
+        if (token) {
+          if (init.headers instanceof Headers) {
+            if (!init.headers.has('Authorization')) init.headers.set('Authorization', 'Bearer ' + token);
+          } else if (Array.isArray(init.headers)) {
+            init.headers.push(['Authorization', 'Bearer ' + token]);
+          } else {
+            if (!init.headers['Authorization']) init.headers['Authorization'] = 'Bearer ' + token;
+          }
+        }
+      }
+      const res = await _nativeFetch(resource, init);
+      if (res.status === 401 && typeof url === 'string' && url.startsWith('/api/') && !url.includes('/api/auth/')) {
+        showAuthOverlay('访问受限或登录已过期，请输入控制台访问密码');
+      }
+      return res;
+    };
+
+    function showAuthOverlay(msg = '') {
+      document.getElementById('authOverlay').style.display = 'flex';
+      const errBox = document.getElementById('authErrorMsg');
+      if (msg) {
+        errBox.innerText = msg;
+        errBox.style.display = 'block';
+      } else {
+        errBox.style.display = 'none';
+      }
+      const btnLogout = document.getElementById('btnLogoutBtn');
+      if (btnLogout) btnLogout.style.display = 'none';
+      setTimeout(() => {
+        const inp = document.getElementById('authPasswordInput');
+        if (inp) inp.focus();
+      }, 100);
+    }
+
+    function hideAuthOverlay() {
+      document.getElementById('authOverlay').style.display = 'none';
+      const btnLogout = document.getElementById('btnLogoutBtn');
+      if (btnLogout) btnLogout.style.display = 'inline-block';
+    }
+
+    async function submitAuthLogin() {
+      const pwdInput = document.getElementById('authPasswordInput');
+      const errBox = document.getElementById('authErrorMsg');
+      const password = (pwdInput.value || '').trim();
+      if (!password) {
+        errBox.innerText = '请输入访问密码或 API Key';
+        errBox.style.display = 'block';
+        pwdInput.focus();
+        return;
+      }
+
+      errBox.style.display = 'none';
+      try {
+        const res = await _nativeFetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          localStorage.setItem('cb_web_token', data.token);
+          pwdInput.value = '';
+          hideAuthOverlay();
+          startAppPolling();
+        } else {
+          errBox.innerText = data.error || '验证失败，密码错误';
+          errBox.style.display = 'block';
+          pwdInput.focus();
+        }
+      } catch (e) {
+        errBox.innerText = '网络异常: ' + e.message;
+        errBox.style.display = 'block';
+      }
+    }
+
+    function logoutWebAuth() {
+      if (!confirm('确定退出控制台并锁定访问吗？')) return;
+      localStorage.removeItem('cb_web_token');
+      stopAppPolling();
+      showAuthOverlay('已成功退出登录，请输入访问密钥重新进入');
+    }
+
+    function startAppPolling() {
+      loadMetrics();
+      loadAccounts();
+      loadModels();
+      loadSettings();
+      fetchLogs();
+      stopAppPolling();
+      pollIntervals.push(setInterval(loadMetrics, 5000));
+      pollIntervals.push(setInterval(loadAccounts, 5000));
+      pollIntervals.push(setInterval(fetchLogs, 2500));
+    }
+
+    function stopAppPolling() {
+      for (const t of pollIntervals) clearInterval(t);
+      pollIntervals = [];
+    }
+
+    async function checkAuthAndInit() {
+      try {
+        const res = await _nativeFetch('/api/auth/status');
+        const st = await res.json();
+        if (!st.webAuthEnabled) {
+          hideAuthOverlay();
+          const btnLogout = document.getElementById('btnLogoutBtn');
+          if (btnLogout) btnLogout.style.display = 'none';
+          startAppPolling();
+          return;
+        }
+
+        const savedToken = localStorage.getItem('cb_web_token');
+        if (savedToken) {
+          const verifyRes = await _nativeFetch('/api/auth/status', {
+            headers: { 'Authorization': 'Bearer ' + savedToken }
+          });
+          const vData = await verifyRes.json();
+          if (vData.authenticated) {
+            hideAuthOverlay();
+            startAppPolling();
+            return;
+          }
+        }
+
+        // 未登录或 token 无效，弹出授权框
+        showAuthOverlay();
+      } catch (e) {
+        console.error('Auth status check error:', e);
+        showAuthOverlay('无法连接到网关服务，请确认网关是否正常运行');
+      }
+    }
 
     let allLogs = [];
     let logCatFilter = 'ALL';
@@ -764,6 +966,28 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         if (document.getElementById('selPinnedAccount')) {
           document.getElementById('selPinnedAccount').value = s.pinnedAccount || '';
         }
+
+        if (s.apiKey) {
+          guides.openai = guides.openai.replace(/API Key\s*:\s*[^\n]+/, `API Key : ${s.apiKey}`);
+          guides.claude = guides.claude.replace(/ANTHROPIC_API_KEY=[^\n]+/, `ANTHROPIC_API_KEY=${s.apiKey}`);
+          guides.search = guides.search.replace(/Bearer [^\\]+/, `Bearer ${s.apiKey} `);
+          guides.curl = guides.curl.replace(/Bearer [^\\]+/, `Bearer ${s.apiKey} `);
+          const activeGuide = document.querySelector('.guide-tab-btn.active');
+          if (activeGuide) {
+            const txt = activeGuide.innerText;
+            const type = txt.includes('Claude') ? 'claude' : txt.includes('搜索') ? 'search' : txt.includes('cURL') ? 'curl' : 'openai';
+            document.getElementById('guideCodeText').innerText = guides[type] || guides.openai;
+          }
+        }
+
+        if (document.getElementById('chkWebAuth')) {
+          document.getElementById('chkWebAuth').checked = s.webAuthEnabled !== false;
+          document.getElementById('badgeWebAuth').className = 'badge ' + (s.webAuthEnabled !== false ? 'badge-ok' : 'badge-cool');
+          document.getElementById('badgeWebAuth').innerText = s.webAuthEnabled !== false ? '已开启' : '已关闭';
+        }
+        if (document.getElementById('inputWebPassword')) {
+          document.getElementById('inputWebPassword').value = s.webPassword || '';
+        }
       } catch (_) {}
     }
 
@@ -776,6 +1000,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       const isConc = document.getElementById('chkConcurrency').checked;
       const isFailover = document.getElementById('chkFailover').checked;
       const isFall = document.getElementById('chkFallback').checked;
+      const isWebAuth = document.getElementById('chkWebAuth') ? document.getElementById('chkWebAuth').checked : true;
       const strat = document.getElementById('selStrategy').value;
 
       await fetch('/api/settings', {
@@ -785,6 +1010,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           concurrencyLimitEnabled: isConc,
           accountFailoverEnabled: isFailover,
           modelFallbackEnabled: isFall,
+          webAuthEnabled: isWebAuth,
           routingStrategy: strat
         })
       });
@@ -792,6 +1018,17 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       await loadSettings();
       loadAccounts();
       fetchLogs();
+    }
+
+    async function saveWebPassword() {
+      const pwd = document.getElementById('inputWebPassword').value;
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webPassword: pwd })
+      });
+      alert('控制台专属密码已更新！');
+      await loadSettings();
     }
 
     // ─── 报表统计加载引擎 (对齐 Agent2API 架构) ─────────────────────────────
@@ -1046,7 +1283,8 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     }
 
     function exportLogFile() {
-      window.open('/api/logs/export', '_blank');
+      const token = localStorage.getItem('cb_web_token') || '';
+      window.open('/api/logs/export' + (token ? '?token=' + encodeURIComponent(token) : ''), '_blank');
     }
 
     function escapeHtml(str) {
@@ -1417,14 +1655,8 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       document.getElementById('creditModal').style.display = 'none';
     }
 
-    loadMetrics();
-    loadAccounts();
-    loadModels();
-    loadSettings();
-    fetchLogs();
-    setInterval(loadMetrics, 5000);
-    setInterval(loadAccounts, 5000);
-    setInterval(fetchLogs, 2500);
+    // 页面启动初始化鉴权状态
+    checkAuthAndInit();
   </script>
 </body>
 </html>
