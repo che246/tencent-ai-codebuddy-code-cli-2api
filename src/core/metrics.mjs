@@ -47,14 +47,16 @@ export function loadStats(forceReload = false) {
   if (fs.existsSync(STATS_PATH) && !forceReload) {
     try {
       statsData = JSON.parse(fs.readFileSync(STATS_PATH, 'utf8'));
-      // 如果现有文件缺少 accounts 字段，从日志重构补充
-      if (!statsData.accounts || Object.keys(statsData.accounts).length === 0) {
+      // 如果现有文件缺少 accounts 字段或 daily 缺少 models/accounts 明细，从日志重构补充
+      const hasDailyDetail = statsData.daily && Object.values(statsData.daily).some(d => d.models && Object.keys(d.models).length > 0);
+      if (!statsData.accounts || Object.keys(statsData.accounts).length === 0 || !hasDailyDetail) {
         const fromLog = rebuildRealStatsFromLog();
-        if (fromLog?.accounts) {
-          statsData.accounts = fromLog.accounts;
+        if (fromLog) {
+          if (fromLog.accounts) statsData.accounts = fromLog.accounts;
+          if (fromLog.daily) statsData.daily = fromLog.daily;
+          if (fromLog.models) statsData.models = fromLog.models;
+          if (fromLog.summary) statsData.summary = fromLog.summary;
           saveStatsSync();
-        } else {
-          statsData.accounts = {};
         }
       }
       // 如果现有文件包含之前的参考 mock 假数据 (220000000)，自动重置为真实数据
@@ -150,7 +152,9 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
       failedRequests: 0,
       inputTokens: 0,
       outputTokens: 0,
-      totalTokens: 0
+      totalTokens: 0,
+      models: {},
+      accounts: {}
     };
   }
   const d = stats.daily[today];
@@ -159,6 +163,28 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
   d.inputTokens += inputTokens;
   d.outputTokens += outputTokens;
   d.totalTokens += totalTokens;
+
+  if (!d.models) d.models = {};
+  if (!d.models[model]) {
+    d.models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  }
+  d.models[model].requests += 1;
+  if (isSuccess) d.models[model].successRequests += 1;
+  d.models[model].inputTokens += inputTokens;
+  d.models[model].outputTokens += outputTokens;
+  d.models[model].totalTokens += totalTokens;
+
+  if (accountUid) {
+    if (!d.accounts) d.accounts = {};
+    if (!d.accounts[accountUid]) {
+      d.accounts[accountUid] = { uid: accountUid, name: accountName || accountUid, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    }
+    d.accounts[accountUid].requests += 1;
+    if (isSuccess) d.accounts[accountUid].successRequests += 1;
+    d.accounts[accountUid].inputTokens += inputTokens;
+    d.accounts[accountUid].outputTokens += outputTokens;
+    d.accounts[accountUid].totalTokens += totalTokens;
+  }
 
   saveStats();
 }
@@ -180,40 +206,58 @@ export function formatTokenNumber(num) {
   return num.toLocaleString('en-US');
 }
 
-export function getMetricsReport() {
+export function getShiftedDateString(baseDateStr, daysShift) {
+  const [y, m, d] = baseDateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + daysShift);
+  const ry = dt.getFullYear();
+  const rm = String(dt.getMonth() + 1).padStart(2, '0');
+  const rd = String(dt.getDate()).padStart(2, '0');
+  return `${ry}-${rm}-${rd}`;
+}
+
+export function getMetricsReport(range = 'all') {
   const stats = loadStats();
   const today = getTodayString();
+  const validRanges = ['today', 'yesterday', '7d', '30d', 'all'];
+  if (!validRanges.includes(range)) range = 'all';
 
-  // 1. 总 Token
-  const totalTokens = stats.summary.totalTokens || 0;
-  const inputTokens = stats.summary.totalInputTokens || 0;
-  const outputTokens = stats.summary.totalOutputTokens || 0;
-
-  // 2. 成功请求数 & 成功率
-  const totalRequests = stats.summary.totalRequests || 0;
-  const successRequests = stats.summary.successRequests || 0;
-  const successRate = totalRequests > 0
-    ? ((successRequests / totalRequests) * 100).toFixed(1) + '%'
-    : '100%';
-
-  // 3. 今天请求数
-  const todayStats = stats.daily[today] || { requests: 0 };
-  const todayRequests = todayStats.requests || 0;
-
-  // 4. 活跃天数 (每日有请求的天数)
-  const dailyDates = Object.keys(stats.daily || {}).sort();
-  const activeDays = dailyDates.filter(d => (stats.daily[d]?.requests || 0) > 0).length || (totalRequests > 0 ? 1 : 0);
-  
-  // 区间总天数
+  let targetDates = null;
   let totalDaysRange = 1;
-  if (dailyDates.length > 0) {
-    const firstDate = new Date(dailyDates[0] + 'T00:00:00');
-    const todayDate = new Date(today + 'T00:00:00');
-    const diffTime = Math.abs(todayDate - firstDate);
-    totalDaysRange = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+  let rangeLabel = '全部';
+
+  if (range === 'today') {
+    targetDates = [today];
+    totalDaysRange = 1;
+    rangeLabel = '今天';
+  } else if (range === 'yesterday') {
+    targetDates = [getShiftedDateString(today, -1)];
+    totalDaysRange = 1;
+    rangeLabel = '昨天';
+  } else if (range === '7d') {
+    targetDates = [];
+    for (let i = 0; i < 7; i++) targetDates.push(getShiftedDateString(today, -i));
+    totalDaysRange = 7;
+    rangeLabel = '7天';
+  } else if (range === '30d') {
+    targetDates = [];
+    for (let i = 0; i < 30; i++) targetDates.push(getShiftedDateString(today, -i));
+    totalDaysRange = 30;
+    rangeLabel = '30天';
+  } else {
+    // all
+    targetDates = Object.keys(stats.daily || {});
+    rangeLabel = '全部';
+    const sortedDates = [...targetDates].sort();
+    if (sortedDates.length > 0) {
+      const firstDate = new Date(sortedDates[0] + 'T00:00:00');
+      const todayDate = new Date(today + 'T00:00:00');
+      const diffTime = Math.abs(todayDate - firstDate);
+      totalDaysRange = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+    }
   }
 
-  // 5. 当前连续天数 (含今天在内往前数)
+  // 连续活跃天数 (含今天在内往前数)
   let consecutiveDays = 0;
   let cursor = new Date(today + 'T00:00:00');
   while (true) {
@@ -229,23 +273,84 @@ export function getMetricsReport() {
     }
   }
 
-  // 6. Top 模型
+  let totalTokens = 0, inputTokens = 0, outputTokens = 0;
+  let totalRequests = 0, successRequests = 0, failedRequests = 0;
+  let activeDays = 0;
+  const modelsMap = {};
+  const accountsMap = {};
+  const dailyRows = {};
+
+  for (const date of targetDates) {
+    const d = stats.daily[date];
+    if (d) {
+      if (d.requests > 0) activeDays++;
+      totalRequests += (d.requests || 0);
+      successRequests += (d.successRequests || 0);
+      failedRequests += (d.failedRequests || 0);
+      inputTokens += (d.inputTokens || 0);
+      outputTokens += (d.outputTokens || 0);
+      totalTokens += (d.totalTokens || 0);
+
+      dailyRows[date] = d;
+
+      for (const [mName, mObj] of Object.entries(d.models || {})) {
+        if (!modelsMap[mName]) {
+          modelsMap[mName] = { name: mName, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        }
+        modelsMap[mName].requests += (mObj.requests || 0);
+        modelsMap[mName].successRequests += (mObj.successRequests || 0);
+        modelsMap[mName].inputTokens += (mObj.inputTokens || 0);
+        modelsMap[mName].outputTokens += (mObj.outputTokens || 0);
+        modelsMap[mName].totalTokens += (mObj.totalTokens || 0);
+      }
+
+      for (const [accId, accObj] of Object.entries(d.accounts || {})) {
+        if (!accountsMap[accId]) {
+          accountsMap[accId] = { uid: accId, name: accObj.name || accId, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        }
+        accountsMap[accId].requests += (accObj.requests || 0);
+        accountsMap[accId].successRequests += (accObj.successRequests || 0);
+        accountsMap[accId].inputTokens += (accObj.inputTokens || 0);
+        accountsMap[accId].outputTokens += (accObj.outputTokens || 0);
+        accountsMap[accId].totalTokens += (accObj.totalTokens || 0);
+      }
+    }
+  }
+
+  // 兜底：如果 range === 'all' 且 daily 没有 models/accounts 细分，使用根对象
+  if (range === 'all') {
+    if (Object.keys(modelsMap).length === 0 && stats.models) {
+      Object.assign(modelsMap, stats.models);
+    }
+    if (Object.keys(accountsMap).length === 0 && stats.accounts) {
+      Object.assign(accountsMap, stats.accounts);
+    }
+  }
+
+  // 成功率
+  const successRate = totalRequests > 0
+    ? ((successRequests / totalRequests) * 100).toFixed(1) + '%'
+    : '100%';
+
+  // 今天请求数 (用于指标卡片中附注)
+  const todayStats = stats.daily[today] || { requests: 0 };
+  const todayRequests = todayStats.requests || 0;
+
+  // Top 模型
   let topModelId = '-';
   let topModelTokens = 0;
-  if (stats.models && Object.keys(stats.models).length > 0) {
-    for (const [id, m] of Object.entries(stats.models)) {
-      if ((m.totalTokens || 0) >= topModelTokens) {
-        topModelTokens = m.totalTokens;
-        topModelId = id;
-      }
+  for (const [id, m] of Object.entries(modelsMap)) {
+    if ((m.totalTokens || 0) >= topModelTokens) {
+      topModelTokens = m.totalTokens;
+      topModelId = id;
     }
   }
   const topModelPercent = totalTokens > 0
     ? ((topModelTokens / totalTokens) * 100).toFixed(1) + '%'
     : '100%';
 
-  // 7. 模型分布列表 (按 tokens 降序)
-  const modelsList = Object.entries(stats.models || {})
+  // 模型排行列表
+  const modelsList = Object.entries(modelsMap)
     .map(([id, m]) => ({
       id,
       name: m.name || id,
@@ -254,28 +359,12 @@ export function getMetricsReport() {
       totalTokens: m.totalTokens || 0,
       totalTokensDisplay: formatTokenNumber(m.totalTokens || 0),
       percentage: totalTokens > 0 ? (((m.totalTokens || 0) / totalTokens) * 100).toFixed(1) + '%' : '100%',
-      percentNum: totalTokens > 0 ? (((m.totalTokens || 0) / totalTokens) * 100).toFixed(1) : '100'
+      percentNum: totalTokens > 0 ? Number((((m.totalTokens || 0) / totalTokens) * 100).toFixed(1)) : 0
     }))
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
-  // 8. 每日趋势列表 (按日期降序)
-  const dailyTrend = Object.entries(stats.daily || {})
-    .map(([date, d]) => ({
-      date,
-      requests: d.requests || 0,
-      successRequests: d.successRequests || 0,
-      failedRequests: d.failedRequests || 0,
-      inputTokens: d.inputTokens || 0,
-      inputTokensDisplay: formatTokenNumber(d.inputTokens || 0),
-      outputTokens: d.outputTokens || 0,
-      outputTokensDisplay: formatTokenNumber(d.outputTokens || 0),
-      totalTokens: d.totalTokens || 0,
-      totalTokensDisplay: formatTokenNumber(d.totalTokens || 0)
-    }))
-    .sort((a, b) => b.date.localeCompare(a.date));
-
-  // 9. 账号 Token 消耗分布列表 (按 tokens 降序)
-  const accountsList = Object.entries(stats.accounts || {})
+  // 账号排行列表
+  const accountsList = Object.entries(accountsMap)
     .map(([uid, a]) => ({
       uid,
       name: a.name || uid,
@@ -292,24 +381,42 @@ export function getMetricsReport() {
     }))
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
+  // 每日趋势列表
+  const dailyTrend = Object.entries(dailyRows)
+    .map(([date, d]) => ({
+      date,
+      requests: d.requests || 0,
+      successRequests: d.successRequests || 0,
+      failedRequests: d.failedRequests || 0,
+      inputTokens: d.inputTokens || 0,
+      inputTokensDisplay: formatTokenNumber(d.inputTokens || 0),
+      outputTokens: d.outputTokens || 0,
+      outputTokensDisplay: formatTokenNumber(d.outputTokens || 0),
+      totalTokens: d.totalTokens || 0,
+      totalTokensDisplay: formatTokenNumber(d.totalTokens || 0)
+    }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+
   return {
+    range,
+    rangeLabel,
     totalTokens,
     totalTokensDisplay: formatTokenNumber(totalTokens),
     inputTokens,
     inputTokensDisplay: formatTokenNumber(inputTokens),
     outputTokens,
     outputTokensDisplay: formatTokenNumber(outputTokens),
-    
+
     totalRequests,
     successRequests,
-    failedRequests: stats.summary.failedRequests || 0,
+    failedRequests,
     successRate,
-    
+
     todayRequests,
     activeDays,
     totalDaysRange,
     consecutiveDays,
-    
+
     topModel: {
       id: topModelId,
       tokens: topModelTokens,

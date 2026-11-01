@@ -120,10 +120,11 @@ export async function handleApiRoutes(req, res, url) {
     }
   }
 
-  // 0. 报表统计概览接口
+  // 0. 报表统计概览接口 (支持 ?range=today|yesterday|7d|30d|all)
   if (url.pathname === '/api/metrics' && req.method === 'GET') {
+    const range = url.searchParams.get('range') || 'all';
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify(getMetricsReport()));
+    return res.end(JSON.stringify(getMetricsReport(range)));
   }
 
   // 1. 策略设置读取接口

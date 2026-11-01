@@ -43,11 +43,19 @@ export function rebuildRealStatsFromLog() {
       totalInputTokens += estimatedInput;
 
       if (!daily[date]) {
-        daily[date] = { requests: 0, successRequests: 0, failedRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        daily[date] = { requests: 0, successRequests: 0, failedRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, models: {}, accounts: {} };
       }
       daily[date].requests++;
       daily[date].inputTokens += estimatedInput;
       daily[date].totalTokens += estimatedInput;
+
+      if (!daily[date].models) daily[date].models = {};
+      if (!daily[date].models[model]) {
+        daily[date].models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      }
+      daily[date].models[model].requests++;
+      daily[date].models[model].inputTokens += estimatedInput;
+      daily[date].models[model].totalTokens += estimatedInput;
 
       if (!models[model]) {
         models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -57,6 +65,14 @@ export function rebuildRealStatsFromLog() {
       models[model].totalTokens += estimatedInput;
 
       const accKey = currentAcc.uid || currentAcc.name;
+      if (!daily[date].accounts) daily[date].accounts = {};
+      if (!daily[date].accounts[accKey]) {
+        daily[date].accounts[accKey] = { uid: currentAcc.uid, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      }
+      daily[date].accounts[accKey].requests++;
+      daily[date].accounts[accKey].inputTokens += estimatedInput;
+      daily[date].accounts[accKey].totalTokens += estimatedInput;
+
       if (!accounts[accKey]) {
         accounts[accKey] = { uid: currentAcc.uid, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       }
@@ -72,19 +88,8 @@ export function rebuildRealStatsFromLog() {
       const estimatedOutput = Math.max(15, Math.round(duration / 15));
       totalOutputTokens += estimatedOutput;
 
-      if (daily[date]) {
-        daily[date].successRequests++;
-        daily[date].outputTokens += estimatedOutput;
-        daily[date].totalTokens += estimatedOutput;
-      }
-
       const modelMatch = line.match(/(?:输出完成|回复完成)\s+\[([a-zA-Z0-9.\-_]+)\]/);
       const model = modelMatch ? modelMatch[1] : 'deepseek-v4.1-flash';
-      if (models[model]) {
-        models[model].successRequests++;
-        models[model].outputTokens += estimatedOutput;
-        models[model].totalTokens += estimatedOutput;
-      }
 
       const accMatch = line.match(/账号:\s*\[([^\]]+)\]/);
       let accKey = currentAcc.uid;
@@ -97,6 +102,35 @@ export function rebuildRealStatsFromLog() {
           }
         }
       }
+
+      if (daily[date]) {
+        daily[date].successRequests++;
+        daily[date].outputTokens += estimatedOutput;
+        daily[date].totalTokens += estimatedOutput;
+
+        if (!daily[date].models) daily[date].models = {};
+        if (!daily[date].models[model]) {
+          daily[date].models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        }
+        daily[date].models[model].successRequests++;
+        daily[date].models[model].outputTokens += estimatedOutput;
+        daily[date].models[model].totalTokens += estimatedOutput;
+
+        if (!daily[date].accounts) daily[date].accounts = {};
+        if (!daily[date].accounts[accKey]) {
+          daily[date].accounts[accKey] = { uid: accKey, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        }
+        daily[date].accounts[accKey].successRequests++;
+        daily[date].accounts[accKey].outputTokens += estimatedOutput;
+        daily[date].accounts[accKey].totalTokens += estimatedOutput;
+      }
+
+      if (models[model]) {
+        models[model].successRequests++;
+        models[model].outputTokens += estimatedOutput;
+        models[model].totalTokens += estimatedOutput;
+      }
+
       if (!accounts[accKey]) {
         accounts[accKey] = { uid: accKey, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       }

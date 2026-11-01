@@ -262,12 +262,21 @@
         <section id="page-overview" class="page-section active">
           <!-- 统计概览卡片组 (6 指标卡片) -->
           <div class="card" style="margin-bottom: 20px;">
-            <div class="card-title">
+            <div class="card-title" style="flex-wrap:wrap; gap:12px;">
               <div style="display:flex; align-items:center; gap:8px;">
                 <span>📈 业务用量与请求统计概览</span>
-                <span class="badge badge-blue">纯真实流水数据</span>
+                <span class="badge badge-blue" id="badgeMetricsRange">全部区间</span>
               </div>
-              <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadMetrics()">🔄 刷新统计</button>
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <div class="filter-bar" style="margin-bottom:0;" id="metricsRangeTabs">
+                  <button class="filter-btn active" onclick="switchMetricsRange('all', this)">全部</button>
+                  <button class="filter-btn" onclick="switchMetricsRange('today', this)">今天</button>
+                  <button class="filter-btn" onclick="switchMetricsRange('yesterday', this)">昨天</button>
+                  <button class="filter-btn" onclick="switchMetricsRange('7d', this)">7天</button>
+                  <button class="filter-btn" onclick="switchMetricsRange('30d', this)">30天</button>
+                </div>
+                <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadMetrics(currentMetricsRange)">🔄 刷新</button>
+              </div>
             </div>
             
             <div class="kpi-grid" style="margin-bottom:0;">
@@ -803,13 +812,13 @@
     }
 
     function startAppPolling() {
-      loadMetrics();
+      loadMetrics(currentMetricsRange);
       loadAccounts();
       loadModels();
       loadSettings();
       fetchLogs();
       stopAppPolling();
-      pollIntervals.push(setInterval(loadMetrics, 5000));
+      pollIntervals.push(setInterval(() => loadMetrics(currentMetricsRange), 5000));
       pollIntervals.push(setInterval(loadAccounts, 5000));
       pollIntervals.push(setInterval(fetchLogs, 2500));
     }
@@ -878,7 +887,7 @@
       document.getElementById('pageCrumbTitle').innerText = crumb.title;
       document.getElementById('pageCrumbSub').innerText = crumb.sub;
 
-      if (pageKey === 'overview') loadMetrics();
+      if (pageKey === 'overview') loadMetrics(currentMetricsRange);
       if (pageKey === 'accounts') loadAccounts();
       if (pageKey === 'models') loadModels();
       if (pageKey === 'logs') fetchLogs();
@@ -1036,12 +1045,28 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       await loadSettings();
     }
 
-    // ─── 报表统计加载引擎 (对齐 Agent2API 架构) ─────────────────────────────
-    async function loadMetrics() {
+    let currentMetricsRange = 'all';
+
+    function switchMetricsRange(range, el) {
+      currentMetricsRange = range;
+      document.querySelectorAll('#metricsRangeTabs .filter-btn').forEach(b => b.classList.remove('active'));
+      if (el) el.classList.add('active');
+      loadMetrics(range);
+    }
+
+    // ─── 报表统计加载引擎 (对齐 Agent2API 架构，支持 今日/昨日/7天/30天/全部 筛选) ─────────
+    async function loadMetrics(range = currentMetricsRange) {
       try {
-        const res = await fetch('/api/metrics');
+        currentMetricsRange = range;
+        const res = await fetch('/api/metrics?range=' + encodeURIComponent(range));
         const m = await res.json();
         
+        // 0. 更新区间状态徽章
+        const badge = document.getElementById('badgeMetricsRange');
+        if (badge) {
+          badge.innerText = m.rangeLabel ? `${m.rangeLabel}区间` : '全部区间';
+        }
+
         // 1. 统计概览 6 卡片
         document.getElementById('repTotalTokens').innerText = m.totalTokensDisplay || '0';
         document.getElementById('repTokensSplit').innerText = `${m.inputTokensDisplay || '0'} + ${m.outputTokensDisplay || '0'}`;
@@ -1049,9 +1074,9 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         document.getElementById('repSuccessRate').innerText = m.successRate || '100%';
         document.getElementById('repTotalReq').innerText = (m.totalRequests || 0).toLocaleString();
         document.getElementById('repTodayReq').innerText = (m.todayRequests || 0).toLocaleString();
-        document.getElementById('repActiveDays').innerText = m.activeDays || 1;
+        document.getElementById('repActiveDays').innerText = m.activeDays || (m.totalRequests > 0 ? 1 : 0);
         document.getElementById('repTotalDays').innerText = m.totalDaysRange || 1;
-        document.getElementById('repConsecutiveDays').innerText = m.consecutiveDays || 1;
+        document.getElementById('repConsecutiveDays').innerText = m.consecutiveDays || 0;
         document.getElementById('repTopModel').innerText = m.topModel?.id || '-';
         document.getElementById('repTopModelTokens').innerText = m.topModel?.tokensDisplay || '0';
         document.getElementById('repTopModelPercent').innerText = m.topModel?.percentage || '100%';
@@ -1074,7 +1099,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             `;
           }).join('');
         } else {
-          modelRankBox.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:15px;">暂无模型调用数据</div>';
+          modelRankBox.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:15px;">该区间暂无模型调用数据</div>';
         }
 
         // 3. 每日历史趋势 (Daily Trend Table)
@@ -1091,7 +1116,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             </tr>
           `).join('');
         } else {
-          dailyBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">暂无历史趋势记录</td></tr>';
+          dailyBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">该区间暂无历史趋势记录</td></tr>';
         }
 
       } catch (err) {
