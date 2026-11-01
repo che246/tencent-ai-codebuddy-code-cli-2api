@@ -2,6 +2,7 @@
   {
     "uid": "100012345678",
     "email": "user@tencent.com",
+    "note": "团队主力账号",
     "region": "cn",
     "accessToken": "ey...",
     "refreshToken": "",

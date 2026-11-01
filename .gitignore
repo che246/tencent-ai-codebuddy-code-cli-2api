@@ -1,5 +1,6 @@
 # 凭据与敏感数据（严禁提交）
 accounts.json
+stats.json
 .env
 *.log
 
