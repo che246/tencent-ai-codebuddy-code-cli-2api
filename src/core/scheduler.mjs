@@ -5,7 +5,9 @@ import {
   getTodayString,
   SUMMARY_URL,
   CHECKIN_URL,
-  USER_AGENT
+  USER_AGENT,
+  formatAccountLogName,
+  formatAccountFullDesc
 } from '../config.mjs';
 import { Logger } from './logger.mjs';
 
@@ -53,7 +55,7 @@ export class AccountScheduler {
         } else if (config.concurrencyLimitEnabled !== false && (matched.inFlight || 0) >= maxLimit) {
           Logger.warn('DISPATCH', `网关指定账号 [${target}] 达到并发上限 (${matched.inFlight}/${maxLimit})，降级回账号池自动调度`);
         } else {
-          Logger.info('DISPATCH', `精准路由至网关全局指定账号 [${matched.email} (${matched.uid})]${matched.note ? ' 备注:' + matched.note : ''}`);
+          Logger.info('DISPATCH', `精准路由至网关全局指定账号 [${formatAccountFullDesc(matched)}]`);
           return matched;
         }
       } else {
@@ -70,7 +72,7 @@ export class AccountScheduler {
           const isModelCooling = requestedModel && acc.modelCooldowns?.[requestedModel] && now < acc.modelCooldowns[requestedModel];
           if (!isModelCooling) {
             sticky.lastActive = now;
-            Logger.info('DISPATCH', `粘性会话复用账号 [${acc.email} (${acc.uid})]`, { sessionKey: sessionKey.slice(0, 8), model: requestedModel });
+            Logger.info('DISPATCH', `粘性会话复用账号 [${formatAccountFullDesc(acc)}]`, { sessionKey: sessionKey.slice(0, 8), model: requestedModel });
             return acc;
           }
         }
@@ -130,7 +132,7 @@ export class AccountScheduler {
     if (sessionKey) {
       sessionStickyMap.set(sessionKey, { uid: chosen.uid, lastActive: now });
     }
-    Logger.info('DISPATCH', `调度选中账号 [${chosen.email} (${chosen.uid})] (策略: ${strategy}, 并发: ${chosen.inFlight || 0}, 剩余积分: ${chosen.creditsRemain || 0})`, { model: requestedModel });
+    Logger.info('DISPATCH', `调度选中账号 [${formatAccountFullDesc(chosen)}] (策略: ${strategy}, 并发: ${chosen.inFlight || 0}, 剩余积分: ${chosen.creditsRemain || 0})`, { model: requestedModel });
     return chosen;
   }
 
@@ -138,7 +140,7 @@ export class AccountScheduler {
     const acc = accounts.find(a => a.uid === uid);
     if (acc) {
       acc.cooldownUntil = Date.now() + seconds * 1000;
-      Logger.warn('COOLDOWN', `账号 [${acc.email} (${uid})] 全局冷却 ${seconds}秒`, { reason });
+      Logger.warn('COOLDOWN', `账号 [${formatAccountFullDesc(acc)}] 全局冷却 ${seconds}秒`, { reason });
       saveAccounts();
     }
   }
@@ -148,7 +150,7 @@ export class AccountScheduler {
     if (acc) {
       if (!acc.modelCooldowns) acc.modelCooldowns = {};
       acc.modelCooldowns[modelId] = Date.now() + seconds * 1000;
-      Logger.warn('COOLDOWN', `账号 [${acc.email} (${uid})] 模型 [${modelId}] 局部冷却 ${seconds}秒`, { reason });
+      Logger.warn('COOLDOWN', `账号 [${formatAccountFullDesc(acc)}] 模型 [${modelId}] 局部冷却 ${seconds}秒`, { reason });
       saveAccounts();
     }
   }
@@ -185,7 +187,7 @@ export class AccountScheduler {
         // 积分已刷新充盈时，自动提前解除因 402/额度耗尽进入的全局冷却状态
         if (acc.creditsRemain > 0 && acc.cooldownUntil && acc.cooldownUntil > Date.now()) {
           acc.cooldownUntil = 0;
-          Logger.info('COOLDOWN', `账号 [${acc.email} (${acc.uid})] 积分已刷新充盈 (${acc.creditsRemain})，提前解除冷却状态`);
+          Logger.info('COOLDOWN', `账号 [${formatAccountFullDesc(acc)}] 积分已刷新充盈 (${acc.creditsRemain})，提前解除冷却状态`);
         }
 
         // 清理已过期的单模型局部冷却记录
@@ -199,7 +201,7 @@ export class AccountScheduler {
         saveAccounts();
       }
     } catch (e) {
-      Logger.error('BILLING', `账号 [${acc.uid}] 刷新积分失败: ${e.message}`);
+      Logger.error('BILLING', `账号 [${formatAccountFullDesc(acc)}] 刷新积分失败: ${e.message}`);
     }
   }
 
@@ -227,12 +229,12 @@ export class AccountScheduler {
           if (newRefresh) acc.refreshToken = newRefresh;
           const expIn = payload.expires_in || payload.expiresIn || 7200;
           acc.expiresAt = Date.now() + expIn * 1000;
-          Logger.info('AUTH', `账号 [${acc.email} (${acc.uid})] 官方 Token 自动续期成功 (有效期至: ${new Date(acc.expiresAt).toLocaleTimeString()})`);
+          Logger.info('AUTH', `账号 [${formatAccountFullDesc(acc)}] 官方 Token 自动续期成功 (有效期至: ${new Date(acc.expiresAt).toLocaleTimeString()})`);
           saveAccounts();
         }
       }
     } catch (e) {
-      Logger.warn('AUTH', `账号 [${acc.uid}] 官方 Token 续期异常: ${e.message}`);
+      Logger.warn('AUTH', `账号 [${formatAccountFullDesc(acc)}] 官方 Token 续期异常: ${e.message}`);
     }
   }
 
@@ -271,12 +273,12 @@ export class AccountScheduler {
         userMsg = rawMsg || '签到失败';
       }
 
-      Logger.info('CHECKIN', `账号 [${acc.email} (${acc.uid})] 签到: ${userMsg}`);
+      Logger.info('CHECKIN', `账号 [${formatAccountFullDesc(acc)}] 签到: ${userMsg}`);
       await this.refreshCredits(acc);
       saveAccounts();
       return { success: isSuccess || isAlready, msg: userMsg };
     } catch (e) {
-      Logger.error('CHECKIN', `账号 [${acc.uid}] 签到网络异常: ${e.message}`);
+      Logger.error('CHECKIN', `账号 [${formatAccountFullDesc(acc)}] 签到网络异常: ${e.message}`);
       return { success: false, msg: `网络错误: ${e.message}` };
     }
   }

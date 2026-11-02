@@ -73,3 +73,28 @@ export function getTodayString() {
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
+// ─── 统一账号展示标识工具函数 (强制附带备注，防止同昵称混淆) ───────────────
+export function formatAccountLogName(acc) {
+  if (!acc) return '未知账号';
+  const name = acc.email || acc.uid || '未知账号';
+  const note = (acc.note && typeof acc.note === 'string') ? acc.note.trim() : '';
+  if (note) {
+    return `${name} (备注: ${note})`;
+  }
+  return name;
+}
+
+export function formatAccountFullDesc(acc) {
+  if (!acc) return '未知账号';
+  const name = acc.email || acc.uid || '未知账号';
+  const note = (acc.note && typeof acc.note === 'string') ? acc.note.trim() : '';
+  const uid = acc.uid ? String(acc.uid) : '';
+  const parts = [];
+  if (note) parts.push(`备注: ${note}`);
+  if (uid) parts.push(uid);
+  if (parts.length > 0) {
+    return `${name} (${parts.join(', ')})`;
+  }
+  return name;
+}

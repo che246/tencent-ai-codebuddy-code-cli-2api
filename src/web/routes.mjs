@@ -9,7 +9,8 @@ import {
   LOG_FILE_PATH,
   USER_AGENT,
   CURRENT_VERSION,
-  ROOT_DIR
+  ROOT_DIR,
+  formatAccountFullDesc
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { AccountScheduler } from '../core/scheduler.mjs';
@@ -459,7 +460,7 @@ export async function handleApiRoutes(req, res, url) {
         }
         acc.note = (note || '').trim();
         saveAccounts();
-        Logger.info('ACCOUNTS', `已更新账号 [${acc.email} (${uid})] 备注为: "${acc.note}"`);
+        Logger.info('ACCOUNTS', `已更新账号 [${formatAccountFullDesc(acc)}] 备注为: "${acc.note}"`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, note: acc.note }));
       } catch (e) {
@@ -481,7 +482,7 @@ export async function handleApiRoutes(req, res, url) {
         saveConfig();
         const acc = accounts.find(a => a.uid === config.pinnedAccount);
         if (config.pinnedAccount && acc) {
-          Logger.info('CONFIG', `网关已锁定全局优先指定账号: [${acc.email} (${acc.uid})]${acc.note ? ' 备注:' + acc.note : ''}`);
+          Logger.info('CONFIG', `网关已锁定全局优先指定账号: [${formatAccountFullDesc(acc)}]`);
         } else {
           Logger.info('CONFIG', `网关已取消全局指定账号，恢复全池自动负载轮换`);
         }

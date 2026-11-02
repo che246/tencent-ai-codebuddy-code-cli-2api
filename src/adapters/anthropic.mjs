@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { UPSTREAM_URL, config } from '../config.mjs';
+import { UPSTREAM_URL, config, formatAccountLogName, formatAccountFullDesc } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { AccountScheduler, sessionStickyMap } from '../core/scheduler.mjs';
 import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
@@ -180,10 +180,10 @@ export async function handleAnthropicMessages(req, res, rawBody) {
             try { parsedErr = JSON.parse(errText); } catch (_) {}
             const bizCode = extractStructuredBizCode(parsedErr) || parsedErr.code;
 
-            Logger.error('ANTHROPIC', `上游报错 HTTP ${upstreamRes.status} (账号: [${acc.email}], 模型: [${curModel}], 业务码: ${bizCode || '无'})`, {
+            Logger.error('ANTHROPIC', `上游报错 HTTP ${upstreamRes.status} (账号: [${formatAccountLogName(acc)}], 模型: [${curModel}], 业务码: ${bizCode || '无'})`, {
               code: bizCode,
               msg: parsedErr.msg || errText,
-              account: acc.email
+              account: formatAccountLogName(acc)
             });
 
             // 判断是否为模型限流 (6003:TPH, 6004:TPD, 6007:RPH, 6008:RPD, 429)
@@ -200,7 +200,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
               const otherAcc = canFailoverAccount ? AccountScheduler.selectAccount(curModel, sessionKey, { excludeUids: Array.from(attemptedUids) }) : null;
 
               if (otherAcc) {
-                Logger.warn('FAILOVER', `Anthropic 协议: 账号 [${acc.email}] 模型 [${curModel}] 触发限流，自动切换至账号池中可用账号 [${otherAcc.email}] 续跑该模型！`);
+                Logger.warn('FAILOVER', `Anthropic 协议: 账号 [${formatAccountLogName(acc)}] 模型 [${curModel}] 触发限流，自动切换至账号池中可用账号 [${formatAccountLogName(otherAcc)}] 续跑该模型！`);
                 continue; // 自动在下一个账号重试相同模型
               }
 
@@ -222,7 +222,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
               continue; // 切换其他账号
             } else if (upstreamRes.status === 401) {
               acc.status = 'unauthorized';
-              Logger.error('AUTH', `账号 [${acc.email}] Token 已失效或被收回 (HTTP 401)`);
+              Logger.error('AUTH', `账号 [${formatAccountLogName(acc)}] Token 已失效或被收回 (HTTP 401)`);
               continue; // 切换其他账号
             }
 
@@ -233,7 +233,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
 
         } catch (networkErr) {
           acc.inFlight = Math.max(0, acc.inFlight - 1);
-          Logger.error('NETWORK', `请求账号 [${acc.email}] 网络异常: ${networkErr.message}`);
+          Logger.error('NETWORK', `请求账号 [${formatAccountLogName(acc)}] 网络异常: ${networkErr.message}`);
           continue; // 网络抖动，尝试下一个账号
         }
       }
@@ -402,13 +402,13 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       const latency = Date.now() - startTime;
       recordApiCall({
         accountUid: activeAcc?.uid,
-        accountName: activeAcc?.email || activeAcc?.uid,
+        accountName: formatAccountLogName(activeAcc),
         model: actualModel,
         isSuccess: true,
         inputTokens: Math.max(10, Math.round(rawBody.length / 4)),
         outputTokens: Math.max(1, Math.round(latency / 15))
       });
-      Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (账号: [${activeAcc.email}], 结束原因: ${stopReason})`);
+      Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 结束原因: ${stopReason})`);
       return res.end();
 
     } else {
@@ -483,13 +483,13 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       const stopReason = toolCallsMap.size > 0 ? 'tool_use' : 'end_turn';
       recordApiCall({
         accountUid: activeAcc?.uid,
-        accountName: activeAcc?.email || activeAcc?.uid,
+        accountName: formatAccountLogName(activeAcc),
         model: actualModel,
         isSuccess: true,
         inputTokens: Math.max(10, Math.round(rawBody.length / 4)),
         outputTokens: Math.max(1, Math.round((fullContent.length + fullReasoning.length) / 4))
       });
-      Logger.info('ANTHROPIC', `非流式完成 [${actualModel}] 耗时 ${latency}ms (结束原因: ${stopReason})`);
+      Logger.info('ANTHROPIC', `非流式完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 结束原因: ${stopReason})`);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
