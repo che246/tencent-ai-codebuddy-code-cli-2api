@@ -427,14 +427,26 @@
               </div>
             </div>
             
-            <div class="filter-bar">
-              <button class="filter-btn active" onclick="setFilter('all', this)">全部</button>
-              <button class="filter-btn" onclick="setFilter('1m', this)">1M 上下文</button>
-              <button class="filter-btn" onclick="setFilter('free', this)">免费 / 低倍率</button>
-              <button class="filter-btn" onclick="setFilter('tool', this)">支持工具 🛠️</button>
-              <button class="filter-btn" onclick="setFilter('vision', this)">支持视觉 👁️</button>
-              <button class="filter-btn" onclick="setFilter('reasoning', this)">支持思考 🧠</button>
-              <button class="filter-btn" onclick="setFilter('idle', this)">🟢 畅通可用</button>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
+              <div class="filter-bar" style="margin-bottom:0;" id="modelCategoryTabs">
+                <button class="filter-btn active" onclick="setFilter('all', this)">全部</button>
+                <button class="filter-btn" onclick="setFilter('1m', this)">1M 上下文</button>
+                <button class="filter-btn" onclick="setFilter('free', this)">免费 / 低倍率</button>
+                <button class="filter-btn" onclick="setFilter('tool', this)">支持工具 🛠️</button>
+                <button class="filter-btn" onclick="setFilter('vision', this)">支持视觉 👁️</button>
+                <button class="filter-btn" onclick="setFilter('reasoning', this)">支持思考 🧠</button>
+                <button class="filter-btn" onclick="setFilter('idle', this)">🟢 畅通可用</button>
+              </div>
+
+              <!-- 排序控制区域：默认 / 倍率升序 / 倍率降序 -->
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:12px; color:var(--text-muted); font-weight:600;">排序:</span>
+                <div class="filter-bar" style="margin-bottom:0;" id="modelSortTabs">
+                  <button class="filter-btn active" data-sort="default" onclick="setModelSort('default', this)">默认</button>
+                  <button class="filter-btn" data-sort="asc" onclick="setModelSort('asc', this)">倍率升序 ↑</button>
+                  <button class="filter-btn" data-sort="desc" onclick="setModelSort('desc', this)">倍率降序 ↓</button>
+                </div>
+              </div>
             </div>
 
             <table>
@@ -444,7 +456,7 @@
                   <th>显示名称</th>
                   <th>实时探针</th>
                   <th>官方修订说明</th>
-                  <th>计费倍率</th>
+                  <th>计费倍率 <span id="thRateSortIcon" style="cursor:pointer; font-size:11px; margin-left:4px;" onclick="cycleModelSort()" title="点击切换：默认 / 倍率升序 / 倍率降序">↕️</span></th>
                   <th>上下文窗口</th>
                   <th>最大输出</th>
                   <th>思考档位 (Reasoning)</th>
@@ -1354,11 +1366,49 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
     }
 
+    let currentModelSort = 'default'; // 'default' | 'asc' | 'desc'
+
     function setFilter(filter, el) {
       currentFilter = filter;
-      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-      el.classList.add('active');
+      document.querySelectorAll('#modelCategoryTabs .filter-btn').forEach(b => b.classList.remove('active'));
+      if (el) el.classList.add('active');
       renderModels();
+    }
+
+    function setModelSort(sortKey, el) {
+      currentModelSort = sortKey;
+      document.querySelectorAll('#modelSortTabs .filter-btn').forEach(b => b.classList.remove('active'));
+      if (el) el.classList.add('active');
+      updateRateSortHeader();
+      renderModels();
+    }
+
+    function cycleModelSort() {
+      const order = ['default', 'asc', 'desc'];
+      const nextIdx = (order.indexOf(currentModelSort) + 1) % order.length;
+      const nextSort = order[nextIdx];
+      const targetBtn = document.querySelector(`#modelSortTabs button[data-sort="${nextSort}"]`);
+      setModelSort(nextSort, targetBtn);
+    }
+
+    function updateRateSortHeader() {
+      const icon = document.getElementById('thRateSortIcon');
+      if (icon) {
+        if (currentModelSort === 'asc') icon.innerText = '↑ (升序)';
+        else if (currentModelSort === 'desc') icon.innerText = '↓ (降序)';
+        else icon.innerText = '↕️';
+      }
+    }
+
+    function getModelMultiplier(m) {
+      if (typeof m.multiplier === 'number') return m.multiplier;
+      if (!m.credits || typeof m.credits !== 'string') return 1.0;
+      const match = m.credits.match(/x?\s*([\d.]+)/i);
+      if (match) {
+        const val = parseFloat(match[1]);
+        if (!isNaN(val)) return val;
+      }
+      return 1.0;
     }
 
     function filterModels() {
@@ -1369,7 +1419,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       const query = document.getElementById('modelSearch').value.toLowerCase().trim();
       const tbody = document.getElementById('modelBody');
 
-      const filtered = allModels.filter(m => {
+      let filtered = allModels.filter(m => {
         if (query && !m.id.toLowerCase().includes(query) && !(m.name||'').toLowerCase().includes(query)) {
           return false;
         }
@@ -1382,16 +1432,24 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         return true;
       });
 
+      // 排序方案：默认 / 倍率升序 / 倍率降序
+      if (currentModelSort === 'asc') {
+        filtered = [...filtered].sort((a, b) => getModelMultiplier(a) - getModelMultiplier(b));
+      } else if (currentModelSort === 'desc') {
+        filtered = [...filtered].sort((a, b) => getModelMultiplier(b) - getModelMultiplier(a));
+      }
+
       if (filtered.length === 0) {
         tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
         return;
       }
 
-      tbody.innerHTML = filtered.map((m, idx) => {
-        const isFree = (m.credits || '').includes('0.00');
+      tbody.innerHTML = filtered.map((m) => {
+        const mult = getModelMultiplier(m);
+        const isFree = mult === 0 || (m.credits || '').includes('0.00');
         const badgeCredit = isFree 
           ? '<span class="badge badge-ok">免费 x0.00</span>' 
-          : `<span class="badge badge-cool">${m.credits || 'x1.00'}</span>`;
+          : `<span class="badge badge-cool">${m.credits || 'x' + mult.toFixed(2)}</span>`;
 
         const ctxFmt = m.maxInputTokens >= 1000000 ? '1,000,000 (1M)' : 
           m.maxInputTokens >= 1000 ? `${(m.maxInputTokens/1000).toFixed(0)}K` : (m.maxInputTokens || '-');
@@ -1428,15 +1486,16 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             </td>
             <td style="white-space:nowrap;">
               <button class="btn-copy" onclick="copyText('${m.id}')">📋 复制</button>
-              <button class="btn-json" onclick="showRawJson(${idx})">🔍 原始JSON</button>
+              <button class="btn-json" onclick="showRawJson('${m.id}')">🔍 原始JSON</button>
             </td>
           </tr>
         `;
       }).join('');
     }
 
-    function showRawJson(idx) {
-      const model = allModels[idx];
+    function showRawJson(modelId) {
+      const model = allModels.find(m => m.id === modelId) || allModels[0];
+      if (!model) return;
       document.getElementById('rawModalTitle').innerText = model.id;
       document.getElementById('rawModalCode').innerText = JSON.stringify(model, null, 2);
       document.getElementById('rawModal').style.display = 'flex';
