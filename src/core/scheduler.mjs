@@ -80,11 +80,24 @@ export class AccountScheduler {
     // 3. 候选池过滤
     const candidates = accounts.filter(a => {
       if (a.status !== 'healthy') return false;
-      if (now < (a.cooldownUntil || 0)) return false;
-      if (excludeUids.includes(a.uid)) return false;
-      if (requestedModel && a.modelCooldowns?.[requestedModel] && now < a.modelCooldowns[requestedModel]) {
-        return false;
+
+      // 自动清理已过期的全局冷却时间戳
+      if (a.cooldownUntil && now >= a.cooldownUntil) {
+        a.cooldownUntil = 0;
       }
+      if (a.cooldownUntil && now < a.cooldownUntil) return false;
+
+      if (excludeUids.includes(a.uid)) return false;
+
+      // 自动清理已过期的单模型局部冷却时间戳
+      if (requestedModel && a.modelCooldowns) {
+        if (a.modelCooldowns[requestedModel] && now >= a.modelCooldowns[requestedModel]) {
+          delete a.modelCooldowns[requestedModel];
+        } else if (a.modelCooldowns[requestedModel] && now < a.modelCooldowns[requestedModel]) {
+          return false;
+        }
+      }
+
       // 单账号限流保护开关：开启时限制并发，关闭时不设上限
       if (config.concurrencyLimitEnabled !== false) {
         if ((a.inFlight || 0) >= maxLimit) return false;
@@ -168,6 +181,21 @@ export class AccountScheduler {
           }
           acc.creditsRemain = Math.round(total * 100) / 100;
         }
+
+        // 积分已刷新充盈时，自动提前解除因 402/额度耗尽进入的全局冷却状态
+        if (acc.creditsRemain > 0 && acc.cooldownUntil && acc.cooldownUntil > Date.now()) {
+          acc.cooldownUntil = 0;
+          Logger.info('COOLDOWN', `账号 [${acc.email} (${acc.uid})] 积分已刷新充盈 (${acc.creditsRemain})，提前解除冷却状态`);
+        }
+
+        // 清理已过期的单模型局部冷却记录
+        if (acc.modelCooldowns) {
+          const nowTime = Date.now();
+          for (const [mId, expireAt] of Object.entries(acc.modelCooldowns)) {
+            if (nowTime >= expireAt) delete acc.modelCooldowns[mId];
+          }
+        }
+
         saveAccounts();
       }
     } catch (e) {
