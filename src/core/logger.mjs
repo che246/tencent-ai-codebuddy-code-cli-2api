@@ -1,24 +1,31 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { LOG_FILE_PATH } from '../config.mjs';
+import { LogDatabase } from './database.mjs';
 
-// ─── 统一诊断日志系统 (Logger & Ring Buffer) ─────────────────────────────
+// ─── 统一诊断日志系统 (Logger & SQLite Database) ───────────────────────────
 export class Logger {
   static ringBuffer = [];
   static maxBufferSize = 1000;
 
   static write(level, category, message, meta = null) {
     const time = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const date = time.slice(0, 10);
     const id = crypto.randomUUID().slice(0, 8);
     const logItem = {
       id,
       time,
+      date,
       level: level.toUpperCase(),
       category: category.toUpperCase(),
       message,
       meta
     };
 
+    // 1. 写入 SQLite 数据库持久化存储
+    LogDatabase.insertLog(logItem);
+
+    // 2. 写入内存环形缓冲区 (保留最近 1000 条热数据)
     this.ringBuffer.unshift(logItem);
     if (this.ringBuffer.length > this.maxBufferSize) {
       this.ringBuffer.pop();
@@ -40,16 +47,45 @@ export class Logger {
   static warn(category, message, meta) { this.write('warn', category, message, meta); }
   static error(category, message, meta) { this.write('error', category, message, meta); }
 
-  static getLogs(limit = 250) {
-    return this.ringBuffer.slice(0, limit);
+  static getLogs({ date = null, level = null, category = null, search = null, limit = 250, offset = 0 } = {}) {
+    const dbRes = LogDatabase.queryLogs({ date, level, category, search, limit, offset });
+    if (dbRes && dbRes.logs && dbRes.logs.length > 0) {
+      return dbRes;
+    }
+    // 内存兜底
+    let filtered = this.ringBuffer;
+    if (date && date !== 'ALL') filtered = filtered.filter(l => (l.date || l.time?.slice(0, 10)) === date);
+    if (level && level !== 'ALL') filtered = filtered.filter(l => l.level === level.toUpperCase());
+    if (category && category !== 'ALL') filtered = filtered.filter(l => l.category === category.toUpperCase());
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      filtered = filtered.filter(l => (l.message || '').toLowerCase().includes(q));
+    }
+    return {
+      total: filtered.length,
+      logs: filtered.slice(offset, offset + limit)
+    };
+  }
+
+  static getDates() {
+    const dbDates = LogDatabase.getDates();
+    if (dbDates && dbDates.length > 0) return dbDates;
+    const dateSet = new Set();
+    for (const l of this.ringBuffer) {
+      const d = l.date || l.time?.slice(0, 10);
+      if (d) dateSet.add(d);
+    }
+    return Array.from(dateSet).sort().reverse();
   }
 
   static clear() {
     this.ringBuffer = [];
+    LogDatabase.clearLogs();
   }
 
   // ─── 日志保留策略：严格仅保留最近 3 天的日志流水 ─────────────────────
   static pruneOldLogs(retentionDays = 3) {
+    LogDatabase.pruneOldLogs(retentionDays);
     if (!fs.existsSync(LOG_FILE_PATH)) return;
     try {
       const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;

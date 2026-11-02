@@ -175,6 +175,9 @@ export async function handleApiRoutes(req, res, url) {
         if (typeof body.modelFallbackEnabled === 'boolean') {
           config.modelFallbackEnabled = body.modelFallbackEnabled;
         }
+        if (body.modelFallback && typeof body.modelFallback === 'object') {
+          config.modelFallback = body.modelFallback;
+        }
         if (typeof body.maxInFlightPerAccount === 'number') {
           config.maxInFlightPerAccount = Math.max(1, body.maxInFlightPerAccount);
         }
@@ -186,6 +189,7 @@ export async function handleApiRoutes(req, res, url) {
           routingStrategy: config.routingStrategy,
           pinnedAccount: config.pinnedAccount,
           modelFallbackEnabled: config.modelFallbackEnabled,
+          modelFallback: config.modelFallback,
           maxInFlightPerAccount: config.maxInFlightPerAccount
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -198,14 +202,25 @@ export async function handleApiRoutes(req, res, url) {
     return;
   }
 
-  // 3. 日志查询接口
+  // 3. 日志查询接口 (支持 SQLite 数据库按日期、日志级别、分类、关键词检索)
   if (url.pathname === '/api/logs' && req.method === 'GET') {
-    const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+    const date = url.searchParams.get('date') || null;
+    const level = url.searchParams.get('level') || null;
+    const category = url.searchParams.get('category') || null;
+    const search = url.searchParams.get('search') || null;
+    const limit = parseInt(url.searchParams.get('limit') || '250', 10);
+    const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+
+    const result = Logger.getLogs({ date, level, category, search, limit, offset });
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({
-      total: Logger.ringBuffer.length,
-      logs: Logger.getLogs(limit)
-    }));
+    return res.end(JSON.stringify(result));
+  }
+
+  // 3.5. 日志可用历史日期列表接口 (供前端按日期筛选)
+  if (url.pathname === '/api/logs/dates' && req.method === 'GET') {
+    const dates = Logger.getDates();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ dates }));
   }
 
   // 4. 日志全量下载导出

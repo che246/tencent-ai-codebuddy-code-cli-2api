@@ -497,8 +497,11 @@
                 <span>📜 实时运行日志与问题诊断 (Live Diagnostics)</span>
                 <span class="badge badge-blue" id="logCountBadge">0 条记录</span>
               </div>
-              <div style="display:flex; gap:10px;">
-                <input id="logSearch" class="search-input" placeholder="🔍 检索日志关键字 / 状态码..." oninput="filterLogs()" style="width:200px;">
+              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <select id="logDateFilter" class="search-input" style="width:145px; padding:6px 10px; font-size:12px;" onchange="onLogDateChange()">
+                  <option value="ALL">📅 所有历史日期</option>
+                </select>
+                <input id="logSearch" class="search-input" placeholder="🔍 检索日志关键字 / 状态码..." oninput="filterLogs()" style="width:190px;">
                 <button class="btn-outline" onclick="toggleAutoScroll()" id="btnAutoScroll">⏸ 滚动锁定: 开</button>
                 <button class="btn-outline" onclick="clearLiveLogs()">🧹 清屏</button>
                 <button class="btn-primary" onclick="exportLogFile()">📥 导出完整日志</button>
@@ -649,6 +652,24 @@
                   <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveWebPassword()">保存密码</button>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- 备用模型多级降级链编排与顺序调整 -->
+          <div class="card" style="margin-top: 20px;">
+            <div class="card-title" style="flex-wrap:wrap; gap:12px;">
+              <div>
+                <span style="font-size:15px; font-weight:700;">🔄 备用模型多级降级链编排 (Fallback Chains)</span>
+                <span style="font-size:12px; font-weight:normal; color:var(--text-muted); margin-left:8px;">当模型限流且全池账号均耗尽时，按设定顺序多级向下无感改道</span>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="addFallbackChainRule()">➕ 新建主模型降级链</button>
+                <button class="btn-primary" style="font-size:12px; padding:4px 12px;" onclick="saveModelFallbackChains()">💾 保存降级链设置</button>
+              </div>
+            </div>
+
+            <div id="fallbackChainsContainer" style="display:flex; flex-direction:column; gap:14px; margin-top:8px;">
+              <div style="color:var(--text-muted); text-align:center; padding:15px;">正在加载降级链设置...</div>
             </div>
           </div>
         </section>
@@ -828,6 +849,7 @@
       loadAccounts();
       loadModels();
       loadSettings();
+      loadLogDates();
       fetchLogs();
       stopAppPolling();
       pollIntervals.push(setInterval(() => loadMetrics(currentMetricsRange), 5000));
@@ -902,7 +924,7 @@
       if (pageKey === 'overview') loadMetrics(currentMetricsRange);
       if (pageKey === 'accounts') loadAccounts();
       if (pageKey === 'models') loadModels();
-      if (pageKey === 'logs') fetchLogs();
+      if (pageKey === 'logs') { loadLogDates(); fetchLogs(); }
       if (pageKey === 'settings') loadSettings();
     }
 
@@ -1014,7 +1036,152 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         if (document.getElementById('inputWebPassword')) {
           document.getElementById('inputWebPassword').value = s.webPassword || '';
         }
+
+        // 规范化多级备用模型降级链配置并渲染
+        if (s.modelFallback && typeof s.modelFallback === 'object') {
+          const normalized = {};
+          for (const [k, v] of Object.entries(s.modelFallback)) {
+            if (Array.isArray(v)) normalized[k] = [...v];
+            else if (typeof v === 'string' && v.trim()) normalized[k] = [v.trim()];
+            else normalized[k] = [];
+          }
+          currentSettings.modelFallback = normalized;
+        } else {
+          currentSettings.modelFallback = {};
+        }
+        renderFallbackChains();
+
       } catch (_) {}
+    }
+
+    function renderFallbackChains() {
+      const container = document.getElementById('fallbackChainsContainer');
+      if (!container) return;
+      const chains = currentSettings.modelFallback || {};
+      const entries = Object.entries(chains);
+
+      if (entries.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:20px;">暂未配置模型降级链，可点击右上角「➕ 新建主模型降级链」添加</div>';
+        return;
+      }
+
+      const availableModels = allModels.map(m => m.id);
+
+      container.innerHTML = entries.map(([primary, fallbacks]) => {
+        const fallbackList = Array.isArray(fallbacks) ? fallbacks : [];
+        const remainingModels = availableModels.filter(m => m !== primary && !fallbackList.includes(m));
+
+        const stepsHtml = fallbackList.map((fb, idx) => `
+          <div style="background:rgba(255, 255, 255, 0.05); border:1px solid var(--card-border); padding:5px 10px; border-radius:6px; display:inline-flex; align-items:center; gap:6px;">
+            <span style="font-family:monospace; font-weight:600; color:#4ade80;">${idx + 2}. ${escapeHtml(fb)}</span>
+            <button onclick="moveFallbackStep('${escapeAttr(primary)}', ${idx}, -1)" title="上移/前移优先" class="btn-outline" style="padding:1px 5px; font-size:10px;" ${idx === 0 ? 'disabled style="opacity:0.35;"' : ''}>↑</button>
+            <button onclick="moveFallbackStep('${escapeAttr(primary)}', ${idx}, 1)" title="下移/后移后备" class="btn-outline" style="padding:1px 5px; font-size:10px;" ${idx === fallbackList.length - 1 ? 'disabled style="opacity:0.35;"' : ''}>↓</button>
+            <button onclick="removeFallbackStep('${escapeAttr(primary)}', ${idx})" title="移除此备用模型" style="background:transparent; color:#f87171; border:none; cursor:pointer; font-size:13px; font-weight:bold; padding:0 3px;">✕</button>
+          </div>
+          ${idx < fallbackList.length - 1 ? '<span style="color:var(--text-muted); font-size:13px;">➔</span>' : ''}
+        `).join('');
+
+        const selectOptions = remainingModels.map(m => `<option value="${m}">${m}</option>`).join('');
+
+        return `
+          <div style="background:var(--code-bg); border:1px solid var(--card-border); border-radius:10px; padding:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:12px; color:var(--text-muted); font-weight:bold;">主请求模型:</span>
+                <code style="font-size:13px; font-weight:bold; color:var(--accent);">${escapeHtml(primary)}</code>
+                <span style="font-size:11px; color:var(--text-muted);">（限流且全池账号耗尽时，按右侧顺序逐级自动降级）</span>
+              </div>
+              <button class="btn-danger" style="padding:3px 8px; font-size:11px;" onclick="removeFallbackChain('${escapeAttr(primary)}')">✕ 移除此链</button>
+            </div>
+
+            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+              <div style="background:rgba(2, 132, 199, 0.15); border:1px solid rgba(56, 189, 248, 0.4); padding:6px 12px; border-radius:6px; font-weight:bold; color:var(--accent);">
+                1. ${escapeHtml(primary)} (主)
+              </div>
+              ${fallbackList.length > 0 ? '<span style="color:var(--text-muted); font-size:13px;">➔</span>' : ''}
+              ${stepsHtml}
+            </div>
+
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <select id="selAddFallback_${escapeAttr(primary)}" class="search-input" style="width:240px; padding:4px 8px; font-size:12px;">
+                ${selectOptions || '<option value="">无更多可选模型</option>'}
+              </select>
+              <button class="btn-outline" style="padding:4px 10px; font-size:11px;" onclick="appendFallbackStep('${escapeAttr(primary)}')" ${remainingModels.length === 0 ? 'disabled' : ''}>➕ 追加备用模型到链尾</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function moveFallbackStep(primary, idx, dir) {
+      const list = currentSettings.modelFallback?.[primary];
+      if (!Array.isArray(list)) return;
+      const targetIdx = idx + dir;
+      if (targetIdx < 0 || targetIdx >= list.length) return;
+      const temp = list[idx];
+      list[idx] = list[targetIdx];
+      list[targetIdx] = temp;
+      renderFallbackChains();
+    }
+
+    function removeFallbackStep(primary, idx) {
+      const list = currentSettings.modelFallback?.[primary];
+      if (!Array.isArray(list)) return;
+      list.splice(idx, 1);
+      renderFallbackChains();
+    }
+
+    function appendFallbackStep(primary) {
+      const sel = document.getElementById('selAddFallback_' + primary);
+      const val = sel ? sel.value : '';
+      if (!val) return;
+      if (!currentSettings.modelFallback[primary]) currentSettings.modelFallback[primary] = [];
+      if (!currentSettings.modelFallback[primary].includes(val)) {
+        currentSettings.modelFallback[primary].push(val);
+      }
+      renderFallbackChains();
+    }
+
+    function addFallbackChainRule() {
+      const available = allModels.map(m => m.id);
+      const existing = Object.keys(currentSettings.modelFallback || {});
+      const candidates = available.filter(m => !existing.includes(m));
+      if (candidates.length === 0) {
+        return alert('所有已同步模型均已建立降级链！');
+      }
+      const model = prompt('请输入或选择需要配置降级链的主模型 ID：\n可选：' + candidates.slice(0, 8).join(', '), candidates[0]);
+      if (!model) return;
+      const trimModel = model.trim();
+      if (!currentSettings.modelFallback) currentSettings.modelFallback = {};
+      if (!currentSettings.modelFallback[trimModel]) {
+        currentSettings.modelFallback[trimModel] = [];
+      }
+      renderFallbackChains();
+    }
+
+    function removeFallbackChain(primary) {
+      if (!confirm('确定删除主模型 [' + primary + '] 的整条降级链吗？')) return;
+      delete currentSettings.modelFallback[primary];
+      renderFallbackChains();
+    }
+
+    async function saveModelFallbackChains() {
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelFallback: currentSettings.modelFallback })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          alert('✅ 备用模型多级降级链已成功保存并即时生效！');
+          await loadSettings();
+        } else {
+          alert('保存失败: ' + (data.error || '未知错误'));
+        }
+      } catch (e) {
+        alert('网络异常: ' + e.message);
+      }
     }
 
     async function changePinnedAccountFromSelect() {
@@ -1256,12 +1423,50 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
     }
 
+    let currentLogDate = 'ALL';
+
+    async function loadLogDates() {
+      try {
+        const res = await fetch('/api/logs/dates');
+        const data = await res.json();
+        const sel = document.getElementById('logDateFilter');
+        if (sel && Array.isArray(data.dates)) {
+          const oldVal = sel.value || currentLogDate;
+          sel.innerHTML = '<option value="ALL">📅 所有历史日期</option>' + data.dates.map(d => {
+            return `<option value="${d}" ${d === oldVal ? 'selected' : ''}>📅 ${d}</option>`;
+          }).join('');
+        }
+      } catch (_) {}
+    }
+
+    function onLogDateChange() {
+      fetchLogs();
+    }
+
     async function fetchLogs() {
       try {
-        const res = await fetch('/api/logs?limit=250');
+        const sel = document.getElementById('logDateFilter');
+        const dateVal = sel ? sel.value : currentLogDate;
+        currentLogDate = dateVal;
+
+        let queryUrl = '/api/logs?limit=300';
+        if (dateVal && dateVal !== 'ALL') {
+          queryUrl += '&date=' + encodeURIComponent(dateVal);
+        }
+        if (logCatFilter && logCatFilter !== 'ALL') {
+          queryUrl += '&category=' + encodeURIComponent(logCatFilter);
+        }
+        if (logLevelFilter && logLevelFilter !== 'ALL') {
+          queryUrl += '&level=' + encodeURIComponent(logLevelFilter);
+        }
+
+        const res = await fetch(queryUrl);
         const data = await res.json();
         allLogs = data.logs || [];
-        document.getElementById('logCountBadge').innerText = `最近 ${allLogs.length} 条记录`;
+        const badge = document.getElementById('logCountBadge');
+        if (badge) {
+          badge.innerText = `数据库查得 ${data.total || allLogs.length} 条`;
+        }
         renderLogs();
       } catch (_) {}
     }
@@ -1288,10 +1493,11 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       logBox.innerHTML = filtered.map(item => {
         const badgeClass = item.level === 'ERROR' ? 'log-badge-error' : item.level === 'WARN' ? 'log-badge-warn' : 'log-badge-info';
         const metaHtml = item.meta ? `<span class="log-meta">${escapeHtml(JSON.stringify(item.meta))}</span>` : '';
+        const timeDisplay = currentLogDate === 'ALL' ? item.time : item.time.slice(11);
 
         return `
           <div class="log-row">
-            <span class="log-time">${item.time.slice(11)}</span>
+            <span class="log-time" title="${item.time}">${timeDisplay}</span>
             <span class="${badgeClass}">${item.level}</span>
             <span class="log-cat">[${item.category}]</span>
             <span class="log-msg">${escapeHtml(item.message)}${metaHtml}</span>
@@ -1343,7 +1549,11 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
 
     function exportLogFile() {
       const token = localStorage.getItem('cb_web_token') || '';
-      window.open('/api/logs/export' + (token ? '?token=' + encodeURIComponent(token) : ''), '_blank');
+      let url = '/api/logs/export?token=' + encodeURIComponent(token);
+      if (currentLogDate && currentLogDate !== 'ALL') {
+        url += '&date=' + encodeURIComponent(currentLogDate);
+      }
+      window.open(url, '_blank');
     }
 
     function escapeHtml(str) {
