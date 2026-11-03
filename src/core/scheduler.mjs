@@ -26,6 +26,8 @@ setInterval(() => {
 // ─── 账号池调度引擎 ─────────────────────────────────────────────────────
 export class AccountScheduler {
   static rrIndex = 0;
+  static lastDispatchedUid = null;
+  static lastDispatchedTime = 0;
 
   static selectAccount(requestedModel, sessionKey, options = {}) {
     const now = Date.now();
@@ -56,6 +58,8 @@ export class AccountScheduler {
           Logger.warn('DISPATCH', `网关指定账号 [${target}] 达到并发上限 (${matched.inFlight}/${maxLimit})，降级回账号池自动调度`);
         } else {
           Logger.info('DISPATCH', `精准路由至网关全局指定账号 [${formatAccountFullDesc(matched)}]`);
+          this.lastDispatchedUid = matched.uid;
+          this.lastDispatchedTime = now;
           return matched;
         }
       } else {
@@ -73,6 +77,8 @@ export class AccountScheduler {
           if (!isModelCooling) {
             sticky.lastActive = now;
             Logger.info('DISPATCH', `粘性会话复用账号 [${formatAccountFullDesc(acc)}]`, { sessionKey: sessionKey.slice(0, 8), model: requestedModel });
+            this.lastDispatchedUid = acc.uid;
+            this.lastDispatchedTime = now;
             return acc;
           }
         }
@@ -133,7 +139,71 @@ export class AccountScheduler {
       sessionStickyMap.set(sessionKey, { uid: chosen.uid, lastActive: now });
     }
     Logger.info('DISPATCH', `调度选中账号 [${formatAccountFullDesc(chosen)}] (策略: ${strategy}, 并发: ${chosen.inFlight || 0}, 剩余积分: ${chosen.creditsRemain || 0})`, { model: requestedModel });
+    this.lastDispatchedUid = chosen.uid;
+    this.lastDispatchedTime = now;
     return chosen;
+  }
+
+  // 获取当前正在/默认使用的账号实体快照 (供控制台报表统计概览展示)
+  static getCurrentActiveAccountInfo() {
+    const now = Date.now();
+    const isPinned = Boolean(config.pinnedAccount);
+    const pinnedAcc = isPinned ? accounts.find(a => a.uid === config.pinnedAccount) : null;
+
+    let activeAcc = null;
+    let mode = 'pool';
+    let modeLabel = '账号池自动轮换';
+
+    if (pinnedAcc) {
+      activeAcc = pinnedAcc;
+      mode = 'pinned';
+      modeLabel = '全局指定账号';
+    } else if (this.lastDispatchedUid) {
+      activeAcc = accounts.find(a => a.uid === this.lastDispatchedUid && a.status === 'healthy');
+      modeLabel = '账号池调度 (最近执行)';
+    }
+
+    if (!activeAcc && accounts.length > 0) {
+      const candidates = accounts.filter(a => a.status === 'healthy' && now > (a.cooldownUntil || 0));
+      activeAcc = candidates[0] || accounts[0];
+      modeLabel = '账号池调度 (当前就绪)';
+    }
+
+    if (!activeAcc) {
+      return {
+        hasAccount: false,
+        isPinned: false,
+        mode: 'none',
+        modeLabel: '暂无可用账号',
+        displayName: '暂无账号',
+        name: '暂无账号',
+        note: '',
+        uid: '',
+        creditsRemain: 0,
+        inFlight: 0,
+        status: 'none'
+      };
+    }
+
+    const noteStr = activeAcc.note ? activeAcc.note.trim() : '';
+    const nameStr = activeAcc.email || activeAcc.uid;
+    const fullDisplayName = noteStr ? `${nameStr} [${noteStr}]` : nameStr;
+
+    return {
+      hasAccount: true,
+      isPinned,
+      mode,
+      modeLabel,
+      uid: activeAcc.uid,
+      name: nameStr,
+      note: noteStr,
+      displayName: fullDisplayName,
+      creditsRemain: activeAcc.creditsRemain || 0,
+      inFlight: activeAcc.inFlight || 0,
+      status: activeAcc.status || 'healthy',
+      isCooldown: now < (activeAcc.cooldownUntil || 0),
+      strategy: config.routingStrategy || 'least-inflight'
+    };
   }
 
   static cooldown(uid, seconds, reason = '') {
