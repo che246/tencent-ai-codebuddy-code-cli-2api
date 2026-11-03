@@ -1527,25 +1527,29 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           const tokenTip = `输入: ${(a.inputTokens || 0).toLocaleString()} tokens&#10;输出: ${(a.outputTokens || 0).toLocaleString()} tokens&#10;总计: ${(a.totalTokens || 0).toLocaleString()} tokens`;
 
           let tokenExpiryHtml = '';
+          const daysColor = (a.daysRemaining !== null && a.daysRemaining <= (a.advanceDays || 7)) ? '#fb923c' : '#4ade80';
+          const daysLabel = a.daysRemaining !== null ? `剩 ${a.daysRemaining} 天` : '长效有效';
+
           if (a.hasRefreshToken) {
-            const daysColor = (a.daysRemaining !== null && a.daysRemaining <= (a.advanceDays || 7)) ? '#fb923c' : '#4ade80';
-            const daysLabel = a.daysRemaining !== null ? `剩 ${a.daysRemaining} 天` : '长效有效';
             const refreshBtn = a.isRefreshEligible
               ? `<button class="btn-primary" style="padding:1px 6px; font-size:10px; margin-top:3px;" onclick="refreshTokenSingle('${a.uid}')" title="满足提前换发条件，点击立即换发新令牌">⚡ 提前续签</button>`
               : `<button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px; opacity:0.75;" onclick="refreshTokenSingle('${a.uid}')" title="点击立即强制与官方换发新令牌">换发</button>`;
 
             tokenExpiryHtml = `
               <div style="font-size:12px;">
-                <b style="color:${daysColor}; font-family:monospace;">${daysLabel}</b>
-                <span style="font-size:10px; color:var(--text-muted); display:block;">至 ${a.expiresAtFmt}</span>
+                <span class="badge badge-ok" style="font-size:9px; padding:1px 4px;">自动续期</span>
+                <b style="color:${daysColor}; font-family:monospace; margin-left:2px;">${daysLabel}</b>
+                <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
                 ${refreshBtn}
               </div>
             `;
           } else {
             tokenExpiryHtml = `
-              <div style="font-size:11px; color:var(--text-muted);">
-                <span class="badge badge-cool" style="font-size:10px;">单次Token</span>
-                <span style="font-size:10px; display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
+              <div style="font-size:12px;">
+                <span class="badge badge-cool" style="font-size:9px; padding:1px 4px;" title="手动录入或未记录 refreshToken，到期前需重新扫码">无刷新令牌</span>
+                <b style="color:${daysColor}; font-family:monospace; margin-left:2px;">${daysLabel}</b>
+                <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
+                <button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px;" onclick="openOAuthModal()" title="重新扫码授权即可获取长效 refreshToken 实现永久自动续签">扫码补齐</button>
               </div>
             `;
           }
