@@ -3,6 +3,7 @@ import {
   accounts,
   saveAccounts,
   getTodayString,
+  getLocalTimeString,
   SUMMARY_URL,
   CHECKIN_URL,
   USER_AGENT,
@@ -348,9 +349,20 @@ export class AccountScheduler {
     }
   }
 
-  static async dailyCheckin(acc) {
+  static async dailyCheckin(acc, force = false) {
     if (!acc.accessToken) return { success: false, msg: '无有效 Token' };
     const today = getTodayString();
+
+    // 1. 前置状态判断：当天若已成功签到且非强制，则直接返回已签到状态，避免频繁重复调用上游
+    const isAlreadyDoneToday = acc.lastCheckinDate === today && (acc.lastCheckinSuccess || acc.lastCheckinMsg?.includes('已签到') || acc.lastCheckinMsg?.includes('成功'));
+    if (!force && isAlreadyDoneToday) {
+      return {
+        success: true,
+        alreadyCheckedIn: true,
+        msg: acc.lastCheckinMsg || '今天已签到，请明天再来'
+      };
+    }
+
     try {
       const res = await fetch(CHECKIN_URL, {
         method: 'POST',
@@ -370,17 +382,24 @@ export class AccountScheduler {
       if (isSuccess) {
         userMsg = '签到成功，已领积分';
         acc.lastCheckinDate = today;
+        acc.lastCheckinSuccess = true;
+        acc.lastCheckinTime = getLocalTimeString();
         acc.lastCheckinMsg = userMsg;
       } else if (isAlready) {
         userMsg = '今天已签到，请明天再来';
         acc.lastCheckinDate = today;
+        acc.lastCheckinSuccess = true;
+        acc.lastCheckinTime = getLocalTimeString();
         acc.lastCheckinMsg = userMsg;
       } else if (rawMsg.includes('企业账号')) {
         userMsg = '企业账号不支持签到';
         acc.lastCheckinDate = today;
+        acc.lastCheckinSuccess = false;
+        acc.lastCheckinTime = getLocalTimeString();
         acc.lastCheckinMsg = userMsg;
       } else {
         userMsg = rawMsg || '签到失败';
+        acc.lastCheckinSuccess = false;
       }
 
       Logger.info('CHECKIN', `账号 [${formatAccountFullDesc(acc)}] 签到: ${userMsg}`);
@@ -390,6 +409,32 @@ export class AccountScheduler {
     } catch (e) {
       Logger.error('CHECKIN', `账号 [${formatAccountFullDesc(acc)}] 签到网络异常: ${e.message}`);
       return { success: false, msg: `网络错误: ${e.message}` };
+    }
+  }
+
+  // 每小时定时轮巡检测：前置过滤当天已签到的账号，未签到的账号或进入新一天时自动补签
+  static async checkAndRunHourlyCheckin(force = false) {
+    const today = getTodayString();
+    let checkedCount = 0;
+    let skippedCount = 0;
+
+    for (const acc of accounts) {
+      if (!acc.accessToken || acc.status !== 'healthy') continue;
+
+      // 检查当天签到状态：如果当天已完成，则跳过，直至次日零点跨天后再检测
+      const isAlreadyDoneToday = acc.lastCheckinDate === today && (acc.lastCheckinSuccess || acc.lastCheckinMsg?.includes('已签到') || acc.lastCheckinMsg?.includes('成功'));
+      if (!force && isAlreadyDoneToday) {
+        skippedCount++;
+        continue;
+      }
+
+      // 未签到或已跨入新的一天，进行签到
+      const res = await this.dailyCheckin(acc, force);
+      if (res.success) checkedCount++;
+    }
+
+    if (checkedCount > 0) {
+      Logger.info('SCHEDULER', `每小时签到巡检：成功为 ${checkedCount} 个未签到账号完成签到，${skippedCount} 个账号今日已签自动跳过`);
     }
   }
 

@@ -126,17 +126,12 @@ setInterval(() => {
   Logger.pruneOldLogs(3);
 }, 60 * 60 * 1000);
 
-if (config.autoCheckin) {
+// 每小时自动巡检签到状态：如果当天已签到则直接跳过，次日跨天或有未签到账号时自动补签
+if (config.autoCheckin !== false) {
+  AccountScheduler.checkAndRunHourlyCheckin(false);
   setInterval(() => {
-    const hour = new Date().getHours();
-    const minute = new Date().getMinutes();
-    if ((hour === 9 || hour === 21) && minute === 0) {
-      Logger.info('SCHEDULER', '定时打卡排程触发，开始全员每日签到...');
-      for (const acc of accounts) {
-        AccountScheduler.dailyCheckin(acc);
-      }
-    }
-  }, 60 * 1000);
+    AccountScheduler.checkAndRunHourlyCheckin(false);
+  }, 60 * 60 * 1000);
 }
 
 // 启动时初始化：清理过期日志并主动预热刷新所有账号积分

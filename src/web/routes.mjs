@@ -293,8 +293,8 @@ export async function handleApiRoutes(req, res, url) {
         inFlight: a.inFlight || 0,
         status: a.status,
         isCooldown: Date.now() < (a.cooldownUntil || 0),
-        isCheckedInToday: a.lastCheckinDate === today,
-        lastCheckinMsg: a.lastCheckinDate === today ? (a.lastCheckinMsg || '今天已签到') : '今日未签到'
+        isCheckedInToday: a.lastCheckinDate === today && (a.lastCheckinSuccess || a.lastCheckinMsg?.includes('已签到') || a.lastCheckinMsg?.includes('成功')),
+        lastCheckinMsg: (a.lastCheckinDate === today && (a.lastCheckinSuccess || a.lastCheckinMsg?.includes('已签到') || a.lastCheckinMsg?.includes('成功'))) ? (a.lastCheckinMsg || '今天已签到') : '今日未签到'
       };
     })));
   }
@@ -455,11 +455,12 @@ export async function handleApiRoutes(req, res, url) {
   if (url.pathname === '/api/checkin' && req.method === 'POST') {
     const results = [];
     for (const acc of accounts) {
-      const resObj = await AccountScheduler.dailyCheckin(acc);
+      const resObj = await AccountScheduler.dailyCheckin(acc, true);
       results.push({
         uid: acc.uid,
         email: acc.email,
         success: resObj.success,
+        alreadyCheckedIn: Boolean(resObj.alreadyCheckedIn),
         msg: resObj.msg
       });
     }
@@ -475,13 +476,13 @@ export async function handleApiRoutes(req, res, url) {
     let b = '';
     req.on('data', c => b += c);
     req.on('end', async () => {
-      const { uid } = JSON.parse(b);
+      const { uid, force } = JSON.parse(b);
       const acc = accounts.find(a => a.uid === uid);
       if (!acc) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'Account not found' }));
       }
-      const resObj = await AccountScheduler.dailyCheckin(acc);
+      const resObj = await AccountScheduler.dailyCheckin(acc, force !== false);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(resObj));
     });

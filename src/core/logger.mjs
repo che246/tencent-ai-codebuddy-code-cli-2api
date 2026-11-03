@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { LOG_FILE_PATH } from '../config.mjs';
+import { LOG_FILE_PATH, getLocalTimeString } from '../config.mjs';
 import { LogDatabase } from './database.mjs';
 
 // ─── 统一诊断日志系统 (Logger & SQLite Database) ───────────────────────────
@@ -9,7 +9,7 @@ export class Logger {
   static maxBufferSize = 1000;
 
   static write(level, category, message, meta = null) {
-    const time = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const time = getLocalTimeString();
     const date = time.slice(0, 10);
     const id = crypto.randomUUID().slice(0, 8);
     const logItem = {

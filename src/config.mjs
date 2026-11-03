@@ -74,6 +74,17 @@ export function getTodayString() {
   return `${year}-${month}-${day}`;
 }
 
+export function getLocalTimeString(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  const seconds = pad(d.getSeconds());
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
 // ─── 统一账号展示标识工具函数 (强制附带备注，防止同昵称混淆) ───────────────
 export function formatAccountLogName(acc) {
   if (!acc) return '未知账号';
