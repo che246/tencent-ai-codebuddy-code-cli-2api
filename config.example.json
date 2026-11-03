@@ -4,6 +4,7 @@
   "webAuthEnabled": true,
   "webPassword": "",
   "autoCheckin": true,
+  "tokenRefreshAdvanceDays": 7,
   "maxLogDbSizeMb": 30,
   "pinnedAccount": "",
   "routingStrategy": "least-inflight",

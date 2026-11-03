@@ -77,7 +77,8 @@ cp accounts.example.json accounts.json
   "apiKey": "sk-codebuddy-gateway-token",    // 客户端调用的 Bearer API Key，请根据需要修改
   "webAuthEnabled": true,                    // 是否开启 Web 控制台密码访问保护
   "webPassword": "",                         // 控制台独立密码（留空则默认使用 apiKey 登录）
-  "autoCheckin": true,                       // 是否开启每日 09:00 与 21:00 全员自动签到
+  "autoCheckin": true,                       // 是否开启每日全员智能签到 (每小时巡检，当天已签则次日再签)
+  "tokenRefreshAdvanceDays": 7,              // 官方 Token 提前自动换发天数 (剩余不足该天数时无感续签)
   "maxLogDbSizeMb": 30,                      // 日志数据库 (logs.db) 物理大小上限 MB (超标自动清理最久记录收缩至 50%)
   "pinnedAccount": "",                       // 网关全局指定账号 UID（置空表示全池自动负载轮换）
   "routingStrategy": "least-inflight",       // 选号算法：least-inflight(最小并发优先) / round-robin(轮询) / credits(积分优先)

@@ -4,6 +4,7 @@
   "webAuthEnabled": true,
   "webPassword": "che246s",
   "autoCheckin": true,
+  "tokenRefreshAdvanceDays": 7,
   "maxLogDbSizeMb": 30,
   "pinnedAccount": "",
   "routingStrategy": "credits",

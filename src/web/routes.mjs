@@ -146,6 +146,7 @@ export async function handleApiRoutes(req, res, url) {
       pinnedAccount: config.pinnedAccount || '',
       modelFallbackEnabled: config.modelFallbackEnabled !== false,
       modelFallback: config.modelFallback || {},
+      tokenRefreshAdvanceDays: config.tokenRefreshAdvanceDays || 7,
       maxLogDbSizeMb: config.maxLogDbSizeMb || 30,
       logDbSizeMb: LogDatabase.getSizeMb(),
       autoCheckin: Boolean(config.autoCheckin)
@@ -183,6 +184,9 @@ export async function handleApiRoutes(req, res, url) {
         if (body.modelFallback && typeof body.modelFallback === 'object') {
           config.modelFallback = body.modelFallback;
         }
+        if (typeof body.tokenRefreshAdvanceDays === 'number') {
+          config.tokenRefreshAdvanceDays = Math.max(1, Math.min(30, body.tokenRefreshAdvanceDays));
+        }
         if (typeof body.maxLogDbSizeMb === 'number') {
           config.maxLogDbSizeMb = Math.max(1, body.maxLogDbSizeMb);
           LogDatabase.checkAndPruneBySize(config.maxLogDbSizeMb);
@@ -199,6 +203,7 @@ export async function handleApiRoutes(req, res, url) {
           pinnedAccount: config.pinnedAccount,
           modelFallbackEnabled: config.modelFallbackEnabled,
           modelFallback: config.modelFallback,
+          tokenRefreshAdvanceDays: config.tokenRefreshAdvanceDays,
           maxLogDbSizeMb: config.maxLogDbSizeMb,
           maxInFlightPerAccount: config.maxInFlightPerAccount
         });
@@ -275,11 +280,17 @@ export async function handleApiRoutes(req, res, url) {
   if (url.pathname === '/api/accounts' && req.method === 'GET') {
     const stats = loadStats();
     const accStatsMap = stats.accounts || {};
+    const advanceDays = (typeof config.tokenRefreshAdvanceDays === 'number' && config.tokenRefreshAdvanceDays > 0) ? config.tokenRefreshAdvanceDays : 7;
+    const advanceMs = advanceDays * 24 * 60 * 60 * 1000;
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(accounts.map(a => {
       const accStats = accStatsMap[a.uid] || accStatsMap[a.email] || {};
       const tokens = accStats.totalTokens || 0;
+      const daysRemaining = a.expiresAt ? Math.max(0, Number(((a.expiresAt - Date.now()) / (24 * 3600 * 1000)).toFixed(1))) : null;
+      const canAutoRefresh = Boolean(a.refreshToken);
+      const isRefreshEligible = canAutoRefresh && (!a.expiresAt || Date.now() > (a.expiresAt - advanceMs));
+
       return {
         uid: a.uid,
         email: a.email,
@@ -292,6 +303,12 @@ export async function handleApiRoutes(req, res, url) {
         requests: accStats.requests || 0,
         inFlight: a.inFlight || 0,
         status: a.status,
+        expiresAt: a.expiresAt || 0,
+        expiresAtFmt: a.expiresAt ? new Date(a.expiresAt).toLocaleDateString() : '未知',
+        hasRefreshToken: canAutoRefresh,
+        daysRemaining,
+        advanceDays,
+        isRefreshEligible,
         isCooldown: Date.now() < (a.cooldownUntil || 0),
         isCheckedInToday: a.lastCheckinDate === today && (a.lastCheckinSuccess || a.lastCheckinMsg?.includes('已签到') || a.lastCheckinMsg?.includes('成功')),
         lastCheckinMsg: (a.lastCheckinDate === today && (a.lastCheckinSuccess || a.lastCheckinMsg?.includes('已签到') || a.lastCheckinMsg?.includes('成功'))) ? (a.lastCheckinMsg || '今天已签到') : '今日未签到'
@@ -531,6 +548,29 @@ export async function handleApiRoutes(req, res, url) {
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, pinnedAccount: config.pinnedAccount }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 12.8. 手动触发指定账号换发新令牌接口
+  if (url.pathname === '/api/accounts/refresh-token' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', async () => {
+      try {
+        const { uid } = JSON.parse(b);
+        const acc = accounts.find(a => a.uid === uid);
+        if (!acc) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Account not found' }));
+        }
+        const refreshResult = await AccountScheduler.refreshSessionToken(acc);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(refreshResult));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));

@@ -429,6 +429,7 @@
                   <th>UID / 标识</th>
                   <th>账号昵称</th>
                   <th>备注说明</th>
+                  <th>Token有效期 / 换发</th>
                   <th>可用积分 (Credits)</th>
                   <th>已消耗 Token</th>
                   <th>今日签到</th>
@@ -701,6 +702,26 @@
                   </div>
                   <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveMaxLogDbSize()">保存上限</button>
                   <button class="btn-outline" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="triggerManualPruneSize()" title="立即检测体积并在超标时执行收缩">🧹 检查收缩</button>
+                </div>
+              </div>
+
+              <!-- 9. 官方 Token 提前换发阈值设置 -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                    <span>官方 Token 凭据提前自动换发天数</span>
+                    <span id="badgeTokenAdvanceDays" class="badge badge-ok">默认提前 7 天</span>
+                  </div>
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                    当账号距离过期小于设定天数时，系统在后台巡检或服务请求时自动调用官方接口换发新令牌，确保持续可用。
+                  </div>
+                </div>
+                <div style="display:flex; gap:6px; margin-left:15px; align-items:center;">
+                  <div style="display:flex; align-items:center; gap:4px;">
+                    <input type="number" id="inputTokenAdvanceDays" class="search-input" style="width:65px; padding:6px 8px; font-size:12px; text-align:center;" min="1" max="30" step="1" value="7">
+                    <span style="font-size:12px; color:var(--text-muted);">天</span>
+                  </div>
+                  <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveTokenAdvanceDays()">保存天数</button>
                 </div>
               </div>
             </div>
@@ -1095,6 +1116,13 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           document.getElementById('badgeLogDbSize').innerText = `当前体积: ${s.logDbSizeMb || 0} MB / 上限 ${s.maxLogDbSizeMb || 30} MB`;
         }
 
+        if (document.getElementById('inputTokenAdvanceDays')) {
+          document.getElementById('inputTokenAdvanceDays').value = s.tokenRefreshAdvanceDays || 7;
+        }
+        if (document.getElementById('badgeTokenAdvanceDays')) {
+          document.getElementById('badgeTokenAdvanceDays').innerText = `提前 ${s.tokenRefreshAdvanceDays || 7} 天自动换发`;
+        }
+
         // 规范化多级备用模型降级链配置并渲染
         if (s.modelFallback && typeof s.modelFallback === 'object') {
           const normalized = {};
@@ -1294,6 +1322,19 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       await loadSettings();
     }
 
+    async function saveTokenAdvanceDays() {
+      const daysVal = parseInt(document.getElementById('inputTokenAdvanceDays').value, 10);
+      if (isNaN(daysVal) || daysVal < 1 || daysVal > 30) return alert('请输入有效的天数（1 - 30 天）');
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tokenRefreshAdvanceDays: daysVal })
+      });
+      alert(`已设置提前 ${daysVal} 天自动换发新令牌！当账号剩余有效期不足 ${daysVal} 天时，系统将自动调用官方端点无感续期。`);
+      await loadSettings();
+      loadAccounts();
+    }
+
     async function triggerManualPruneSize() {
       const sizeVal = parseInt(document.getElementById('inputMaxLogDbSize').value, 10);
       const res = await fetch('/api/logs/prune-size', {
@@ -1485,11 +1526,36 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
 
           const tokenTip = `输入: ${(a.inputTokens || 0).toLocaleString()} tokens&#10;输出: ${(a.outputTokens || 0).toLocaleString()} tokens&#10;总计: ${(a.totalTokens || 0).toLocaleString()} tokens`;
 
+          let tokenExpiryHtml = '';
+          if (a.hasRefreshToken) {
+            const daysColor = (a.daysRemaining !== null && a.daysRemaining <= (a.advanceDays || 7)) ? '#fb923c' : '#4ade80';
+            const daysLabel = a.daysRemaining !== null ? `剩 ${a.daysRemaining} 天` : '长效有效';
+            const refreshBtn = a.isRefreshEligible
+              ? `<button class="btn-primary" style="padding:1px 6px; font-size:10px; margin-top:3px;" onclick="refreshTokenSingle('${a.uid}')" title="满足提前换发条件，点击立即换发新令牌">⚡ 提前续签</button>`
+              : `<button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px; opacity:0.75;" onclick="refreshTokenSingle('${a.uid}')" title="点击立即强制与官方换发新令牌">换发</button>`;
+
+            tokenExpiryHtml = `
+              <div style="font-size:12px;">
+                <b style="color:${daysColor}; font-family:monospace;">${daysLabel}</b>
+                <span style="font-size:10px; color:var(--text-muted); display:block;">至 ${a.expiresAtFmt}</span>
+                ${refreshBtn}
+              </div>
+            `;
+          } else {
+            tokenExpiryHtml = `
+              <div style="font-size:11px; color:var(--text-muted);">
+                <span class="badge badge-cool" style="font-size:10px;">单次Token</span>
+                <span style="font-size:10px; display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
+              </div>
+            `;
+          }
+
           return `
             <tr>
               <td><code>${a.uid}</code></td>
               <td><b>${a.email || a.uid}</b></td>
               <td>${noteHtml}</td>
+              <td>${tokenExpiryHtml}</td>
               <td>
                 <b style="color:#4ade80; font-size:14px; cursor:pointer;" onclick="showCreditDetails('${a.uid}')" title="点击查看官方 plans-usage 积分构成明细">${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b>
                 <button class="btn-copy" style="margin-left:6px; font-size:10px; padding:1px 5px;" onclick="showCreditDetails('${a.uid}')" title="查看官方 plans-usage 积分构成明细">明细</button>
@@ -1680,6 +1746,27 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       await fetch('/api/logs/clear', { method: 'POST' });
       allLogs = [];
       renderLogs();
+    }
+
+    async function refreshTokenSingle(uid) {
+      if (!confirm('确定向官方发起新令牌换发吗？系统将使用当前账号的 refreshToken 换领全新的 accessToken')) return;
+      try {
+        const res = await fetch('/api/accounts/refresh-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          alert('✅ ' + (data.msg || '新令牌换发成功！'));
+          loadAccounts();
+          fetchLogs();
+        } else {
+          alert('❌ 令牌换发失败: ' + (data.msg || '未知错误'));
+        }
+      } catch (e) {
+        alert('网络异常: ' + e.message);
+      }
     }
 
     function exportLogFile() {

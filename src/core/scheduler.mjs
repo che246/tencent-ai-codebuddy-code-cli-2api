@@ -268,8 +268,13 @@ export class AccountScheduler {
 
   static async refreshCredits(acc) {
     if (!acc.accessToken) return;
-    // 检查是否需要根据官方 /v2/plugin/auth/token/refresh 自动续期
-    if (acc.refreshToken && acc.expiresAt && (Date.now() > acc.expiresAt - 15 * 60 * 1000)) {
+    // 检查是否需要根据官方 /v2/plugin/auth/token/refresh 提前换发新令牌 (默认提前 7 天)
+    const advanceDays = (typeof config.tokenRefreshAdvanceDays === 'number' && config.tokenRefreshAdvanceDays > 0) ? config.tokenRefreshAdvanceDays : 7;
+    const advanceMs = advanceDays * 24 * 60 * 60 * 1000;
+    const needsRefresh = acc.refreshToken && (!acc.expiresAt || Date.now() > (acc.expiresAt - advanceMs));
+
+    if (needsRefresh) {
+      Logger.info('AUTH', `账号 [${formatAccountFullDesc(acc)}] 满足提前 ${advanceDays} 天换发条件，正在换发新令牌...`);
       await this.refreshSessionToken(acc);
     }
     try {
@@ -316,9 +321,9 @@ export class AccountScheduler {
     }
   }
 
-  // 官方同款 Token 续期 (对齐 package: ExternalLinkAuthenticationProvider.refreshSession)
+  // 官方同款 Token 续期换发 (对齐 package: ExternalLinkAuthenticationProvider.refreshSession)
   static async refreshSessionToken(acc) {
-    if (!acc.refreshToken) return;
+    if (!acc.refreshToken) return { ok: false, msg: '该账号缺少 refreshToken，需重新扫码授权' };
     try {
       const res = await fetch('https://copilot.tencent.com/v2/plugin/auth/token/refresh', {
         method: 'POST',
@@ -338,14 +343,27 @@ export class AccountScheduler {
           acc.accessToken = newAccess;
           const newRefresh = payload.refresh_token || payload.refreshToken;
           if (newRefresh) acc.refreshToken = newRefresh;
-          const expIn = payload.expires_in || payload.expiresIn || 7200;
+          const expIn = payload.expires_in || payload.expiresIn || 2592000;
           acc.expiresAt = Date.now() + expIn * 1000;
-          Logger.info('AUTH', `账号 [${formatAccountFullDesc(acc)}] 官方 Token 自动续期成功 (有效期至: ${new Date(acc.expiresAt).toLocaleTimeString()})`);
+          acc.status = 'healthy';
+          Logger.info('AUTH', `账号 [${formatAccountFullDesc(acc)}] 官方 Token 提前换发成功！(新有效时间: ${(expIn / 86400).toFixed(1)}天, 有效期至: ${new Date(acc.expiresAt).toLocaleString()})`);
           saveAccounts();
+          return {
+            ok: true,
+            expiresAt: acc.expiresAt,
+            expiresIn: expIn,
+            msg: `新令牌换发成功，有效期至 ${new Date(acc.expiresAt).toLocaleDateString()}`
+          };
+        } else {
+          return { ok: false, msg: data.msg || '上游返回数据未包含有效 Token' };
         }
+      } else {
+        const errText = await res.text();
+        return { ok: false, msg: `上游返回 HTTP ${res.status}: ${errText}` };
       }
     } catch (e) {
       Logger.warn('AUTH', `账号 [${formatAccountFullDesc(acc)}] 官方 Token 续期异常: ${e.message}`);
+      return { ok: false, msg: e.message };
     }
   }
 
