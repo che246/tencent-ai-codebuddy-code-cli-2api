@@ -215,7 +215,15 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                 const otherAcc = canFailoverAccount ? AccountScheduler.selectAccount(curModel, sessionKey, { excludeUids: Array.from(attemptedUids) }) : null;
 
                 if (otherAcc) {
-                  Logger.warn('FAILOVER', `Anthropic 协议: 账号 [${formatAccountLogName(acc)}] 模型 [${curModel}] 触发限流，自动切换至账号池中可用账号 [${formatAccountLogName(otherAcc)}] 续跑该模型！`);
+                  const wasPinned = config.pinnedAccount && (
+                    config.pinnedAccount === acc.uid ||
+                    config.pinnedAccount === acc.email ||
+                    (acc.note && config.pinnedAccount.toLowerCase() === acc.note.toLowerCase())
+                  );
+                  const failoverMsg = wasPinned
+                    ? `Anthropic 协议: 全局指定账号 [${formatAccountLogName(acc)}] 遇到限制 (模型 [${curModel}] 限流)，已自动切换回账号池动态轮换，由账号 [${formatAccountLogName(otherAcc)}] 接力服务！`
+                    : `Anthropic 协议: 账号 [${formatAccountLogName(acc)}] 模型 [${curModel}] 触发限流，自动切换至账号池中可用账号 [${formatAccountLogName(otherAcc)}] 续跑该模型！`;
+                  Logger.warn('FAILOVER', failoverMsg);
                   continue; // 换账号重试当前模型
                 }
 
@@ -231,10 +239,18 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                 if (sessionKey && sessionStickyMap.get(sessionKey)?.uid === acc.uid) {
                   sessionStickyMap.delete(sessionKey);
                 }
+                const wasPinned = config.pinnedAccount && (config.pinnedAccount === acc.uid || config.pinnedAccount === acc.email);
+                if (wasPinned) {
+                  Logger.warn('FAILOVER', `Anthropic 协议: 全局指定账号 [${formatAccountLogName(acc)}] 额度耗尽 (HTTP 402)，已自动切换回账号池动态轮换！`);
+                }
                 continue; // 切换其他账号
               } else if (upstreamRes.status === 401) {
                 acc.status = 'unauthorized';
                 Logger.error('AUTH', `账号 [${formatAccountLogName(acc)}] Token 已失效或被收回 (HTTP 401)`);
+                const wasPinned = config.pinnedAccount && (config.pinnedAccount === acc.uid || config.pinnedAccount === acc.email);
+                if (wasPinned) {
+                  Logger.warn('FAILOVER', `Anthropic 协议: 全局指定账号 [${formatAccountLogName(acc)}] Token 失效 (HTTP 401)，已自动切换回账号池动态轮换！`);
+                }
                 continue; // 切换其他账号
               }
 

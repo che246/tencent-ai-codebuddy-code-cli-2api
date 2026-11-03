@@ -1289,18 +1289,31 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         if (ca.hasAccount) {
           const titleTxt = ca.displayName || (ca.note ? `${ca.name} [${ca.note}]` : ca.name);
           if (nameEl) nameEl.innerText = titleTxt;
-          if (pillEl) pillEl.innerText = `👤 当前账号: ${titleTxt}`;
-          if (badgeEl) {
-            badgeEl.className = 'badge ' + (ca.isPinned ? 'badge-purple' : 'badge-ok');
-            badgeEl.innerText = ca.isPinned ? '⭐ 全局指定' : '🔄 池动态轮换';
+
+          if (ca.pinnedRestricted) {
+            if (pillEl) pillEl.innerText = `👤 当前账号: ${titleTxt} (指定受限·已切回轮换)`;
+            if (badgeEl) {
+              badgeEl.className = 'badge badge-cool';
+              badgeEl.innerText = '⚠️ 指定受限 · 已切回池轮换';
+            }
+            if (subEl) {
+              subEl.innerText = `全局指定账号 [${ca.pinnedAccountName}] 遇到限制 (${ca.restrictedReason})，已自动切换回账号池动态轮换服务`;
+            }
+          } else {
+            if (pillEl) pillEl.innerText = `👤 当前账号: ${titleTxt}`;
+            if (badgeEl) {
+              badgeEl.className = 'badge ' + (ca.isPinned ? 'badge-purple' : 'badge-ok');
+              badgeEl.innerText = ca.isPinned ? '⭐ 全局指定' : '🔄 池动态轮换';
+            }
+            if (subEl) {
+              subEl.innerText = `UID: ${ca.uid} · ${ca.modeLabel}`;
+            }
           }
-          if (subEl) {
-            subEl.innerText = `UID: ${ca.uid} · ${ca.modeLabel}`;
-          }
+
           if (credEl) credEl.innerText = Number(ca.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
           if (infEl) infEl.innerText = `${ca.inFlight || 0} 并发`;
           if (stratEl) {
-            stratEl.innerText = ca.isPinned ? '优先指定' : (ca.strategy === 'round-robin' ? '严格轮询' : ca.strategy === 'credits' ? '最多积分' : '最小并发削峰');
+            stratEl.innerText = (ca.isPinned && !ca.pinnedRestricted) ? '优先指定' : (ca.strategy === 'round-robin' ? '严格轮询' : ca.strategy === 'credits' ? '最多积分' : '最小并发削峰');
           }
         } else {
           if (nameEl) nameEl.innerText = '暂无可用账号';

@@ -36,10 +36,8 @@ export class AccountScheduler {
     const strategy = options.strategy || config.routingStrategy || 'least-inflight';
 
     // 1. 优先检查：网关侧全局指定账号 (config.pinnedAccount)
-    const targetAccount = (!excludeUids.includes(config.pinnedAccount) && config.pinnedAccount) ? config.pinnedAccount : null;
-
-    if (targetAccount) {
-      const target = String(targetAccount).trim().toLowerCase();
+    if (config.pinnedAccount) {
+      const target = String(config.pinnedAccount).trim().toLowerCase();
       const matched = accounts.find(a => 
         (a.uid && a.uid.toLowerCase() === target) ||
         (a.uin && String(a.uin).toLowerCase() === target) ||
@@ -48,14 +46,21 @@ export class AccountScheduler {
       );
 
       if (matched) {
-        if (matched.status !== 'healthy') {
-          Logger.warn('DISPATCH', `网关指定账号 [${target}] 状态异常 (${matched.status})，降级回账号池自动调度`);
+        let restrictedReason = null;
+        if (excludeUids.includes(matched.uid)) {
+          restrictedReason = '本轮重试已尝试过';
+        } else if (matched.status !== 'healthy') {
+          restrictedReason = `状态异常 (${matched.status})`;
         } else if (now < (matched.cooldownUntil || 0)) {
-          Logger.warn('DISPATCH', `网关指定账号 [${target}] 正处于全局冷却中，降级回账号池自动调度`);
+          restrictedReason = `处于全局冷却期 (剩 ${Math.ceil((matched.cooldownUntil - now) / 1000)}秒)`;
         } else if (requestedModel && matched.modelCooldowns?.[requestedModel] && now < matched.modelCooldowns[requestedModel]) {
-          Logger.warn('DISPATCH', `网关指定账号 [${target}] 对模型 [${requestedModel}] 限流冷却中，降级回账号池自动调度`);
+          restrictedReason = `模型 [${requestedModel}] 处于限流冷却中 (剩 ${Math.ceil((matched.modelCooldowns[requestedModel] - now) / 1000)}秒)`;
         } else if (config.concurrencyLimitEnabled !== false && (matched.inFlight || 0) >= maxLimit) {
-          Logger.warn('DISPATCH', `网关指定账号 [${target}] 达到并发上限 (${matched.inFlight}/${maxLimit})，降级回账号池自动调度`);
+          restrictedReason = `并发达到上限 (${matched.inFlight}/${maxLimit})`;
+        }
+
+        if (restrictedReason) {
+          Logger.warn('DISPATCH', `全局指定账号 [${formatAccountLogName(matched)}] 受到限制 (${restrictedReason})，已自动切换回账号池动态轮换`);
         } else {
           Logger.info('DISPATCH', `精准路由至网关全局指定账号 [${formatAccountFullDesc(matched)}]`);
           this.lastDispatchedUid = matched.uid;
@@ -63,7 +68,7 @@ export class AccountScheduler {
           return matched;
         }
       } else {
-        Logger.warn('DISPATCH', `未找到网关指定账号 [${target}]，自动切换至账号池调度`);
+        Logger.warn('DISPATCH', `未找到全局指定账号 [${target}]，自动切换至账号池调度`);
       }
     }
 
@@ -148,31 +153,63 @@ export class AccountScheduler {
   static getCurrentActiveAccountInfo() {
     const now = Date.now();
     const isPinned = Boolean(config.pinnedAccount);
-    const pinnedAcc = isPinned ? accounts.find(a => a.uid === config.pinnedAccount) : null;
+    const target = isPinned ? String(config.pinnedAccount).trim().toLowerCase() : '';
+    const pinnedAcc = isPinned ? accounts.find(a => 
+      (a.uid && a.uid.toLowerCase() === target) ||
+      (a.uin && String(a.uin).toLowerCase() === target) ||
+      (a.email && a.email.toLowerCase() === target) ||
+      (a.note && a.note.toLowerCase().includes(target))
+    ) : null;
 
     let activeAcc = null;
     let mode = 'pool';
     let modeLabel = '账号池自动轮换';
+    let pinnedRestricted = false;
+    let restrictedReason = '';
 
     if (pinnedAcc) {
-      activeAcc = pinnedAcc;
-      mode = 'pinned';
-      modeLabel = '全局指定账号';
-    } else if (this.lastDispatchedUid) {
+      if (pinnedAcc.status !== 'healthy') {
+        pinnedRestricted = true;
+        restrictedReason = `状态异常 (${pinnedAcc.status})`;
+      } else if (pinnedAcc.cooldownUntil && now < pinnedAcc.cooldownUntil) {
+        pinnedRestricted = true;
+        restrictedReason = `全局冷却期 (剩 ${Math.ceil((pinnedAcc.cooldownUntil - now) / 1000)}秒)`;
+      } else if (pinnedAcc.modelCooldowns && Object.values(pinnedAcc.modelCooldowns).some(exp => now < exp)) {
+        pinnedRestricted = true;
+        restrictedReason = `部分模型限流冷却中`;
+      }
+
+      if (!pinnedRestricted) {
+        activeAcc = pinnedAcc;
+        mode = 'pinned';
+        modeLabel = '全局指定账号 (服务中)';
+      } else {
+        // 全局指定账号遇到限制，自动切换回池动态轮换！
+        mode = 'pool';
+        modeLabel = `账号池动态轮换 (指定账号受限: ${restrictedReason})`;
+      }
+    }
+
+    if (!activeAcc && this.lastDispatchedUid) {
       activeAcc = accounts.find(a => a.uid === this.lastDispatchedUid && a.status === 'healthy');
-      modeLabel = '账号池调度 (最近执行)';
+      if (activeAcc && !modeLabel.includes('指定账号受限')) {
+        modeLabel = '账号池调度 (最近执行)';
+      }
     }
 
     if (!activeAcc && accounts.length > 0) {
       const candidates = accounts.filter(a => a.status === 'healthy' && now > (a.cooldownUntil || 0));
       activeAcc = candidates[0] || accounts[0];
-      modeLabel = '账号池调度 (当前就绪)';
+      if (!modeLabel.includes('指定账号受限')) {
+        modeLabel = '账号池调度 (当前就绪)';
+      }
     }
 
     if (!activeAcc) {
       return {
         hasAccount: false,
         isPinned: false,
+        pinnedRestricted: false,
         mode: 'none',
         modeLabel: '暂无可用账号',
         displayName: '暂无账号',
@@ -192,6 +229,9 @@ export class AccountScheduler {
     return {
       hasAccount: true,
       isPinned,
+      pinnedRestricted,
+      restrictedReason,
+      pinnedAccountName: pinnedAcc ? (pinnedAcc.note ? `${pinnedAcc.email || pinnedAcc.uid} [${pinnedAcc.note}]` : (pinnedAcc.email || pinnedAcc.uid)) : '',
       mode,
       modeLabel,
       uid: activeAcc.uid,
