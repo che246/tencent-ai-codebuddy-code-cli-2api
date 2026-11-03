@@ -1549,7 +1549,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
                 <span class="badge badge-cool" style="font-size:9px; padding:1px 4px;" title="手动录入或未记录 refreshToken，到期前需重新扫码">无刷新令牌</span>
                 <b style="color:${daysColor}; font-family:monospace; margin-left:2px;">${daysLabel}</b>
                 <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
-                <button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px;" onclick="openOAuthModal()" title="重新扫码授权即可获取长效 refreshToken 实现永久自动续签">扫码补齐</button>
+                <button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px;" onclick="startOAuth()" title="重新扫码授权即可获取长效 refreshToken 实现永久自动续签">扫码补齐</button>
               </div>
             `;
           }
