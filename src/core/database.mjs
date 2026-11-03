@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { ROOT_DIR, LOG_FILE_PATH } from '../config.mjs';
+import { ROOT_DIR, LOG_FILE_PATH, config } from '../config.mjs';
 
 const require = createRequire(import.meta.url);
 export const DB_PATH = path.resolve(ROOT_DIR, 'logs.db');
@@ -10,6 +10,7 @@ class LogDatabaseEngine {
   constructor() {
     this.sqliteDb = null;
     this.useSqlite = false;
+    this.insertCount = 0;
     this.init();
   }
 
@@ -88,9 +89,84 @@ class LogDatabaseEngine {
     if (this.useSqlite && this.insertStmt) {
       try {
         this.insertStmt.run(time, date, level.toUpperCase(), category.toUpperCase(), message, metaStr, Date.now());
+        this.insertCount++;
+        // 每 100 次写入检测一次物理文件大小是否超限
+        if (this.insertCount % 100 === 0) {
+          this.checkAndPruneBySize();
+        }
         return;
       } catch (_) {}
     }
+  }
+
+  getSizeBytes() {
+    if (!fs.existsSync(DB_PATH)) return 0;
+    try {
+      return fs.statSync(DB_PATH).size;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  getSizeMb() {
+    const bytes = this.getSizeBytes();
+    return Number((bytes / (1024 * 1024)).toFixed(2));
+  }
+
+  // ─── 数据库大小熔断机制：超过上限 MB 则删除最久记录，并 VACUUM 紧凑收缩至 50% ───
+  checkAndPruneBySize(maxSizeMb = null) {
+    if (!this.useSqlite || !this.sqliteDb) return { ok: false, reason: 'sqlite_unavailable' };
+    if (!fs.existsSync(DB_PATH)) return { ok: false, reason: 'file_not_found' };
+
+    const limitMb = (typeof maxSizeMb === 'number' && maxSizeMb > 0) ? maxSizeMb : (config.maxLogDbSizeMb || 30);
+    const maxBytes = limitMb * 1024 * 1024;
+    const targetBytes = Math.floor(maxBytes / 2); // 目标回落到设置大小的一半 (50%)
+
+    const initialSize = this.getSizeBytes();
+    if (initialSize <= maxBytes) {
+      return { ok: true, pruned: false, beforeBytes: initialSize, afterBytes: initialSize, limitMb, targetBytes };
+    }
+
+    let iterations = 0;
+    let deletedRowsTotal = 0;
+    const maxIterations = 20;
+
+    while (iterations < maxIterations) {
+      iterations++;
+      const curSize = this.getSizeBytes();
+      if (curSize <= targetBytes) break;
+
+      const countRes = this.sqliteDb.prepare('SELECT count(*) as total FROM logs').get();
+      const totalRows = countRes?.total || 0;
+      if (totalRows <= 10) break; // 保护保留至少最新 10 条日志
+
+      const excessRatio = Math.max(0.1, Math.min(0.8, (curSize - targetBytes) / curSize));
+      const batchDeleteCount = Math.max(200, Math.floor(totalRows * excessRatio));
+
+      const delStmt = this.sqliteDb.prepare(`
+        DELETE FROM logs WHERE id IN (
+          SELECT id FROM logs ORDER BY id ASC LIMIT ?
+        )
+      `);
+      delStmt.run(batchDeleteCount);
+      deletedRowsTotal += batchDeleteCount;
+
+      // 执行 VACUUM 释放物理磁盘空间
+      this.sqliteDb.exec('VACUUM');
+    }
+
+    const finalSize = this.getSizeBytes();
+    return {
+      ok: true,
+      pruned: true,
+      deletedRows: deletedRowsTotal,
+      beforeBytes: initialSize,
+      beforeMb: Number((initialSize / 1024 / 1024).toFixed(2)),
+      afterBytes: finalSize,
+      afterMb: Number((finalSize / 1024 / 1024).toFixed(2)),
+      limitMb,
+      targetMb: Number((targetBytes / 1024 / 1024).toFixed(2))
+    };
   }
 
   queryLogs({ date = null, level = null, category = null, search = null, limit = 250, offset = 0 } = {}) {

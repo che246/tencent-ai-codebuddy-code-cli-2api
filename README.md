@@ -78,6 +78,7 @@ cp accounts.example.json accounts.json
   "webAuthEnabled": true,                    // 是否开启 Web 控制台密码访问保护
   "webPassword": "",                         // 控制台独立密码（留空则默认使用 apiKey 登录）
   "autoCheckin": true,                       // 是否开启每日 09:00 与 21:00 全员自动签到
+  "maxLogDbSizeMb": 30,                      // 日志数据库 (logs.db) 物理大小上限 MB (超标自动清理最久记录收缩至 50%)
   "pinnedAccount": "",                       // 网关全局指定账号 UID（置空表示全池自动负载轮换）
   "routingStrategy": "least-inflight",       // 选号算法：least-inflight(最小并发优先) / round-robin(轮询) / credits(积分优先)
   "accountFailoverEnabled": true,            // 单账号模型限流时是否自动跨账号换号续跑

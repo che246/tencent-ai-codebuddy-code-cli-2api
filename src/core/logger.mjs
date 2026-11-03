@@ -83,9 +83,10 @@ export class Logger {
     LogDatabase.clearLogs();
   }
 
-  // ─── 日志保留策略：严格仅保留最近 3 天的日志流水 ─────────────────────
+  // ─── 日志保留策略：保留指定天数，并根据 MB 上限自动收缩释放磁盘 ─────────────────────
   static pruneOldLogs(retentionDays = 3) {
     LogDatabase.pruneOldLogs(retentionDays);
+    LogDatabase.checkAndPruneBySize();
     if (!fs.existsSync(LOG_FILE_PATH)) return;
     try {
       const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;

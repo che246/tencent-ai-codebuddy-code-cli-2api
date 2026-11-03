@@ -4,6 +4,7 @@
   "webAuthEnabled": true,
   "webPassword": "che246s",
   "autoCheckin": true,
+  "maxLogDbSizeMb": 30,
   "pinnedAccount": "",
   "routingStrategy": "credits",
   "accountFailoverEnabled": true,
@@ -12,13 +13,7 @@
   "modelFallbackEnabled": true,
   "modelFallback": {
     "deepseek-v4.1-flash": [
-      "deepseek-v4-flash",
-      "glm-5.3-flash",
-      "hy3"
-    ],
-    "hy4-preview": [
-      "hy3-x",
-      "hy3"
+      "glm-5.3-flash"
     ]
   }
 }

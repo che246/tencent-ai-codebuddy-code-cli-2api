@@ -682,6 +682,27 @@
                   <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveWebPassword()">保存密码</button>
                 </div>
               </div>
+
+              <!-- 8. 日志数据库体积熔断收缩保护 (logs.db) -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                    <span>日志数据库容量熔断保护 (logs.db)</span>
+                    <span id="badgeLogDbSize" class="badge badge-blue">当前体积: -</span>
+                  </div>
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                    超过设定上限时，自动清理最久历史日志并 VACUUM 收缩至上限的 50%（如 30MB 降至 15MB）。
+                  </div>
+                </div>
+                <div style="display:flex; gap:6px; margin-left:15px; align-items:center;">
+                  <div style="display:flex; align-items:center; gap:4px;">
+                    <input type="number" id="inputMaxLogDbSize" class="search-input" style="width:70px; padding:6px 8px; font-size:12px; text-align:center;" min="5" max="1000" step="5" value="30">
+                    <span style="font-size:12px; color:var(--text-muted);">MB</span>
+                  </div>
+                  <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveMaxLogDbSize()">保存上限</button>
+                  <button class="btn-outline" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="triggerManualPruneSize()" title="立即检测体积并在超标时执行收缩">🧹 检查收缩</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1067,6 +1088,13 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           document.getElementById('inputWebPassword').value = s.webPassword || '';
         }
 
+        if (document.getElementById('inputMaxLogDbSize')) {
+          document.getElementById('inputMaxLogDbSize').value = s.maxLogDbSizeMb || 30;
+        }
+        if (document.getElementById('badgeLogDbSize')) {
+          document.getElementById('badgeLogDbSize').innerText = `当前体积: ${s.logDbSizeMb || 0} MB / 上限 ${s.maxLogDbSizeMb || 30} MB`;
+        }
+
         // 规范化多级备用模型降级链配置并渲染
         if (s.modelFallback && typeof s.modelFallback === 'object') {
           const normalized = {};
@@ -1252,6 +1280,35 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       });
       alert('控制台专属密码已更新！');
       await loadSettings();
+    }
+
+    async function saveMaxLogDbSize() {
+      const sizeVal = parseInt(document.getElementById('inputMaxLogDbSize').value, 10);
+      if (isNaN(sizeVal) || sizeVal < 1) return alert('请输入有效的 MB 容量上限（>= 1）');
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maxLogDbSizeMb: sizeVal })
+      });
+      alert(`已将 logs.db 自动清理阈值设置为 ${sizeVal} MB！当文件超过该大小时，将自动清理最久记录直至降至 ${Math.floor(sizeVal / 2)} MB`);
+      await loadSettings();
+    }
+
+    async function triggerManualPruneSize() {
+      const sizeVal = parseInt(document.getElementById('inputMaxLogDbSize').value, 10);
+      const res = await fetch('/api/logs/prune-size', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maxSizeMb: sizeVal })
+      });
+      const data = await res.json();
+      if (data.pruned) {
+        alert(`✅ 数据库体积超限，已清理最久历史日志 ${data.deletedRows} 条，体积从 ${data.beforeMb} MB 成功收缩至 ${data.afterMb} MB (目标 <= ${data.targetMb} MB)！`);
+      } else {
+        alert(`ℹ️ 当前 logs.db 体积 (${data.beforeMb || 0} MB) 未超过设定阈值 (${data.limitMb} MB)，无需缩减`);
+      }
+      await loadSettings();
+      fetchLogs();
     }
 
     let currentMetricsRange = 'all';

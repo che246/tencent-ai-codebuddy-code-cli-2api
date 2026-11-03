@@ -13,6 +13,7 @@ import {
   formatAccountFullDesc
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
+import { LogDatabase } from '../core/database.mjs';
 import { AccountScheduler } from '../core/scheduler.mjs';
 import { TlsCertificateStack } from '../core/tls-certs.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
@@ -145,6 +146,8 @@ export async function handleApiRoutes(req, res, url) {
       pinnedAccount: config.pinnedAccount || '',
       modelFallbackEnabled: config.modelFallbackEnabled !== false,
       modelFallback: config.modelFallback || {},
+      maxLogDbSizeMb: config.maxLogDbSizeMb || 30,
+      logDbSizeMb: LogDatabase.getSizeMb(),
       autoCheckin: Boolean(config.autoCheckin)
     }));
   }
@@ -180,6 +183,10 @@ export async function handleApiRoutes(req, res, url) {
         if (body.modelFallback && typeof body.modelFallback === 'object') {
           config.modelFallback = body.modelFallback;
         }
+        if (typeof body.maxLogDbSizeMb === 'number') {
+          config.maxLogDbSizeMb = Math.max(1, body.maxLogDbSizeMb);
+          LogDatabase.checkAndPruneBySize(config.maxLogDbSizeMb);
+        }
         if (typeof body.maxInFlightPerAccount === 'number') {
           config.maxInFlightPerAccount = Math.max(1, body.maxInFlightPerAccount);
         }
@@ -192,10 +199,11 @@ export async function handleApiRoutes(req, res, url) {
           pinnedAccount: config.pinnedAccount,
           modelFallbackEnabled: config.modelFallbackEnabled,
           modelFallback: config.modelFallback,
+          maxLogDbSizeMb: config.maxLogDbSizeMb,
           maxInFlightPerAccount: config.maxInFlightPerAccount
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true, config }));
+        return res.end(JSON.stringify({ ok: true, config, logDbSizeMb: LogDatabase.getSizeMb() }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
@@ -223,6 +231,23 @@ export async function handleApiRoutes(req, res, url) {
     const dates = Logger.getDates();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ dates }));
+  }
+
+  // 3.6. 手动触发根据 MB 阈值裁剪日志数据库
+  if (url.pathname === '/api/logs/prune-size' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      let reqMb = null;
+      try {
+        const body = JSON.parse(b || '{}');
+        if (typeof body.maxSizeMb === 'number') reqMb = body.maxSizeMb;
+      } catch (_) {}
+      const pruneRes = LogDatabase.checkAndPruneBySize(reqMb);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(pruneRes));
+    });
+    return;
   }
 
   // 4. 日志全量下载导出
