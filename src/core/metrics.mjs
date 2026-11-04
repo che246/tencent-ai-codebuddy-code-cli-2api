@@ -101,7 +101,7 @@ export function saveStats() {
   saveStatsSync();
 }
 
-export function recordApiCall({ accountUid = null, accountName = null, model = 'unknown', isSuccess = true, inputTokens = 0, outputTokens = 0 }) {
+export function recordApiCall({ accountUid = null, accountName = null, model = 'unknown', isSuccess = true, inputTokens = 0, outputTokens = 0, cachedTokens = 0 }) {
   const stats = loadStats();
   const today = getTodayString();
   const totalTokens = (inputTokens || 0) + (outputTokens || 0);
@@ -115,6 +115,7 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
   }
   stats.summary.totalInputTokens = (stats.summary.totalInputTokens || 0) + inputTokens;
   stats.summary.totalOutputTokens = (stats.summary.totalOutputTokens || 0) + outputTokens;
+  stats.summary.totalCachedTokens = (stats.summary.totalCachedTokens || 0) + (cachedTokens || 0);
   stats.summary.totalTokens = (stats.summary.totalTokens || 0) + totalTokens;
 
   // 2. 更新按模型统计
@@ -125,6 +126,7 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
       successRequests: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cachedTokens: 0,
       totalTokens: 0
     };
   }
@@ -133,6 +135,7 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
   if (isSuccess) m.successRequests += 1;
   m.inputTokens += inputTokens;
   m.outputTokens += outputTokens;
+  m.cachedTokens = (m.cachedTokens || 0) + (cachedTokens || 0);
   m.totalTokens += totalTokens;
 
   // 3. 更新按账号统计
@@ -146,6 +149,7 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
         successRequests: 0,
         inputTokens: 0,
         outputTokens: 0,
+        cachedTokens: 0,
         totalTokens: 0
       };
     }
@@ -155,6 +159,7 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
     if (isSuccess) accStat.successRequests += 1;
     accStat.inputTokens += inputTokens;
     accStat.outputTokens += outputTokens;
+    accStat.cachedTokens = (accStat.cachedTokens || 0) + (cachedTokens || 0);
     accStat.totalTokens += totalTokens;
   }
 
@@ -166,6 +171,7 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
       failedRequests: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cachedTokens: 0,
       totalTokens: 0,
       models: {},
       accounts: {}
@@ -176,27 +182,30 @@ export function recordApiCall({ accountUid = null, accountName = null, model = '
   if (isSuccess) d.successRequests += 1;
   d.inputTokens += inputTokens;
   d.outputTokens += outputTokens;
+  d.cachedTokens = (d.cachedTokens || 0) + (cachedTokens || 0);
   d.totalTokens += totalTokens;
 
   if (!d.models) d.models = {};
   if (!d.models[model]) {
-    d.models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    d.models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
   }
   d.models[model].requests += 1;
   if (isSuccess) d.models[model].successRequests += 1;
   d.models[model].inputTokens += inputTokens;
   d.models[model].outputTokens += outputTokens;
+  d.models[model].cachedTokens = (d.models[model].cachedTokens || 0) + (cachedTokens || 0);
   d.models[model].totalTokens += totalTokens;
 
   if (accountUid) {
     if (!d.accounts) d.accounts = {};
     if (!d.accounts[accountUid]) {
-      d.accounts[accountUid] = { uid: accountUid, name: accountName || accountUid, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      d.accounts[accountUid] = { uid: accountUid, name: accountName || accountUid, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
     }
     d.accounts[accountUid].requests += 1;
     if (isSuccess) d.accounts[accountUid].successRequests += 1;
     d.accounts[accountUid].inputTokens += inputTokens;
     d.accounts[accountUid].outputTokens += outputTokens;
+    d.accounts[accountUid].cachedTokens = (d.accounts[accountUid].cachedTokens || 0) + (cachedTokens || 0);
     d.accounts[accountUid].totalTokens += totalTokens;
   }
 
@@ -288,7 +297,7 @@ export function getMetricsReport(range = 'all') {
     }
   }
 
-  let totalTokens = 0, inputTokens = 0, outputTokens = 0;
+  let totalTokens = 0, inputTokens = 0, outputTokens = 0, cachedTokens = 0;
   let totalRequests = 0, successRequests = 0, failedRequests = 0;
   let activeDays = 0;
   const modelsMap = {};
@@ -304,29 +313,32 @@ export function getMetricsReport(range = 'all') {
       failedRequests += (d.failedRequests || 0);
       inputTokens += (d.inputTokens || 0);
       outputTokens += (d.outputTokens || 0);
+      cachedTokens += (d.cachedTokens || 0);
       totalTokens += (d.totalTokens || 0);
 
       dailyRows[date] = d;
 
       for (const [mName, mObj] of Object.entries(d.models || {})) {
         if (!modelsMap[mName]) {
-          modelsMap[mName] = { name: mName, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+          modelsMap[mName] = { name: mName, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
         }
         modelsMap[mName].requests += (mObj.requests || 0);
         modelsMap[mName].successRequests += (mObj.successRequests || 0);
         modelsMap[mName].inputTokens += (mObj.inputTokens || 0);
         modelsMap[mName].outputTokens += (mObj.outputTokens || 0);
+        modelsMap[mName].cachedTokens += (mObj.cachedTokens || 0);
         modelsMap[mName].totalTokens += (mObj.totalTokens || 0);
       }
 
       for (const [accId, accObj] of Object.entries(d.accounts || {})) {
         if (!accountsMap[accId]) {
-          accountsMap[accId] = { uid: accId, name: accObj.name || accId, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+          accountsMap[accId] = { uid: accId, name: accObj.name || accId, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
         }
         accountsMap[accId].requests += (accObj.requests || 0);
         accountsMap[accId].successRequests += (accObj.successRequests || 0);
         accountsMap[accId].inputTokens += (accObj.inputTokens || 0);
         accountsMap[accId].outputTokens += (accObj.outputTokens || 0);
+        accountsMap[accId].cachedTokens += (accObj.cachedTokens || 0);
         accountsMap[accId].totalTokens += (accObj.totalTokens || 0);
       }
     }

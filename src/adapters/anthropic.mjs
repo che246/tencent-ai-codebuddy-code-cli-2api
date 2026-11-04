@@ -309,6 +309,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       let textBlockStarted = false;
       let textBlockStopped = false;
       let activeToolIndices = new Set();
+      let streamUsage = null;
       let buffer = '';
 
       while (true) {
@@ -326,6 +327,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
 
           try {
             const chunk = JSON.parse(dataStr);
+            if (chunk.usage) streamUsage = chunk.usage;
             const delta = chunk.choices?.[0]?.delta;
 
             // 思考流原生映射 (对齐 package streamed-reasoning-collector: 兼容 reasoning_content 与 reasoning)
@@ -420,10 +422,17 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       }
 
       const stopReason = activeToolIndices.size > 0 ? 'tool_use' : 'end_turn';
+      const outTokens = streamUsage?.completion_tokens || Math.max(1, Math.round(latency / 15));
+      const inTokens = streamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
+      const cachedTok = streamUsage?.cache_read_input_tokens ||
+                        streamUsage?.prompt_cache_hit_tokens ||
+                        streamUsage?.prompt_tokens_details?.cached_tokens ||
+                        streamUsage?.cached_tokens || 0;
+
       res.write(`event: message_delta\ndata: ${JSON.stringify({
         type: 'message_delta',
         delta: { stop_reason: stopReason, stop_sequence: null },
-        usage: { output_tokens: 20 }
+        usage: { output_tokens: outTokens, cache_read_input_tokens: cachedTok }
       })}\n\n`);
 
       res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
@@ -434,10 +443,11 @@ export async function handleAnthropicMessages(req, res, rawBody) {
         accountName: formatAccountLogName(activeAcc),
         model: actualModel,
         isSuccess: true,
-        inputTokens: Math.max(10, Math.round(rawBody.length / 4)),
-        outputTokens: Math.max(1, Math.round(latency / 15))
+        inputTokens: inTokens,
+        outputTokens: outTokens,
+        cachedTokens: cachedTok
       });
-      Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 结束原因: ${stopReason})`);
+      Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${stopReason})`);
       return res.end();
 
     } else {
@@ -463,6 +473,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
 
           try {
             const chunk = JSON.parse(dataStr);
+            if (chunk.usage) streamUsage = chunk.usage;
             const delta = chunk.choices?.[0]?.delta;
             if (delta?.content) fullContent += delta.content;
             if (delta?.reasoning_content || delta?.reasoning) {
@@ -510,15 +521,23 @@ export async function handleAnthropicMessages(req, res, rawBody) {
 
       const latency = Date.now() - startTime;
       const stopReason = toolCallsMap.size > 0 ? 'tool_use' : 'end_turn';
+      const inTokens = streamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
+      const outTokens = streamUsage?.completion_tokens || Math.max(1, Math.round((fullContent.length + fullReasoning.length) / 4));
+      const cachedTok = streamUsage?.cache_read_input_tokens ||
+                        streamUsage?.prompt_cache_hit_tokens ||
+                        streamUsage?.prompt_tokens_details?.cached_tokens ||
+                        streamUsage?.cached_tokens || 0;
+
       recordApiCall({
         accountUid: activeAcc?.uid,
         accountName: formatAccountLogName(activeAcc),
         model: actualModel,
         isSuccess: true,
-        inputTokens: Math.max(10, Math.round(rawBody.length / 4)),
-        outputTokens: Math.max(1, Math.round((fullContent.length + fullReasoning.length) / 4))
+        inputTokens: inTokens,
+        outputTokens: outTokens,
+        cachedTokens: cachedTok
       });
-      Logger.info('ANTHROPIC', `非流式完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 结束原因: ${stopReason})`);
+      Logger.info('ANTHROPIC', `非流式完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${stopReason})`);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
@@ -529,7 +548,11 @@ export async function handleAnthropicMessages(req, res, rawBody) {
         model: actualModel,
         stop_reason: stopReason,
         stop_sequence: null,
-        usage: { input_tokens: 20, output_tokens: 50 }
+        usage: {
+          input_tokens: inTokens,
+          output_tokens: outTokens,
+          cache_read_input_tokens: cachedTok
+        }
       }));
     }
 

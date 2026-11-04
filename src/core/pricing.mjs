@@ -78,9 +78,9 @@ export function saveModelPrices(newPrices) {
 
 /**
  * 计算单个模型的真实用量估算价值 (以人民币元计)
- * 包含【全量无缓存标准价值】与【结合长效 Prompt 缓存命中 (典型 80% 命中) 的折后实际价与节省金额】
+ * 优先采用上游返回的真实 cachedTokens，无真实标记时采用长效 Prompt 缓存典型 80% 测算
  */
-export function calculateModelUsageCost(modelId, inputTokens = 0, outputTokens = 0, cacheHitRate = 0.8) {
+export function calculateModelUsageCost(modelId, inputTokens = 0, outputTokens = 0, actualCachedTokens = null) {
   const prices = loadModelPrices();
   const rule = prices[modelId] || prices['default'] || { input: 1.5, cacheHit: 0.5, output: 3.0, vendor: '官方基准估算', note: '参考公网大模型标准计费' };
 
@@ -96,14 +96,30 @@ export function calculateModelUsageCost(modelId, inputTokens = 0, outputTokens =
   const outputCost = outputMillion * outputPrice;
   const standardTotalCost = standardInputCost + outputCost;
 
-  // 2. 考虑网关 1 小时长效 Prompt 缓存命中 (Coding Agent 典型命中率 80%) 的实际支出折算
-  const effectiveCacheRate = Math.min(1, Math.max(0, cacheHitRate));
-  const cachedHitInputCost = (inputMillion * effectiveCacheRate) * cacheHitPrice;
-  const missedInputCost = (inputMillion * (1 - effectiveCacheRate)) * inputPrice;
-  const cachedTotalCost = cachedHitInputCost + missedInputCost + outputCost;
+  // 2. 考虑 Prompt 缓存命中 (优先读取上游真实返回的 cachedTokens，无真实命中记录时按 Agent 典型 80% 测算)
+  let cachedTotalCost = 0;
+  let isRealCache = false;
+  let hitTokens = 0;
+
+  if (typeof actualCachedTokens === 'number' && actualCachedTokens > 0) {
+    isRealCache = true;
+    hitTokens = Math.min(inputTokens, actualCachedTokens);
+    const missTokens = Math.max(0, inputTokens - hitTokens);
+    const hitCost = (hitTokens / 1000000) * cacheHitPrice;
+    const missCost = (missTokens / 1000000) * inputPrice;
+    cachedTotalCost = hitCost + missCost + outputCost;
+  } else {
+    // 默认按照长效 Prompt 缓存基准 (典型 80% 命中) 估算
+    const defaultCacheRate = 0.8;
+    hitTokens = Math.round(inputTokens * defaultCacheRate);
+    const cachedHitInputCost = (inputMillion * defaultCacheRate) * cacheHitPrice;
+    const missedInputCost = (inputMillion * (1 - defaultCacheRate)) * inputPrice;
+    cachedTotalCost = cachedHitInputCost + missedInputCost + outputCost;
+  }
 
   // 3. 提示词缓存所产生的节省价值
   const savedCost = Math.max(0, standardTotalCost - cachedTotalCost);
+  const realHitRate = inputTokens > 0 ? (((hitTokens) / inputTokens) * 100).toFixed(1) + '%' : '0%';
 
   return {
     modelId,
@@ -120,6 +136,9 @@ export function calculateModelUsageCost(modelId, inputTokens = 0, outputTokens =
     savedCost,
     savedCostDisplay: formatCurrency(savedCost),
     savingsPercent: standardTotalCost > 0 ? (((savedCost) / standardTotalCost) * 100).toFixed(1) + '%' : '0%',
+    hitTokens,
+    realHitRate,
+    isRealCache,
 
     // 价格明细规则
     inputPricePerM: inputPrice,

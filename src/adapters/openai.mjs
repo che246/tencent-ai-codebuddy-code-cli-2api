@@ -249,26 +249,43 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       const reader = upstreamRes.body.getReader();
       const decoder = new TextDecoder();
       let toolCallObserved = false;
+      let streamUsage = null;
+      let streamTail = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         const str = decoder.decode(value, { stream: true });
         if (str.includes('"tool_calls"')) toolCallObserved = true;
+        if (str.includes('"usage"')) {
+          streamTail += str;
+          const uMatch = streamTail.match(/"usage"\s*:\s*(\{[\s\S]*?\})/);
+          if (uMatch) {
+            try { streamUsage = JSON.parse(uMatch[1]); } catch (_) {}
+          }
+        }
         res.write(str);
       }
 
       activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
       const latency = Date.now() - startTime;
+      const inTokens = streamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
+      const outTokens = streamUsage?.completion_tokens || Math.max(1, Math.round(latency / 15));
+      const cachedTok = streamUsage?.prompt_cache_hit_tokens ||
+                        streamUsage?.cache_read_input_tokens ||
+                        streamUsage?.prompt_tokens_details?.cached_tokens ||
+                        streamUsage?.cached_tokens || 0;
+
       recordApiCall({
         accountUid: activeAcc?.uid,
         accountName: formatAccountLogName(activeAcc),
         model: callResult.model,
         isSuccess: true,
-        inputTokens: Math.max(10, Math.round(rawBody.length / 4)),
-        outputTokens: Math.max(1, Math.round(latency / 15))
+        inputTokens: inTokens,
+        outputTokens: outTokens,
+        cachedTokens: cachedTok
       });
-      Logger.info('CHAT', `流式输出完成 [${callResult.model}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 是否含工具调用: ${toolCallObserved})`);
+      Logger.info('CHAT', `流式输出完成 [${callResult.model}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 是否含工具调用: ${toolCallObserved})`);
       return res.end();
 
     } else {
@@ -280,6 +297,7 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       let toolCallsMap = new Map();
       let finishReason = 'stop';
       let responseId = 'chatcmpl-' + crypto.randomUUID();
+      let nonStreamUsage = null;
       let buffer = '';
 
       while (true) {
@@ -297,6 +315,7 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
 
           try {
             const chunk = JSON.parse(dataStr);
+            if (chunk.usage) nonStreamUsage = chunk.usage;
             responseId = chunk.id || responseId;
             const choice = chunk.choices?.[0];
             if (!choice) continue;
@@ -349,15 +368,23 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       }
 
       const latency = Date.now() - startTime;
+      const inTokens = nonStreamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
+      const outTokens = nonStreamUsage?.completion_tokens || Math.max(1, Math.round(fullContent.length / 4));
+      const cachedTok = nonStreamUsage?.prompt_cache_hit_tokens ||
+                        nonStreamUsage?.cache_read_input_tokens ||
+                        nonStreamUsage?.prompt_tokens_details?.cached_tokens ||
+                        nonStreamUsage?.cached_tokens || 0;
+
       recordApiCall({
         accountUid: activeAcc?.uid,
         accountName: formatAccountLogName(activeAcc),
         model: callResult.model,
         isSuccess: true,
-        inputTokens: Math.max(10, Math.round(rawBody.length / 4)),
-        outputTokens: Math.max(1, Math.round(fullContent.length / 4))
+        inputTokens: inTokens,
+        outputTokens: outTokens,
+        cachedTokens: cachedTok
       });
-      Logger.info('CHAT', `非流式回复完成 [${callResult.model}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 结束原因: ${finishReason})`);
+      Logger.info('CHAT', `非流式回复完成 [${callResult.model}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${finishReason})`);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
