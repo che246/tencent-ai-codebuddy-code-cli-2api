@@ -354,10 +354,10 @@
               <div class="kpi-card">
                 <div class="kpi-label" style="display:flex; justify-content:space-between; align-items:center;">
                   <span>官网折算总价</span>
-                  <button class="btn-copy" style="font-size:10px; padding:1px 6px;" onclick="openPricingModal()" title="基于网关官方联网检索功能核验大模型官网价格">🔍 联网核价</button>
+                  <button class="btn-copy" style="font-size:10px; padding:1px 6px;" onclick="openPricingModal()" title="基于网关官方联网检索功能核验大模型官网价格与Prompt缓存单价">🔍 联网核价</button>
                 </div>
                 <div class="kpi-value" style="color:#22c55e;"><span id="repTotalCost">-</span></div>
-                <div class="kpi-hint">按各大模型官网标准单价折算</div>
+                <div class="kpi-hint">缓存折后 <b id="repCachedCost" style="color:#4ade80;">-</b> (省 <span id="repSavedCost" style="color:#facc15;">-</span>)</div>
               </div>
 
               <!-- 3. 成功请求数 -->
@@ -891,20 +891,21 @@
               <th>模型 ID</th>
               <th>模型名称</th>
               <th>官方厂商</th>
-              <th>输入单价 (元/1M)</th>
-              <th>输出单价 (元/1M)</th>
+              <th>输入单价 (未命中)</th>
+              <th>缓存命中 (Cache Hit)</th>
+              <th>输出单价</th>
               <th>定价基准说明</th>
             </tr>
           </thead>
           <tbody id="pricingTableBody">
-            <tr><td colspan="6" style="text-align:center; padding:20px; color:var(--text-muted);">正在加载价格标准...</td></tr>
+            <tr><td colspan="7" style="text-align:center; padding:20px; color:var(--text-muted);">正在加载价格标准...</td></tr>
           </tbody>
         </table>
       </div>
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; flex-wrap:wrap; gap:8px;">
         <div style="font-size:12px; color:var(--text-muted);">
-          折算公式: <code>总估算价钱 = (输入Tokens / 100万) × 输入单价 + (输出Tokens / 100万) × 输出单价</code>
+          折算公式: <code>无缓存标准总价 = (输入/1M)×输入单价 + (输出/1M)×输出单价</code> · <code>缓存折后价 = (80%缓存命中/1M)×命中单价 + (20%输入/1M)×输入单价 + (输出/1M)×输出单价</code>
         </div>
         <button class="btn-outline" onclick="closePricingModal()">关闭</button>
       </div>
@@ -1571,6 +1572,12 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         document.getElementById('repTokensSplit').innerText = `${m.inputTokensDisplay || '0'} + ${m.outputTokensDisplay || '0'}`;
         if (document.getElementById('repTotalCost')) {
           document.getElementById('repTotalCost').innerText = m.totalCostDisplay || '¥0.00';
+        }
+        if (document.getElementById('repCachedCost')) {
+          document.getElementById('repCachedCost').innerText = m.totalCachedCostDisplay || '¥0.00';
+        }
+        if (document.getElementById('repSavedCost')) {
+          document.getElementById('repSavedCost').innerText = m.totalSavedCostDisplay || '¥0.00';
         }
         document.getElementById('repSuccessReq').innerText = (m.successRequests || 0).toLocaleString();
         document.getElementById('repSuccessRate').innerText = m.successRate || '100%';
@@ -2499,18 +2506,22 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         const data = await res.json();
         const prices = data.prices || {};
 
-        tbody.innerHTML = Object.entries(prices).map(([id, p]) => `
-          <tr>
-            <td><code>${escapeHtml(id)}</code></td>
-            <td><b>${escapeHtml(p.name || id)}</b></td>
-            <td><span class="badge badge-blue">${escapeHtml(p.vendor || '官方')}</span></td>
-            <td style="color:#22c55e; font-family:monospace; font-weight:700;">¥${Number(p.input || 0).toFixed(2)}</td>
-            <td style="color:#4ade80; font-family:monospace; font-weight:700;">¥${Number(p.output || 0).toFixed(2)}</td>
-            <td style="color:var(--text-muted); font-size:12px;">${escapeHtml(p.note || '')}</td>
-          </tr>
-        `).join('');
+        tbody.innerHTML = Object.entries(prices).map(([id, p]) => {
+          const hitVal = p.cacheHit !== undefined ? p.cacheHit : (p.input * 0.5);
+          return `
+            <tr>
+              <td><code>${escapeHtml(id)}</code></td>
+              <td><b>${escapeHtml(p.name || id)}</b></td>
+              <td><span class="badge badge-blue">${escapeHtml(p.vendor || '官方')}</span></td>
+              <td style="color:#38bdf8; font-family:monospace; font-weight:700;">¥${Number(p.input || 0).toFixed(2)}/M</td>
+              <td style="color:#22c55e; font-family:monospace; font-weight:700;">¥${Number(hitVal).toFixed(2)}/M <span style="font-size:10px; color:#facc15;">(低至2.5折)</span></td>
+              <td style="color:#c084fc; font-family:monospace; font-weight:700;">¥${Number(p.output || 0).toFixed(2)}/M</td>
+              <td style="color:var(--text-muted); font-size:12px;">${escapeHtml(p.note || '')}</td>
+            </tr>
+          `;
+        }).join('');
       } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#f87171; padding:20px;">加载价格标准失败: ${escapeHtml(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#f87171; padding:20px;">加载价格标准失败: ${escapeHtml(e.message)}</td></tr>`;
       }
     }
 

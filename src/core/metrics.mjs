@@ -364,7 +364,7 @@ export function getMetricsReport(range = 'all') {
     ? ((topModelTokens / totalTokens) * 100).toFixed(1) + '%'
     : '100%';
 
-  // 模型排行列表 (包含按官网 Tokens 价格折算的大概使用的价钱)
+  // 模型排行列表 (包含按官网 Tokens 价格折算的大概使用的价钱，同时支持缓存命中折算)
   const modelsList = Object.entries(modelsMap)
     .map(([id, m]) => {
       const costInfo = calculateModelUsageCost(id, m.inputTokens || 0, m.outputTokens || 0);
@@ -377,8 +377,13 @@ export function getMetricsReport(range = 'all') {
         outputTokens: m.outputTokens || 0,
         totalTokens: m.totalTokens || 0,
         totalTokensDisplay: formatTokenNumber(m.totalTokens || 0),
-        cost: costInfo.totalCost,
+        cost: costInfo.standardCost,
         costDisplay: costInfo.costDisplay,
+        cachedCost: costInfo.cachedCost,
+        cachedCostDisplay: costInfo.cachedCostDisplay,
+        savedCost: costInfo.savedCost,
+        savedCostDisplay: costInfo.savedCostDisplay,
+        savingsPercent: costInfo.savingsPercent,
         priceNote: costInfo.note,
         priceVendor: costInfo.vendor,
         percentage: totalTokens > 0 ? (((m.totalTokens || 0) / totalTokens) * 100).toFixed(1) + '%' : '100%',
@@ -387,9 +392,13 @@ export function getMetricsReport(range = 'all') {
     })
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
-  // 计算本区间所有模型按官网价格折算的预估总金额
+  // 计算本区间所有模型按官网价格折算的预估总金额 (基础标准价值 vs 缓存命中折后价 vs 节省金额)
   const totalCost = modelsList.reduce((sum, item) => sum + (item.cost || 0), 0);
   const totalCostDisplay = formatCurrency(totalCost);
+  const totalCachedCost = modelsList.reduce((sum, item) => sum + (item.cachedCost || 0), 0);
+  const totalCachedCostDisplay = formatCurrency(totalCachedCost);
+  const totalSavedCost = Math.max(0, totalCost - totalCachedCost);
+  const totalSavedCostDisplay = formatCurrency(totalSavedCost);
 
   // 账号排行列表
   const accountsList = Object.entries(accountsMap)
@@ -465,6 +474,10 @@ export function getMetricsReport(range = 'all') {
 
     totalCost,
     totalCostDisplay,
+    totalCachedCost,
+    totalCachedCostDisplay,
+    totalSavedCost,
+    totalSavedCostDisplay,
 
     totalRequests,
     successRequests,
