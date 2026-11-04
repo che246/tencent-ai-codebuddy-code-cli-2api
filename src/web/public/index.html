@@ -391,23 +391,30 @@
 
           <!-- 每日调用明细表 (Daily Trend) -->
           <div class="card">
-            <div class="card-title">
-              <span>📅 每日调用历史流水趋势</span>
-              <span class="badge badge-blue">按日聚合归档</span>
+            <div class="card-title" style="flex-wrap:wrap; gap:12px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span>📅 每日调用历史流水趋势</span>
+                <span class="badge badge-blue" id="badgeDailyTrendTotal">全量历史流水</span>
+              </div>
+              <div style="font-size:12px; color:var(--text-muted);">
+                按天聚合归档展示完整历史调用记录与 Token 消耗流水 (全部完整显示)
+              </div>
             </div>
             <table>
               <thead>
                 <tr>
                   <th>日期 (Date)</th>
                   <th>总请求数</th>
-                  <th>成功请求</th>
+                  <th>成功 / 失败</th>
+                  <th>成功率</th>
+                  <th>主调模型</th>
                   <th>输入 Tokens</th>
                   <th>输出 Tokens</th>
                   <th>总 Token 消耗</th>
                 </tr>
               </thead>
               <tbody id="dailyTrendBody">
-                <tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">正在统计每日趋势...</td></tr>
+                <tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px;">正在统计每日趋势...</td></tr>
               </tbody>
             </table>
           </div>
@@ -1457,21 +1464,42 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           modelRankBox.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:15px;">该区间暂无模型调用数据</div>';
         }
 
-        // 3. 每日历史趋势 (Daily Trend Table)
+        // 3. 每日历史趋势 (Daily Trend Table - 全部完整显示)
         const dailyBody = document.getElementById('dailyTrendBody');
+        const badgeTrend = document.getElementById('badgeDailyTrendTotal');
+        if (badgeTrend && Array.isArray(m.dailyTrend)) {
+          badgeTrend.innerText = `全量共 ${m.dailyTrend.length} 天记录`;
+        }
+
         if (Array.isArray(m.dailyTrend) && m.dailyTrend.length > 0) {
-          dailyBody.innerHTML = m.dailyTrend.map(d => `
-            <tr>
-              <td><code>${d.date}</code></td>
-              <td><b>${d.requests}</b></td>
-              <td><span style="color:#4ade80; font-weight:600;">${d.successRequests}</span></td>
-              <td style="color:var(--text-muted);">${d.inputTokensDisplay}</td>
-              <td style="color:var(--text-muted);">${d.outputTokensDisplay}</td>
-              <td><b style="color:var(--accent); font-family:monospace;">${d.totalTokensDisplay}</b></td>
-            </tr>
-          `).join('');
+          dailyBody.innerHTML = m.dailyTrend.map(d => {
+            const dateBadge = d.isToday
+              ? '<span class="badge badge-ok" style="font-size:10px; padding:1px 5px; margin-left:6px;">今天</span>'
+              : (d.isYesterday ? '<span class="badge badge-purple" style="font-size:10px; padding:1px 5px; margin-left:6px;">昨天</span>' : '');
+
+            const failDisplay = d.failedRequests > 0
+              ? `<span style="color:#f87171; font-weight:600;">${d.failedRequests}</span>`
+              : `<span style="color:var(--text-muted);">0</span>`;
+
+            const topModelHtml = d.topModel && d.topModel !== '-'
+              ? `<span class="badge badge-blue" style="font-family:monospace; font-size:11px;">${escapeHtml(d.topModel)}</span>`
+              : `<span style="color:var(--text-muted);">-</span>`;
+
+            return `
+              <tr>
+                <td><code>${d.date}</code>${dateBadge}</td>
+                <td><b>${(d.requests || 0).toLocaleString()} 次</b></td>
+                <td><span style="color:#4ade80; font-weight:600;">${(d.successRequests || 0).toLocaleString()}</span> / ${failDisplay}</td>
+                <td><span style="color:#4ade80; font-weight:600;">${d.successRate || '100%'}</span></td>
+                <td>${topModelHtml}</td>
+                <td style="color:var(--text-muted); font-family:monospace;">${d.inputTokensDisplay}</td>
+                <td style="color:var(--text-muted); font-family:monospace;">${d.outputTokensDisplay}</td>
+                <td><b style="color:var(--accent); font-family:monospace; font-size:13px;">${d.totalTokensDisplay}</b></td>
+              </tr>
+            `;
+          }).join('');
         } else {
-          dailyBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">该区间暂无历史趋势记录</td></tr>';
+          dailyBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px;">暂无历史趋势记录</td></tr>';
         }
 
       } catch (err) {

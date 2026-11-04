@@ -232,6 +232,7 @@ export function getShiftedDateString(baseDateStr, daysShift) {
 export function getMetricsReport(range = 'all') {
   const stats = loadStats();
   const today = getTodayString();
+  const yesterday = getShiftedDateString(today, -1);
   const validRanges = ['today', 'yesterday', '7d', '30d', 'all'];
   if (!validRanges.includes(range)) range = 'all';
 
@@ -244,7 +245,7 @@ export function getMetricsReport(range = 'all') {
     totalDaysRange = 1;
     rangeLabel = '今天';
   } else if (range === 'yesterday') {
-    targetDates = [getShiftedDateString(today, -1)];
+    targetDates = [yesterday];
     totalDaysRange = 1;
     rangeLabel = '昨天';
   } else if (range === '7d') {
@@ -394,20 +395,39 @@ export function getMetricsReport(range = 'all') {
     }))
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
-  // 每日趋势列表
-  const dailyTrend = Object.entries(dailyRows)
-    .map(([date, d]) => ({
-      date,
-      requests: d.requests || 0,
-      successRequests: d.successRequests || 0,
-      failedRequests: d.failedRequests || 0,
-      inputTokens: d.inputTokens || 0,
-      inputTokensDisplay: formatTokenNumber(d.inputTokens || 0),
-      outputTokens: d.outputTokens || 0,
-      outputTokensDisplay: formatTokenNumber(d.outputTokens || 0),
-      totalTokens: d.totalTokens || 0,
-      totalTokensDisplay: formatTokenNumber(d.totalTokens || 0)
-    }))
+  // 每日全量历史趋势流水列表 (全部显示所有历史天数记录，不受上方区间切片影响)
+  const allDailyEntries = Object.entries(stats.daily || {});
+  const dailyTrend = allDailyEntries
+    .filter(([_, d]) => d && ((d.requests || 0) > 0 || (d.totalTokens || 0) > 0))
+    .map(([date, d]) => {
+      let topModelForDay = '-';
+      const modelsEntries = Object.entries(d.models || {});
+      if (modelsEntries.length > 0) {
+        modelsEntries.sort((a, b) => (b[1].totalTokens || 0) - (a[1].totalTokens || 0));
+        topModelForDay = modelsEntries[0][0];
+      }
+      const successRate = d.requests > 0
+        ? (((d.successRequests || 0) / d.requests) * 100).toFixed(1) + '%'
+        : '100%';
+
+      return {
+        date,
+        isToday: date === today,
+        isYesterday: date === yesterday,
+        isInRange: targetDates.includes(date),
+        requests: d.requests || 0,
+        successRequests: d.successRequests || 0,
+        failedRequests: d.failedRequests || 0,
+        successRate,
+        topModel: topModelForDay,
+        inputTokens: d.inputTokens || 0,
+        inputTokensDisplay: formatTokenNumber(d.inputTokens || 0),
+        outputTokens: d.outputTokens || 0,
+        outputTokensDisplay: formatTokenNumber(d.outputTokens || 0),
+        totalTokens: d.totalTokens || 0,
+        totalTokensDisplay: formatTokenNumber(d.totalTokens || 0)
+      };
+    })
     .sort((a, b) => b.date.localeCompare(a.date));
 
   return {
