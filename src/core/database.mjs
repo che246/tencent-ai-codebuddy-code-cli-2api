@@ -169,7 +169,7 @@ class LogDatabaseEngine {
     };
   }
 
-  queryLogs({ date = null, level = null, category = null, search = null, limit = 250, offset = 0 } = {}) {
+  queryLogs({ date = null, level = null, category = null, search = null, limit = 200, offset = 0 } = {}) {
     if (this.useSqlite && this.sqliteDb) {
       try {
         const conditions = [];

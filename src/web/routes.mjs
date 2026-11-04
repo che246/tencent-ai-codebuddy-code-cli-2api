@@ -217,13 +217,13 @@ export async function handleApiRoutes(req, res, url) {
     return;
   }
 
-  // 3. 日志查询接口 (支持 SQLite 数据库按日期、日志级别、分类、关键词检索)
+  // 3. 日志查询接口 (支持 SQLite 数据库按日期、日志级别、分类、关键词检索，默认单天最新 200 条)
   if (url.pathname === '/api/logs' && req.method === 'GET') {
     const date = url.searchParams.get('date') || null;
     const level = url.searchParams.get('level') || null;
     const category = url.searchParams.get('category') || null;
     const search = url.searchParams.get('search') || null;
-    const limit = parseInt(url.searchParams.get('limit') || '250', 10);
+    const limit = parseInt(url.searchParams.get('limit') || '200', 10);
     const offset = parseInt(url.searchParams.get('offset') || '0', 10);
 
     const result = Logger.getLogs({ date, level, category, search, limit, offset });
@@ -255,8 +255,18 @@ export async function handleApiRoutes(req, res, url) {
     return;
   }
 
-  // 4. 日志全量下载导出
+  // 4. 日志全量/单天下单导出
   if (url.pathname === '/api/logs/export' && req.method === 'GET') {
+    const exportDate = url.searchParams.get('date');
+    if (exportDate && exportDate !== 'ALL') {
+      const resLogs = LogDatabase.queryLogs({ date: exportDate, limit: 10000 });
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': `attachment; filename="gateway-${exportDate}.log"`
+      });
+      const lines = (resLogs.logs || []).map(l => `[${l.time}] [${l.level.padEnd(5)}] [${l.category}] ${l.message}${l.meta ? ' | ' + JSON.stringify(l.meta) : ''}`);
+      return res.end(lines.join('\n') + '\n');
+    }
     if (fs.existsSync(LOG_FILE_PATH)) {
       res.writeHead(200, {
         'Content-Type': 'text/plain; charset=utf-8',

@@ -47,7 +47,7 @@ export class Logger {
   static warn(category, message, meta) { this.write('warn', category, message, meta); }
   static error(category, message, meta) { this.write('error', category, message, meta); }
 
-  static getLogs({ date = null, level = null, category = null, search = null, limit = 250, offset = 0 } = {}) {
+  static getLogs({ date = null, level = null, category = null, search = null, limit = 200, offset = 0 } = {}) {
     const dbRes = LogDatabase.queryLogs({ date, level, category, search, limit, offset });
     if (dbRes && dbRes.logs && dbRes.logs.length > 0) {
       return dbRes;

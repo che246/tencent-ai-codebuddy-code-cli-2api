@@ -533,16 +533,17 @@
             <div class="card-title">
               <div style="display:flex; align-items:center; gap:10px;">
                 <span>📜 实时运行日志与问题诊断 (Live Diagnostics)</span>
-                <span class="badge badge-blue" id="logCountBadge">0 条记录</span>
+                <span class="badge badge-blue" id="logCountBadge">单天最新 200 条</span>
               </div>
               <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                <select id="logDateFilter" class="search-input" style="width:145px; padding:6px 10px; font-size:12px;" onchange="onLogDateChange()">
+                <select id="logDateFilter" class="search-input" style="width:165px; padding:6px 10px; font-size:12px;" onchange="onLogDateChange()">
+                  <option value="TODAY">📅 当天单天 (最新)</option>
                   <option value="ALL">📅 所有历史日期</option>
                 </select>
                 <input id="logSearch" class="search-input" placeholder="🔍 检索日志关键字 / 状态码..." oninput="filterLogs()" style="width:190px;">
                 <button class="btn-outline" onclick="toggleAutoScroll()" id="btnAutoScroll">⏸ 滚动锁定: 开</button>
                 <button class="btn-outline" onclick="clearLiveLogs()">🧹 清屏</button>
-                <button class="btn-primary" onclick="exportLogFile()">📥 导出完整日志</button>
+                <button class="btn-primary" onclick="exportLogFile()">📥 导出单天/完整日志</button>
               </div>
             </div>
             
@@ -928,8 +929,7 @@
       loadAccounts();
       loadModels();
       loadSettings();
-      loadLogDates();
-      fetchLogs();
+      loadLogDates().then(() => fetchLogs());
       stopAppPolling();
       pollIntervals.push(setInterval(() => loadMetrics(currentMetricsRange), 5000));
       pollIntervals.push(setInterval(loadAccounts, 5000));
@@ -1003,7 +1003,7 @@
       if (pageKey === 'overview') loadMetrics(currentMetricsRange);
       if (pageKey === 'accounts') loadAccounts();
       if (pageKey === 'models') loadModels();
-      if (pageKey === 'logs') { loadLogDates(); fetchLogs(); }
+      if (pageKey === 'logs') { loadLogDates().then(() => fetchLogs()); }
       if (pageKey === 'settings') loadSettings();
     }
 
@@ -1656,23 +1656,46 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
     }
 
-    let currentLogDate = 'ALL';
+    function getTodayDateStr() {
+      const d = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
+    let currentLogDate = getTodayDateStr(); // 默认展示单天 (当天)
 
     async function loadLogDates() {
       try {
         const res = await fetch('/api/logs/dates');
         const data = await res.json();
         const sel = document.getElementById('logDateFilter');
+        const todayStr = getTodayDateStr();
         if (sel && Array.isArray(data.dates)) {
-          const oldVal = sel.value || currentLogDate;
-          sel.innerHTML = '<option value="ALL">📅 所有历史日期</option>' + data.dates.map(d => {
-            return `<option value="${d}" ${d === oldVal ? 'selected' : ''}>📅 ${d}</option>`;
-          }).join('');
+          const datesList = [...data.dates];
+          if (!datesList.includes(todayStr)) {
+            datesList.unshift(todayStr);
+          }
+
+          // 默认单天模式：优先选中当天；若当天暂无日志且历史列表有数据，则选中最近有日志的单天
+          if (!currentLogDate || currentLogDate === 'ALL' || (!data.dates.includes(currentLogDate) && currentLogDate === todayStr && data.dates.length > 0)) {
+            currentLogDate = data.dates.includes(todayStr) ? todayStr : (data.dates[0] || todayStr);
+          }
+
+          const options = datesList.map(d => {
+            const isToday = d === todayStr;
+            const label = isToday ? `📅 今天 (${d})` : `📅 ${d}`;
+            return `<option value="${d}" ${d === currentLogDate ? 'selected' : ''}>${label}</option>`;
+          });
+          options.push(`<option value="ALL" ${currentLogDate === 'ALL' ? 'selected' : ''}>📅 所有历史日期</option>`);
+          sel.innerHTML = options.join('');
+          sel.value = currentLogDate;
         }
       } catch (_) {}
     }
 
     function onLogDateChange() {
+      const sel = document.getElementById('logDateFilter');
+      if (sel) currentLogDate = sel.value;
       fetchLogs();
     }
 
@@ -1682,7 +1705,8 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         const dateVal = sel ? sel.value : currentLogDate;
         currentLogDate = dateVal;
 
-        let queryUrl = '/api/logs?limit=300';
+        // 默认获取单天最新的 200 条记录
+        let queryUrl = '/api/logs?limit=200';
         if (dateVal && dateVal !== 'ALL') {
           queryUrl += '&date=' + encodeURIComponent(dateVal);
         }
@@ -1698,7 +1722,9 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         allLogs = data.logs || [];
         const badge = document.getElementById('logCountBadge');
         if (badge) {
-          badge.innerText = `数据库查得 ${data.total || allLogs.length} 条`;
+          const isSingle = Boolean(dateVal && dateVal !== 'ALL');
+          const dayTitle = isSingle ? `${dateVal} 单天` : '全量历史';
+          badge.innerText = `${dayTitle} · 最新 ${allLogs.length} 条 (共 ${data.total || allLogs.length} 条)`;
         }
         renderLogs();
       } catch (_) {}
