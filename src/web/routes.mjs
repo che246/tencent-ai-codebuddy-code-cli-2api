@@ -18,6 +18,7 @@ import { AccountScheduler } from '../core/scheduler.mjs';
 import { TlsCertificateStack } from '../core/tls-certs.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
 import { getMetricsReport, loadStats, formatTokenNumber } from '../core/metrics.mjs';
+import { loadModelPrices, saveModelPrices, searchOfficialPricingOnline } from '../core/pricing.mjs';
 
 const HTML_FILE_PATH = path.resolve(ROOT_DIR, 'src/web/public/index.html');
 
@@ -284,6 +285,50 @@ export async function handleApiRoutes(req, res, url) {
     Logger.clear();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ ok: true }));
+  }
+
+  // 5.5. 官网模型定价查询与配置接口
+  if (url.pathname === '/api/pricing' && req.method === 'GET') {
+    const prices = loadModelPrices();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ ok: true, prices }));
+  }
+
+  // 5.6. 基于网关联网检索功能在线检索最新官网价格
+  if (url.pathname === '/api/pricing/search' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', async () => {
+      try {
+        const body = JSON.parse(b || '{}');
+        const q = body.query || '大模型 API 官方价格';
+        const searchReport = await searchOfficialPricingOnline(q);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, ...searchReport }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 5.7. 自定义更新模型定价标准
+  if (url.pathname === '/api/pricing/update' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(b || '{}');
+        const updated = saveModelPrices(body.prices || {});
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, prices: updated }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
   }
 
   // 6. 账号列表查询

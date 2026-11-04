@@ -10,7 +10,7 @@
   "routingStrategy": "credits",
   "accountFailoverEnabled": true,
   "concurrencyLimitEnabled": true,
-  "maxInFlightPerAccount": 3,
+  "maxInFlightPerAccount": 10,
   "modelFallbackEnabled": true,
   "modelFallback": {
     "deepseek-v4.1-flash": [

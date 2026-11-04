@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR, getTodayString } from '../config.mjs';
 import { rebuildRealStatsFromLog } from './log-parser.mjs';
+import { calculateModelUsageCost, formatCurrency } from './pricing.mjs';
 
 export const STATS_PATH = path.resolve(ROOT_DIR, 'stats.json');
 
@@ -363,19 +364,32 @@ export function getMetricsReport(range = 'all') {
     ? ((topModelTokens / totalTokens) * 100).toFixed(1) + '%'
     : '100%';
 
-  // 模型排行列表
+  // 模型排行列表 (包含按官网 Tokens 价格折算的大概使用的价钱)
   const modelsList = Object.entries(modelsMap)
-    .map(([id, m]) => ({
-      id,
-      name: m.name || id,
-      requests: m.requests || 0,
-      successRequests: m.successRequests || 0,
-      totalTokens: m.totalTokens || 0,
-      totalTokensDisplay: formatTokenNumber(m.totalTokens || 0),
-      percentage: totalTokens > 0 ? (((m.totalTokens || 0) / totalTokens) * 100).toFixed(1) + '%' : '100%',
-      percentNum: totalTokens > 0 ? Number((((m.totalTokens || 0) / totalTokens) * 100).toFixed(1)) : 0
-    }))
+    .map(([id, m]) => {
+      const costInfo = calculateModelUsageCost(id, m.inputTokens || 0, m.outputTokens || 0);
+      return {
+        id,
+        name: m.name || id,
+        requests: m.requests || 0,
+        successRequests: m.successRequests || 0,
+        inputTokens: m.inputTokens || 0,
+        outputTokens: m.outputTokens || 0,
+        totalTokens: m.totalTokens || 0,
+        totalTokensDisplay: formatTokenNumber(m.totalTokens || 0),
+        cost: costInfo.totalCost,
+        costDisplay: costInfo.costDisplay,
+        priceNote: costInfo.note,
+        priceVendor: costInfo.vendor,
+        percentage: totalTokens > 0 ? (((m.totalTokens || 0) / totalTokens) * 100).toFixed(1) + '%' : '100%',
+        percentNum: totalTokens > 0 ? Number((((m.totalTokens || 0) / totalTokens) * 100).toFixed(1)) : 0
+      };
+    })
     .sort((a, b) => b.totalTokens - a.totalTokens);
+
+  // 计算本区间所有模型按官网价格折算的预估总金额
+  const totalCost = modelsList.reduce((sum, item) => sum + (item.cost || 0), 0);
+  const totalCostDisplay = formatCurrency(totalCost);
 
   // 账号排行列表
   const accountsList = Object.entries(accountsMap)
@@ -410,6 +424,13 @@ export function getMetricsReport(range = 'all') {
         ? (((d.successRequests || 0) / d.requests) * 100).toFixed(1) + '%'
         : '100%';
 
+      // 计算当天各个模型折算出的官方总价值
+      let dayCostTotal = 0;
+      for (const [mId, mData] of Object.entries(d.models || {})) {
+        const c = calculateModelUsageCost(mId, mData.inputTokens || 0, mData.outputTokens || 0);
+        dayCostTotal += c.totalCost;
+      }
+
       return {
         date,
         isToday: date === today,
@@ -425,7 +446,9 @@ export function getMetricsReport(range = 'all') {
         outputTokens: d.outputTokens || 0,
         outputTokensDisplay: formatTokenNumber(d.outputTokens || 0),
         totalTokens: d.totalTokens || 0,
-        totalTokensDisplay: formatTokenNumber(d.totalTokens || 0)
+        totalTokensDisplay: formatTokenNumber(d.totalTokens || 0),
+        totalCost: dayCostTotal,
+        totalCostDisplay: formatCurrency(dayCostTotal)
       };
     })
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -439,6 +462,9 @@ export function getMetricsReport(range = 'all') {
     inputTokensDisplay: formatTokenNumber(inputTokens),
     outputTokens,
     outputTokensDisplay: formatTokenNumber(outputTokens),
+
+    totalCost,
+    totalCostDisplay,
 
     totalRequests,
     successRequests,

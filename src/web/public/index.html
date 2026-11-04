@@ -350,35 +350,45 @@
                 <div class="kpi-hint">输入 + 输出 (<span id="repTokensSplit">-</span>)</div>
               </div>
 
-              <!-- 2. 成功请求数 -->
+              <!-- 2. 官网预估折算总价 (基于联网检索官方价格) -->
+              <div class="kpi-card">
+                <div class="kpi-label" style="display:flex; justify-content:space-between; align-items:center;">
+                  <span>官网折算总价</span>
+                  <button class="btn-copy" style="font-size:10px; padding:1px 6px;" onclick="openPricingModal()" title="基于网关官方联网检索功能核验大模型官网价格">🔍 联网核价</button>
+                </div>
+                <div class="kpi-value" style="color:#22c55e;"><span id="repTotalCost">-</span></div>
+                <div class="kpi-hint">按各大模型官网标准单价折算</div>
+              </div>
+
+              <!-- 3. 成功请求数 -->
               <div class="kpi-card">
                 <div class="kpi-label">成功请求数</div>
                 <div class="kpi-value" style="color:#4ade80;"><span id="repSuccessReq">-</span></div>
                 <div class="kpi-hint">成功率 <span id="repSuccessRate" style="color:#4ade80; font-weight:700;">-</span></div>
               </div>
 
-              <!-- 3. 总请求数 -->
+              <!-- 4. 总请求数 -->
               <div class="kpi-card">
                 <div class="kpi-label">总请求数</div>
                 <div class="kpi-value" style="color:#38bdf8;"><span id="repTotalReq">-</span></div>
                 <div class="kpi-hint">今天 <span id="repTodayReq" style="color:var(--accent); font-weight:700;">-</span> 次</div>
               </div>
 
-              <!-- 4. 活跃天数 -->
+              <!-- 5. 活跃天数 -->
               <div class="kpi-card">
                 <div class="kpi-label">活跃天数</div>
                 <div class="kpi-value" style="color:#facc15;"><span id="repActiveDays">-</span></div>
                 <div class="kpi-hint">区间共 <span id="repTotalDays">-</span> 天</div>
               </div>
 
-              <!-- 5. 当前连续天数 -->
+              <!-- 6. 当前连续天数 -->
               <div class="kpi-card">
                 <div class="kpi-label">当前连续天数</div>
                 <div class="kpi-value" style="color:#fb923c;"><span id="repConsecutiveDays">-</span> <span style="font-size:16px;">🔥</span></div>
                 <div class="kpi-hint">含今天在内往前数</div>
               </div>
 
-              <!-- 6. Top 模型 -->
+              <!-- 7. Top 模型 -->
               <div class="kpi-card">
                 <div class="kpi-label">Top 模型</div>
                 <div class="kpi-value" style="color:#f43f5e; font-size:17px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="Top Model"><span id="repTopModel">-</span></div>
@@ -392,8 +402,11 @@
             <!-- 模型用量排行榜 -->
             <div class="card" style="margin-bottom:0;">
               <div class="card-title">
-                <span>🧠 模型用量排行分布</span>
-                <span class="badge badge-purple" id="badgeModelUsageSummary">按总 Token 统计</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span>🧠 模型用量与官网折算价钱</span>
+                  <button class="btn-copy" style="font-size:10px; padding:2px 8px;" onclick="openPricingModal()" title="查看并基于网关联网检索各大模型官网 Tokens 价格">💰 官网价格对照</button>
+                </div>
+                <span class="badge badge-purple" id="badgeModelUsageSummary">按总 Token / 官网价格统计</span>
               </div>
               <div id="modelRankList" style="display:flex; flex-direction:column; gap:6px;">
                 <div style="color:var(--text-muted); text-align:center; padding:20px;">正在加载模型分布...</div>
@@ -444,10 +457,11 @@
                   <th>输入 Tokens</th>
                   <th>输出 Tokens</th>
                   <th>总 Token 消耗</th>
+                  <th>官网预估折算</th>
                 </tr>
               </thead>
               <tbody id="dailyTrendBody">
-                <tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px;">正在统计每日趋势...</td></tr>
+                <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:20px;">正在统计每日趋势...</td></tr>
               </tbody>
             </table>
           </div>
@@ -846,6 +860,54 @@
       </div>
       <div id="pollStatus" style="color:#facc15; font-size:13px; margin: 12px 0;">等待手机扫码授权中...</div>
       <button class="btn-outline" onclick="closeModal()">取消</button>
+    </div>
+  </div>
+
+  <!-- 官网模型 Tokens 价格对照与联网检索 Modal -->
+  <div class="modal" id="pricingModal">
+    <div class="modal-content" style="max-width: 900px; max-height: 85vh; display:flex; flex-direction:column;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <h3 style="margin:0; font-size:16px; color:#4ade80;">💰 官网模型 Tokens 价格对照与联网检索</h3>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:3px;">基于网关官方联网检索功能 (/v1/search)，实时核验各大模型官网真实价格</div>
+        </div>
+        <button onclick="closePricingModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
+      </div>
+
+      <!-- 联网检索搜索框 -->
+      <div style="background:var(--code-bg); padding:12px; border-radius:8px; border:1px solid var(--card-border); margin-bottom:14px;">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <input type="text" id="pricingSearchInput" class="search-input" style="flex:1; min-width:240px;" placeholder="输入模型名称进行官网联网检索，如: DeepSeek 官方 API 价格 1M tokens" onkeydown="if(event.key==='Enter')runPricingSearchOnline()">
+          <button class="btn-primary" id="btnOnlineSearchPricing" onclick="runPricingSearchOnline()" style="white-space:nowrap; padding:6px 14px;">🌐 联网检索官网最新价格</button>
+        </div>
+        <div id="pricingOnlineResults" style="display:none; margin-top:10px; max-height:160px; overflow-y:auto; font-size:12px; line-height:1.6; border-top:1px dashed var(--card-border); padding-top:8px;"></div>
+      </div>
+
+      <!-- 价格规则表格 -->
+      <div style="flex:1; overflow-y:auto; max-height:380px; border:1px solid var(--card-border); border-radius:8px;">
+        <table>
+          <thead>
+            <tr>
+              <th>模型 ID</th>
+              <th>模型名称</th>
+              <th>官方厂商</th>
+              <th>输入单价 (元/1M)</th>
+              <th>输出单价 (元/1M)</th>
+              <th>定价基准说明</th>
+            </tr>
+          </thead>
+          <tbody id="pricingTableBody">
+            <tr><td colspan="6" style="text-align:center; padding:20px; color:var(--text-muted);">正在加载价格标准...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; flex-wrap:wrap; gap:8px;">
+        <div style="font-size:12px; color:var(--text-muted);">
+          折算公式: <code>总估算价钱 = (输入Tokens / 100万) × 输入单价 + (输出Tokens / 100万) × 输出单价</code>
+        </div>
+        <button class="btn-outline" onclick="closePricingModal()">关闭</button>
+      </div>
     </div>
   </div>
 
@@ -1504,9 +1566,12 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           }
         }
 
-        // 1. 统计概览 6 卡片
+        // 1. 统计概览 7 卡片 (含官网预估折算总价)
         document.getElementById('repTotalTokens').innerText = m.totalTokensDisplay || '0';
         document.getElementById('repTokensSplit').innerText = `${m.inputTokensDisplay || '0'} + ${m.outputTokensDisplay || '0'}`;
+        if (document.getElementById('repTotalCost')) {
+          document.getElementById('repTotalCost').innerText = m.totalCostDisplay || '¥0.00';
+        }
         document.getElementById('repSuccessReq').innerText = (m.successRequests || 0).toLocaleString();
         document.getElementById('repSuccessRate').innerText = m.successRate || '100%';
         document.getElementById('repTotalReq').innerText = (m.totalRequests || 0).toLocaleString();
@@ -1518,19 +1583,25 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         document.getElementById('repTopModelTokens').innerText = m.topModel?.tokensDisplay || '0';
         document.getElementById('repTopModelPercent').innerText = m.topModel?.percentage || '100%';
 
-        // 2. 模型排行分布 (Top Models)
+        // 2. 模型排行分布 (Top Models，展示各模型用量与按官网价格折算的大概价钱)
         const modelRankBox = document.getElementById('modelRankList');
         if (Array.isArray(m.modelsList) && m.modelsList.length > 0) {
           const colors = ['#f43f5e', '#38bdf8', '#c084fc', '#facc15', '#4ade80', '#fb923c'];
           modelRankBox.innerHTML = m.modelsList.map((item, idx) => {
             const color = colors[idx % colors.length];
+            const costHtml = item.costDisplay
+              ? `<span style="color:#22c55e; font-family:monospace; font-weight:700; font-size:12px; cursor:help;" title="${escapeAttr(item.priceVendor || '官网')}: ${escapeAttr(item.priceNote || '')}">约 ${item.costDisplay}</span>`
+              : '';
             return `
-              <div class="rank-row">
+              <div class="rank-row" title="模型: ${escapeAttr(item.name)}&#10;消耗: ${item.totalTokensDisplay} tokens&#10;官网折算价钱: ${item.costDisplay || '¥0.00'}&#10;定价依据: ${escapeAttr(item.priceVendor || '')} - ${escapeAttr(item.priceNote || '')}">
                 <span class="rank-name" title="${item.name}">${item.name}</span>
                 <div class="rank-track">
                   <div class="rank-fill" style="width: ${item.percentNum}%; background: ${color};"></div>
                 </div>
-                <span class="rank-val">${item.totalTokensDisplay}</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span class="rank-val" style="color:var(--text-main); font-size:12px;">${item.totalTokensDisplay}</span>
+                  ${costHtml}
+                </div>
                 <span class="rank-pct">${item.percentage}</span>
               </div>
             `;
@@ -1539,7 +1610,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           modelRankBox.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:15px;">该区间暂无模型调用数据</div>';
         }
 
-        // 3. 每日历史趋势 (Daily Trend Table - 全部完整显示)
+        // 3. 每日历史趋势 (Daily Trend Table - 全部完整显示，包含每日折算价钱)
         const dailyBody = document.getElementById('dailyTrendBody');
         const badgeTrend = document.getElementById('badgeDailyTrendTotal');
         if (badgeTrend && Array.isArray(m.dailyTrend)) {
@@ -1570,11 +1641,12 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
                 <td style="color:var(--text-muted); font-family:monospace;">${d.inputTokensDisplay}</td>
                 <td style="color:var(--text-muted); font-family:monospace;">${d.outputTokensDisplay}</td>
                 <td><b style="color:var(--accent); font-family:monospace; font-size:13px;">${d.totalTokensDisplay}</b></td>
+                <td><b style="color:#22c55e; font-family:monospace; font-size:12px;">${d.totalCostDisplay || '¥0.00'}</b></td>
               </tr>
             `;
           }).join('');
         } else {
-          dailyBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px;">暂无历史趋势记录</td></tr>';
+          dailyBody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:20px;">暂无历史趋势记录</td></tr>';
         }
 
       } catch (err) {
@@ -2406,6 +2478,93 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
 
     function closeCreditModal() {
       document.getElementById('creditModal').style.display = 'none';
+    }
+
+    async function openPricingModal() {
+      const modal = document.getElementById('pricingModal');
+      modal.style.display = 'flex';
+      await loadPricingRules();
+    }
+
+    function closePricingModal() {
+      document.getElementById('pricingModal').style.display = 'none';
+      const resBox = document.getElementById('pricingOnlineResults');
+      if (resBox) resBox.style.display = 'none';
+    }
+
+    async function loadPricingRules() {
+      const tbody = document.getElementById('pricingTableBody');
+      try {
+        const res = await fetch('/api/pricing');
+        const data = await res.json();
+        const prices = data.prices || {};
+
+        tbody.innerHTML = Object.entries(prices).map(([id, p]) => `
+          <tr>
+            <td><code>${escapeHtml(id)}</code></td>
+            <td><b>${escapeHtml(p.name || id)}</b></td>
+            <td><span class="badge badge-blue">${escapeHtml(p.vendor || '官方')}</span></td>
+            <td style="color:#22c55e; font-family:monospace; font-weight:700;">¥${Number(p.input || 0).toFixed(2)}</td>
+            <td style="color:#4ade80; font-family:monospace; font-weight:700;">¥${Number(p.output || 0).toFixed(2)}</td>
+            <td style="color:var(--text-muted); font-size:12px;">${escapeHtml(p.note || '')}</td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#f87171; padding:20px;">加载价格标准失败: ${escapeHtml(e.message)}</td></tr>`;
+      }
+    }
+
+    async function runPricingSearchOnline() {
+      const queryInput = document.getElementById('pricingSearchInput');
+      const q = (queryInput ? queryInput.value.trim() : '') || '大模型 API 官方价格 1M tokens';
+      const btn = document.getElementById('btnOnlineSearchPricing');
+      const resBox = document.getElementById('pricingOnlineResults');
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = '🔍 正在联网检索官方价格...';
+      }
+
+      resBox.style.display = 'block';
+      resBox.innerHTML = '<div style="color:var(--text-muted); padding:10px; text-align:center;">🌐 正在通过网关执行上游联网检索 (POST /v1/search)...</div>';
+
+      try {
+        const res = await fetch('/api/pricing/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '检索失败');
+
+        const items = (data.results || []).flatMap(r => r.results || []);
+        if (items.length === 0) {
+          resBox.innerHTML = '<div style="color:var(--text-muted); padding:10px;">未检索到相关官方定价网页片段</div>';
+        } else {
+          resBox.innerHTML = `
+            <div style="font-weight:bold; color:var(--accent); margin-bottom:6px;">
+              🌐 官方联网检索结果 (共实时抓取 ${items.length} 条权威源):
+            </div>
+            ${items.map(it => `
+              <div style="margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,0.05);">
+                <div style="font-weight:600; color:#38bdf8;">
+                  <a href="${escapeAttr(it.url)}" target="_blank" style="color:#38bdf8; text-decoration:none;">🔗 ${escapeHtml(it.title)}</a>
+                </div>
+                <div style="color:var(--text-muted); font-size:11px; margin-top:2px;">
+                  ${escapeHtml(it.snippet || '')}
+                </div>
+              </div>
+            `).join('')}
+          `;
+        }
+      } catch (err) {
+        resBox.innerHTML = `<div style="color:#f87171; padding:10px;">联网检索失败: ${escapeHtml(err.message)}</div>`;
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = '🌐 联网检索官网最新价格';
+        }
+      }
     }
 
     // 页面启动初始化鉴权状态
