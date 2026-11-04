@@ -260,7 +260,9 @@ export class AccountScheduler {
     const acc = accounts.find(a => a.uid === uid);
     if (acc) {
       if (!acc.modelCooldowns) acc.modelCooldowns = {};
+      if (!acc.modelCooldownReasons) acc.modelCooldownReasons = {};
       acc.modelCooldowns[modelId] = Date.now() + seconds * 1000;
+      acc.modelCooldownReasons[modelId] = reason || '上游模型限频冷却';
       Logger.warn('COOLDOWN', `账号 [${formatAccountFullDesc(acc)}] 模型 [${modelId}] 局部冷却 ${seconds}秒`, { reason });
       saveAccounts();
     }

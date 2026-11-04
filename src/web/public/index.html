@@ -123,6 +123,39 @@
     .badge-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
     .badge-blue { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
 
+    /* Hover Tooltip Popup (实时探针与繁忙度浮动展示) */
+    .probe-tip-wrap { position: relative; display: inline-flex; cursor: help; }
+    .probe-tip-popover {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #0f172a;
+      border: 1px solid rgba(234, 179, 8, 0.4);
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6);
+      padding: 10px 14px;
+      border-radius: 8px;
+      z-index: 9999;
+      width: max-content;
+      min-width: 180px;
+      max-width: 320px;
+      pointer-events: none;
+      white-space: normal;
+      text-align: left;
+    }
+    .probe-tip-popover::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -5px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: #0f172a transparent transparent transparent;
+    }
+    .probe-tip-wrap:hover .probe-tip-popover { display: block; }
+
     /* Account Note Tags */
     .acc-note-tag { display: inline-flex; align-items: center; gap: 4px; background: rgba(56, 189, 248, 0.1); color: var(--accent); border: 1px solid rgba(56, 189, 248, 0.25); padding: 2px 8px; border-radius: 6px; font-size: 11px; cursor: pointer; transition: 0.15s; font-weight: 500; }
     .acc-note-tag:hover { background: rgba(56, 189, 248, 0.2); border-color: var(--accent); }
@@ -492,7 +525,8 @@
                 <tr>
                   <th>模型 ID</th>
                   <th>显示名称</th>
-                  <th>实时探针</th>
+                  <th>上游繁忙度</th>
+                  <th>实时探针 (本地账号)</th>
                   <th>官方修订说明</th>
                   <th>计费倍率 <span id="thRateSortIcon" style="cursor:pointer; font-size:11px; margin-left:4px;" onclick="cycleModelSort()" title="点击切换：默认 / 倍率升序 / 倍率降序">↕️</span></th>
                   <th>上下文窗口</th>
@@ -1930,7 +1964,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
 
       if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
         return;
       }
 
@@ -1954,16 +1988,75 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         }
 
         const desc = m.descriptionZh || m.descriptionEn || '-';
-        const probeHtml = m.probeStatus === 'cooldown' 
-          ? '<span class="badge badge-err">🔴 冷却限流</span>' 
-          : m.probeStatus === 'busy' 
-          ? '<span class="badge badge-cool">🟡 局部限流</span>' 
-          : '<span class="badge badge-ok">🟢 畅通</span>';
+
+        // 1. 上游繁忙度展示列 (从上游获取到的模型繁忙度)
+        const busyBadgeClass = m.upstreamBusyLevel === 'overload' 
+          ? 'badge-err' 
+          : (m.upstreamBusyLevel === 'busy' ? 'badge-cool' : 'badge-ok');
+        const upstreamHtml = `
+          <div class="probe-tip-wrap" title="上游标定: ${escapeAttr(m.upstreamBusyLabel || '')}&#10;说明: ${escapeAttr(m.upstreamBusyDesc || '')}">
+            <span class="badge ${busyBadgeClass}">${escapeHtml(m.upstreamBusyLabel || '🟢 空闲 (畅通)')}</span>
+            <div class="probe-tip-popover" style="border-color: rgba(56, 189, 248, 0.4);">
+              <div style="font-weight:bold; color:var(--accent); font-size:12px; margin-bottom:4px;">☁️ 官方上游模型繁忙度</div>
+              <div style="font-size:11px; color:var(--text-main); margin-bottom:2px;">状态: <b>${escapeHtml(m.upstreamBusyLabel || '🟢 畅通')}</b></div>
+              <div style="font-size:11px; color:var(--text-muted);">${escapeHtml(m.upstreamBusyDesc || '上游官方节点正常在线，负载充裕')}</div>
+            </div>
+          </div>
+        `;
+
+        // 2. 实时探针 (本地账号状态，局部限流浮动显示具体限流账号)
+        let probeHtml = '';
+        if (m.probeStatus === 'busy' || (m.coolingCount > 0 && m.coolingCount < (m.totalAccounts || 1))) {
+          const tipAccounts = (m.coolingAccounts || []).map(a => `
+            <div style="font-size:12px; margin:4px 0; color:#fff; display:flex; justify-content:space-between; gap:10px;">
+              <span>• <b>${escapeHtml(a.name)}</b></span>
+              <span style="color:#f87171; font-weight:bold; font-size:11px; white-space:nowrap;">(剩 ${a.remainingSec}s)</span>
+            </div>
+          `).join('');
+
+          const nativeTip = `⚠️ 局部限流 (${m.coolingCount}/${m.totalAccounts || 1}):\n` + (m.coolingAccounts || []).map(a => `• ${a.name} (剩 ${a.remainingSec}s)`).join('\n') + '\n网关已自动调度池中其他健康账号接力此模型';
+
+          probeHtml = `
+            <div class="probe-tip-wrap" title="${escapeAttr(nativeTip)}">
+              <span class="badge badge-cool">🟡 局部限流 (${m.coolingCount}/${m.totalAccounts || 1})</span>
+              <div class="probe-tip-popover">
+                <div style="font-weight:bold; margin-bottom:6px; color:#facc15; font-size:12px;">⚠️ 局部限流账号明细 (${m.coolingCount} 个账号受限):</div>
+                ${tipAccounts || '<div style="color:var(--text-muted); font-size:11px;">账号冷却中...</div>'}
+                <div style="margin-top:6px; font-size:11px; color:var(--text-muted); border-top:1px solid rgba(255,255,255,0.1); padding-top:4px;">网关将自动调度池中其他健康账号接力此模型</div>
+              </div>
+            </div>
+          `;
+        } else if (m.probeStatus === 'cooldown') {
+          const tipAccounts = (m.coolingAccounts || []).map(a => `
+            <div style="font-size:12px; margin:4px 0; color:#fff; display:flex; justify-content:space-between; gap:10px;">
+              <span>• <b>${escapeHtml(a.name)}</b></span>
+              <span style="color:#f87171; font-weight:bold; font-size:11px; white-space:nowrap;">(剩 ${a.remainingSec}s)</span>
+            </div>
+          `).join('');
+
+          probeHtml = `
+            <div class="probe-tip-wrap" title="全池所有账号均限流冷却中">
+              <span class="badge badge-err">🔴 全池冷却 (${m.coolingCount}/${m.totalAccounts || 1})</span>
+              <div class="probe-tip-popover" style="border-color: rgba(239, 68, 68, 0.4);">
+                <div style="font-weight:bold; margin-bottom:6px; color:#f87171; font-size:12px;">🔴 全池账号限流冷却中:</div>
+                ${tipAccounts}
+                <div style="margin-top:6px; font-size:11px; color:var(--text-muted); border-top:1px solid rgba(255,255,255,0.1); padding-top:4px;">网关将自动降级改道至备用模型</div>
+              </div>
+            </div>
+          `;
+        } else {
+          probeHtml = `
+            <div class="probe-tip-wrap" title="全池所有账号均畅通就绪，随时可调用">
+              <span class="badge badge-ok">🟢 畅通 (${m.totalAccounts || 1}/${m.totalAccounts || 1})</span>
+            </div>
+          `;
+        }
 
         return `
           <tr>
             <td><code>${m.id}</code></td>
             <td><b>${m.name || m.id}</b></td>
+            <td>${upstreamHtml}</td>
             <td>${probeHtml}</td>
             <td style="color:var(--text-muted); font-size:12px; max-width:240px;">${desc}</td>
             <td>${badgeCredit}</td>
