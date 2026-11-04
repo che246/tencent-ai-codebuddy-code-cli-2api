@@ -609,21 +609,31 @@
               <span style="font-size:12px; font-weight:normal; color:var(--text-muted);">热更新配置，修改即刻在内存生效并持久化</span>
             </div>
             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px;">
-              <!-- 1. 单账号限流保护 -->
-              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
-                    <span>单账号限流保护 (并发削峰)</span>
-                    <span id="badgeConcurrency" class="badge badge-ok">已开启</span>
+              <!-- 1. 单账号限流保护 (并发削峰) -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; flex-direction:column; justify-content:space-between; gap:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                  <div>
+                    <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                      <span>单账号限流保护 (并发削峰)</span>
+                      <span id="badgeConcurrency" class="badge badge-ok">已开启</span>
+                    </div>
+                    <div style="font-size:12px; color:var(--text-muted); margin-top:4px; line-height:1.5;">
+                      限制单个账号同时处理的最大在途并发数，防止并发过高触发腾讯云风控。
+                    </div>
                   </div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
-                    限制单个账号同时处理的在途并发不超过 <span id="valMaxInFlight" style="color:var(--accent); font-weight:bold;">3</span> 个，防止并发过高触发风控。
-                  </div>
+                  <label class="switch" style="margin-left:10px; flex-shrink:0;">
+                    <input type="checkbox" id="chkConcurrency" onchange="togglePolicy()">
+                    <span class="slider"></span>
+                  </label>
                 </div>
-                <label class="switch" style="margin-left:15px; flex-shrink:0;">
-                  <input type="checkbox" id="chkConcurrency" onchange="togglePolicy()">
-                  <span class="slider"></span>
-                </label>
+                <div id="concurrencyConfigRow" style="display:flex; gap:8px; align-items:center; justify-content:flex-end; padding-top:8px; border-top:1px solid rgba(255,255,255,0.05); flex-wrap:wrap;">
+                  <span style="font-size:12px; color:var(--text-muted);">单账号最大并发:</span>
+                  <div style="display:flex; align-items:center; gap:4px;">
+                    <input type="number" id="inputMaxInFlight" class="search-input" style="width:65px; padding:5px 8px; font-size:12px; text-align:center;" min="1" max="50" step="1" value="3" onchange="saveMaxInFlight()">
+                    <span style="font-size:12px; color:var(--text-muted); font-weight:bold;">个</span>
+                  </div>
+                  <button class="btn-primary" style="padding:5px 12px; font-size:12px; white-space:nowrap;" onclick="saveMaxInFlight()">保存并发</button>
+                </div>
               </div>
 
               <!-- 2. 跨账号限流自动切换 (核心新特性) -->
@@ -693,36 +703,32 @@
                 </select>
               </div>
 
-              <!-- 6. Web 控制台访问鉴权保护开关 -->
-              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
-                    <span>Web 控制台访问密码保护</span>
-                    <span id="badgeWebAuth" class="badge badge-ok">已开启</span>
-                  </div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
-                    保护 Web 管理面板与所有 /api/* 运维接口，必须提供正确密钥方可访问。
-                  </div>
-                </div>
-                <label class="switch" style="margin-left:15px; flex-shrink:0;">
-                  <input type="checkbox" id="chkWebAuth" onchange="togglePolicy()">
-                  <span class="slider"></span>
-                </label>
-              </div>
-
-              <!-- 7. Web 控制台专属密码设置 -->
+              <!-- 6. Web 控制台访问密码保护 (融合控制台专属密码，开启时在卡片内展开) -->
               <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; flex-direction:column; justify-content:space-between; gap:12px;">
-                <div>
-                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
-                    <span>控制台专属密码 (webPassword)</span>
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                  <div>
+                    <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                      <span>Web 控制台访问密码保护</span>
+                      <span id="badgeWebAuth" class="badge badge-ok">已开启</span>
+                    </div>
+                    <div style="font-size:12px; color:var(--text-muted); margin-top:4px; line-height:1.5;">
+                      保护 Web 管理面板与所有 <code>/api/*</code> 运维接口，开启后必须输入密钥方可访问。
+                    </div>
                   </div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:6px; line-height:1.5;">
-                    留空时默认使用 <code>apiKey</code> 作为密码；也可单独指定控制台管理密码。
-                  </div>
+                  <label class="switch" style="margin-left:10px; flex-shrink:0;">
+                    <input type="checkbox" id="chkWebAuth" onchange="togglePolicy()">
+                    <span class="slider"></span>
+                  </label>
                 </div>
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; padding-top:8px; border-top:1px solid rgba(255,255,255,0.05);">
-                  <input type="password" id="inputWebPassword" class="search-input" style="width:160px; padding:6px 10px; font-size:12px;" placeholder="留空则使用 apiKey">
-                  <button class="btn-primary" style="padding:6px 12px; font-size:12px; white-space:nowrap;" onclick="saveWebPassword()">保存密码</button>
+                <!-- 仅在开启密码保护时，在卡片内部联动展开密码配置 -->
+                <div id="webPasswordSection" style="display:flex; flex-direction:column; gap:6px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.05);">
+                  <div style="font-size:11px; color:var(--text-muted);">
+                    留空默认使用 <code>apiKey</code> 访问；也可单独指定控制台专属管理密码：
+                  </div>
+                  <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end; flex-wrap:wrap;">
+                    <input type="password" id="inputWebPassword" class="search-input" style="width:160px; padding:5px 10px; font-size:12px;" placeholder="留空则使用 apiKey">
+                    <button class="btn-primary" style="padding:5px 12px; font-size:12px; white-space:nowrap;" onclick="saveWebPassword()">保存密码</button>
+                  </div>
                 </div>
               </div>
 
@@ -1102,10 +1108,19 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         const s = await res.json();
         currentSettings = s;
         
-        document.getElementById('chkConcurrency').checked = s.concurrencyLimitEnabled;
-        document.getElementById('badgeConcurrency').className = 'badge ' + (s.concurrencyLimitEnabled ? 'badge-ok' : 'badge-cool');
-        document.getElementById('badgeConcurrency').innerText = s.concurrencyLimitEnabled ? '已开启' : '已关闭';
-        document.getElementById('valMaxInFlight').innerText = s.maxInFlightPerAccount || 3;
+        const isConcOn = s.concurrencyLimitEnabled !== false;
+        document.getElementById('chkConcurrency').checked = isConcOn;
+        document.getElementById('badgeConcurrency').className = 'badge ' + (isConcOn ? 'badge-ok' : 'badge-cool');
+        document.getElementById('badgeConcurrency').innerText = isConcOn ? '已开启' : '已关闭';
+        if (document.getElementById('valMaxInFlight')) {
+          document.getElementById('valMaxInFlight').innerText = s.maxInFlightPerAccount || 3;
+        }
+        if (document.getElementById('inputMaxInFlight')) {
+          document.getElementById('inputMaxInFlight').value = s.maxInFlightPerAccount || 3;
+        }
+        if (document.getElementById('concurrencyConfigRow')) {
+          document.getElementById('concurrencyConfigRow').style.display = isConcOn ? 'flex' : 'none';
+        }
 
         document.getElementById('chkFailover').checked = s.accountFailoverEnabled !== false;
         document.getElementById('badgeFailover').className = 'badge ' + (s.accountFailoverEnabled !== false ? 'badge-ok' : 'badge-cool');
@@ -1141,10 +1156,14 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           }
         }
 
+        const isWebAuthOn = s.webAuthEnabled !== false;
         if (document.getElementById('chkWebAuth')) {
-          document.getElementById('chkWebAuth').checked = s.webAuthEnabled !== false;
-          document.getElementById('badgeWebAuth').className = 'badge ' + (s.webAuthEnabled !== false ? 'badge-ok' : 'badge-cool');
-          document.getElementById('badgeWebAuth').innerText = s.webAuthEnabled !== false ? '已开启' : '已关闭';
+          document.getElementById('chkWebAuth').checked = isWebAuthOn;
+          document.getElementById('badgeWebAuth').className = 'badge ' + (isWebAuthOn ? 'badge-ok' : 'badge-cool');
+          document.getElementById('badgeWebAuth').innerText = isWebAuthOn ? '已开启' : '已关闭';
+        }
+        if (document.getElementById('webPasswordSection')) {
+          document.getElementById('webPasswordSection').style.display = isWebAuthOn ? 'flex' : 'none';
         }
         if (document.getElementById('inputWebPassword')) {
           document.getElementById('inputWebPassword').value = s.webPassword || '';
@@ -1322,12 +1341,21 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       const isFall = document.getElementById('chkFallback').checked;
       const isWebAuth = document.getElementById('chkWebAuth') ? document.getElementById('chkWebAuth').checked : true;
       const strat = document.getElementById('selStrategy').value;
+      const maxInFlight = document.getElementById('inputMaxInFlight') ? parseInt(document.getElementById('inputMaxInFlight').value, 10) : 3;
+
+      if (document.getElementById('concurrencyConfigRow')) {
+        document.getElementById('concurrencyConfigRow').style.display = isConc ? 'flex' : 'none';
+      }
+      if (document.getElementById('webPasswordSection')) {
+        document.getElementById('webPasswordSection').style.display = isWebAuth ? 'flex' : 'none';
+      }
 
       await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           concurrencyLimitEnabled: isConc,
+          maxInFlightPerAccount: maxInFlight,
           accountFailoverEnabled: isFailover,
           modelFallbackEnabled: isFall,
           webAuthEnabled: isWebAuth,
@@ -1338,6 +1366,19 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       await loadSettings();
       loadAccounts();
       fetchLogs();
+    }
+
+    async function saveMaxInFlight() {
+      const val = parseInt(document.getElementById('inputMaxInFlight').value, 10);
+      if (isNaN(val) || val < 1) return alert('请输入有效的并发数 (>= 1)');
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maxInFlightPerAccount: val })
+      });
+      alert(`已将单账号最大在途并发设置为 ${val} 个！`);
+      await loadSettings();
+      loadAccounts();
     }
 
     async function saveWebPassword() {
