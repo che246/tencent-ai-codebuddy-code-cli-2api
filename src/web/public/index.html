@@ -574,7 +574,7 @@
               <span>🛡️ 网关运行策略与防护开关</span>
               <span style="font-size:12px; font-weight:normal; color:var(--text-muted);">热更新配置，修改即刻在内存生效并持久化</span>
             </div>
-            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;">
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px;">
               <!-- 1. 单账号限流保护 -->
               <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
                 <div>
@@ -677,59 +677,59 @@
               </div>
 
               <!-- 7. Web 控制台专属密码设置 -->
-              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; flex-direction:column; justify-content:space-between; gap:12px;">
                 <div>
                   <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
                     <span>控制台专属密码 (webPassword)</span>
                   </div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:6px; line-height:1.5;">
                     留空时默认使用 <code>apiKey</code> 作为密码；也可单独指定控制台管理密码。
                   </div>
                 </div>
-                <div style="display:flex; gap:6px; margin-left:15px; align-items:center;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; padding-top:8px; border-top:1px solid rgba(255,255,255,0.05);">
                   <input type="password" id="inputWebPassword" class="search-input" style="width:160px; padding:6px 10px; font-size:12px;" placeholder="留空则使用 apiKey">
-                  <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveWebPassword()">保存密码</button>
+                  <button class="btn-primary" style="padding:6px 12px; font-size:12px; white-space:nowrap;" onclick="saveWebPassword()">保存密码</button>
                 </div>
               </div>
 
               <!-- 8. 日志数据库体积熔断收缩保护 (logs.db) -->
-              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; flex-direction:column; justify-content:space-between; gap:12px;">
                 <div>
-                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
                     <span>日志数据库容量熔断保护 (logs.db)</span>
                     <span id="badgeLogDbSize" class="badge badge-blue">当前体积: -</span>
                   </div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:6px; line-height:1.5;">
                     超过设定上限时，自动清理最久历史日志并 VACUUM 收缩至上限的 50%（如 30MB 降至 15MB）。
                   </div>
                 </div>
-                <div style="display:flex; gap:6px; margin-left:15px; align-items:center;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; padding-top:8px; border-top:1px solid rgba(255,255,255,0.05);">
                   <div style="display:flex; align-items:center; gap:4px;">
-                    <input type="number" id="inputMaxLogDbSize" class="search-input" style="width:70px; padding:6px 8px; font-size:12px; text-align:center;" min="5" max="1000" step="5" value="30">
-                    <span style="font-size:12px; color:var(--text-muted);">MB</span>
+                    <input type="number" id="inputMaxLogDbSize" class="search-input" style="width:65px; padding:6px 8px; font-size:12px; text-align:center;" min="5" max="1000" step="5" value="30">
+                    <span style="font-size:12px; color:var(--text-muted); font-weight:bold;">MB</span>
                   </div>
-                  <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveMaxLogDbSize()">保存上限</button>
+                  <button class="btn-primary" style="padding:6px 12px; font-size:12px; white-space:nowrap;" onclick="saveMaxLogDbSize()">保存上限</button>
                   <button class="btn-outline" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="triggerManualPruneSize()" title="立即检测体积并在超标时执行收缩">🧹 检查收缩</button>
                 </div>
               </div>
 
               <!-- 9. 官方 Token 提前换发阈值设置 -->
-              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; flex-direction:column; justify-content:space-between; gap:12px;">
                 <div>
-                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                  <div style="font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
                     <span>官方 Token 凭据提前自动换发天数</span>
                     <span id="badgeTokenAdvanceDays" class="badge badge-ok">默认提前 7 天</span>
                   </div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:6px; line-height:1.5;">
                     当账号距离过期小于设定天数时，系统在后台巡检或服务请求时自动调用官方接口换发新令牌，确保持续可用。
                   </div>
                 </div>
-                <div style="display:flex; gap:6px; margin-left:15px; align-items:center;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; padding-top:8px; border-top:1px solid rgba(255,255,255,0.05);">
                   <div style="display:flex; align-items:center; gap:4px;">
                     <input type="number" id="inputTokenAdvanceDays" class="search-input" style="width:65px; padding:6px 8px; font-size:12px; text-align:center;" min="1" max="30" step="1" value="7">
-                    <span style="font-size:12px; color:var(--text-muted);">天</span>
+                    <span style="font-size:12px; color:var(--text-muted); font-weight:bold;">天</span>
                   </div>
-                  <button class="btn-primary" style="padding:6px 10px; font-size:12px; white-space:nowrap;" onclick="saveTokenAdvanceDays()">保存天数</button>
+                  <button class="btn-primary" style="padding:6px 12px; font-size:12px; white-space:nowrap;" onclick="saveTokenAdvanceDays()">保存天数</button>
                 </div>
               </div>
             </div>
