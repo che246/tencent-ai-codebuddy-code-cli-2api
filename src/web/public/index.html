@@ -471,32 +471,59 @@
 
         <!-- 页面 2: 账号运维 (ACCOUNTS) -->
         <section id="page-accounts" class="page-section">
+          <!-- 账号池与模型锁池状态总览看板卡片 -->
+          <div id="modelLockPoolBanner" class="card" style="margin-bottom:18px; padding:18px 20px; background:rgba(2, 132, 199, 0.05); border:1px solid rgba(56, 189, 248, 0.25);">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <span style="font-size:24px;">🔒</span>
+                <div>
+                  <div style="display:flex; align-items:center; gap:10px;">
+                    <span style="font-size:16px; font-weight:700; color:var(--text-main);">模型锁池实时监控 (Model Lock Pool)</span>
+                    <span id="badgeLockPoolSummary" class="badge badge-ok" style="font-size:12px; padding:3px 10px;">🟢 全池畅通 (无锁池)</span>
+                  </div>
+                  <div id="descLockPoolSummary" style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                    实时监控所有账号遭遇上游限频 (429/6004/TPD) 时的单模型局部冷却退避状态与解锁倒计时
+                  </div>
+                </div>
+              </div>
+              <div id="lockPoolActionArea" style="display:flex; align-items:center; gap:8px;">
+                <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadAccounts()">🔄 实时探测</button>
+              </div>
+            </div>
+            <!-- 当存在锁池时动态展示详细清单卡片 -->
+            <div id="lockPoolDetailList" style="display:none; margin-top:14px; padding-top:14px; border-top:1px dashed var(--card-border);"></div>
+          </div>
+
           <div class="card">
             <div class="card-title">
               <div style="display:flex; align-items:center; gap:8px;">
                 <span>👥 账号池运维状态与配额监控</span>
                 <span class="badge badge-ok" id="badgeAccountCount">加载中</span>
               </div>
-              <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadAccounts()">🔄 刷新状态</button>
+              <div style="display:flex; gap:8px;">
+                <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadAccounts()">🔄 刷新状态</button>
+              </div>
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>UID / 标识</th>
-                  <th>账号昵称</th>
-                  <th>备注说明</th>
-                  <th>Token有效期 / 换发</th>
-                  <th>可用积分 (Credits)</th>
-                  <th>已消耗 Token</th>
-                  <th>今日签到</th>
-                  <th>实时并发</th>
-                  <th>健康状态</th>
-                  <th>模型锁池状态</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="accBody"></tbody>
-            </table>
+            <div style="overflow-x:auto; width:100%; border-radius:6px;">
+              <table style="min-width:1150px;">
+                <thead>
+                  <tr>
+                    <th>UID / 标识</th>
+                    <th>账号昵称</th>
+                    <th>备注说明</th>
+                    <th>Token有效期 / 换发</th>
+                    <th>可用积分 (Credits)</th>
+                    <th>已消耗 Token</th>
+                    <th>今日签到</th>
+                    <th>实时并发</th>
+                    <th>健康状态</th>
+                    <th>模型锁池状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="accBody"></tbody>
+              </table>
+            </div>
           </div>
         </section>
 
@@ -1792,6 +1819,70 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         document.getElementById('kpiTotalCredits').innerText = totalCredits.toLocaleString('en-US', { minimumFractionDigits: 2 });
         document.getElementById('badgeAccountCount').innerText = `${activeAccCount} / ${data.length} 个可用`;
 
+        // 渲染模型锁池状态总览看板
+        const allLockedAccounts = data.filter(a => (a.lockedCount > 0) || a.isCooldown);
+        const bannerBadge = document.getElementById('badgeLockPoolSummary');
+        const bannerDesc = document.getElementById('descLockPoolSummary');
+        const detailList = document.getElementById('lockPoolDetailList');
+        const actionArea = document.getElementById('lockPoolActionArea');
+
+        if (bannerBadge && detailList) {
+          if (allLockedAccounts.length === 0) {
+            bannerBadge.className = 'badge badge-ok';
+            bannerBadge.innerText = '🟢 全池畅通 (无锁池)';
+            bannerDesc.innerText = '所有账号均处于健康服务状态，所有模型均畅通就绪，无任何模型退避锁定。';
+            detailList.style.display = 'none';
+            if (actionArea) {
+              actionArea.innerHTML = '<button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadAccounts()">🔄 实时探测</button>';
+            }
+          } else {
+            bannerBadge.className = 'badge badge-err';
+            bannerBadge.innerText = `🔴 检测到 ${allLockedAccounts.length} 个账号触发模型限流锁池`;
+            bannerDesc.innerText = '当某账号调用特定模型返回 429/6004 限流时触发局部退避。网关已自动调度其他健康账号无感接力。';
+            detailList.style.display = 'grid';
+            detailList.style.gridTemplateColumns = 'repeat(auto-fit, minmax(320px, 1fr))';
+            detailList.style.gap = '12px';
+
+            detailList.innerHTML = allLockedAccounts.map(acc => {
+              const accLabel = acc.note ? `${acc.email} [${acc.note}]` : acc.email;
+              const modelRows = (acc.lockedModels || []).map(lm => `
+                <div style="background:rgba(239, 68, 68, 0.1); border:1px solid rgba(239, 68, 68, 0.25); border-radius:6px; padding:6px 10px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+                  <div>
+                    <code style="color:#fca5a5; font-weight:bold;">${escapeHtml(lm.modelId)}</code>
+                    <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">原因: ${escapeHtml(lm.reason)}</div>
+                  </div>
+                  <span style="color:#facc15; font-weight:bold; font-family:monospace; font-size:12px;">剩 ${lm.remainingSec}s</span>
+                </div>
+              `).join('');
+
+              const globalRow = acc.isCooldown ? `
+                <div style="background:rgba(234, 179, 8, 0.1); border:1px solid rgba(234, 179, 8, 0.25); border-radius:6px; padding:6px 10px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+                  <span style="color:#fde047; font-weight:bold;">⏱️ 全局限流冷却退避</span>
+                  <span style="color:#facc15; font-weight:bold; font-family:monospace; font-size:12px;">剩 ${acc.cooldownRemainingSec || 0}s</span>
+                </div>
+              ` : '';
+
+              return `
+                <div style="background:var(--code-bg); border:1px solid var(--card-border); border-radius:8px; padding:12px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <b>👤 ${escapeHtml(accLabel)}</b>
+                    <button class="btn-outline" style="font-size:11px; padding:2px 8px; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${acc.uid}')">🔓 一键解除该账号锁池</button>
+                  </div>
+                  ${modelRows}
+                  ${globalRow}
+                </div>
+              `;
+            }).join('');
+
+            if (actionArea) {
+              actionArea.innerHTML = `
+                <button class="btn-primary" style="font-size:12px; padding:4px 12px; background:#dc2626;" onclick="unlockAllPoolModels()">🔓 一键解锁全池所有模型</button>
+                <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadAccounts()">🔄 实时探测</button>
+              `;
+            }
+          }
+        }
+
         const tbody = document.getElementById('accBody');
         if (!tbody) return;
         if (!Array.isArray(data) || data.length === 0) {
@@ -2811,6 +2902,30 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         }
       } catch (e) {
         alert('网络异常: ' + e.message);
+      }
+    }
+
+    async function unlockAllPoolModels() {
+      if (!confirm('确定一键解锁全池所有账号的模型锁池与冷却状态吗？')) return;
+      try {
+        const res = await fetch('/api/accounts');
+        const data = await res.json();
+        let unlockedCount = 0;
+        for (const a of data) {
+          if (a.lockedCount > 0 || a.isCooldown) {
+            await fetch('/api/accounts/unlock-models', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ uid: a.uid })
+            });
+            unlockedCount++;
+          }
+        }
+        alert(`✅ 全池操作完成！已为 ${unlockedCount} 个受限账号解除锁池与冷却状态。`);
+        loadAccounts();
+        loadModels(true);
+      } catch (e) {
+        alert('操作异常: ' + e.message);
       }
     }
 

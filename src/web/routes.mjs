@@ -50,7 +50,12 @@ export function handleDashboard(req, res) {
       .replace(/{{CA_COUNT}}/g, String(TlsCertificateStack.loadedCount))
       .replace(/{{WEB_AUTH_ENABLED}}/g, String(isAuthEnabled));
 
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
     return res.end(html);
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
