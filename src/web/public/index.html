@@ -347,7 +347,7 @@
               <div class="kpi-card">
                 <div class="kpi-label">总 Token</div>
                 <div class="kpi-value" style="color:#c084fc;"><span id="repTotalTokens">-</span></div>
-                <div class="kpi-hint">输入 + 输出 (<span id="repTokensSplit">-</span>)</div>
+                <div class="kpi-hint">输入+输出 (<span id="repTokensSplit">-</span>) · 缓存 <b id="repHitRate" style="color:#4ade80;">0.0%</b></div>
               </div>
 
               <!-- 2. 官网预估折算总价 (基于联网检索官方价格) -->
@@ -456,12 +456,13 @@
                   <th>主调模型</th>
                   <th>输入 Tokens</th>
                   <th>输出 Tokens</th>
+                  <th>缓存命中 (Hit)</th>
                   <th>总 Token 消耗</th>
                   <th>官网预估折算</th>
                 </tr>
               </thead>
               <tbody id="dailyTrendBody">
-                <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:20px;">正在统计每日趋势...</td></tr>
+                <tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:20px;">正在统计每日趋势...</td></tr>
               </tbody>
             </table>
           </div>
@@ -1567,9 +1568,12 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           }
         }
 
-        // 1. 统计概览 7 卡片 (含官网预估折算总价)
+        // 1. 统计概览 7 卡片 (含官网预估折算总价与真实缓存命中率)
         document.getElementById('repTotalTokens').innerText = m.totalTokensDisplay || '0';
         document.getElementById('repTokensSplit').innerText = `${m.inputTokensDisplay || '0'} + ${m.outputTokensDisplay || '0'}`;
+        if (document.getElementById('repHitRate')) {
+          document.getElementById('repHitRate').innerText = m.overallCacheHitRate || '0.0%';
+        }
         if (document.getElementById('repTotalCost')) {
           document.getElementById('repTotalCost').innerText = m.totalCostDisplay || '¥0.00';
         }
@@ -1590,7 +1594,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         document.getElementById('repTopModelTokens').innerText = m.topModel?.tokensDisplay || '0';
         document.getElementById('repTopModelPercent').innerText = m.topModel?.percentage || '100%';
 
-        // 2. 模型排行分布 (Top Models，展示各模型用量与按官网价格折算的大概价钱)
+        // 2. 模型排行分布 (Top Models，展示各模型用量、缓存命中与按官网价格折算的大概价钱)
         const modelRankBox = document.getElementById('modelRankList');
         if (Array.isArray(m.modelsList) && m.modelsList.length > 0) {
           const colors = ['#f43f5e', '#38bdf8', '#c084fc', '#facc15', '#4ade80', '#fb923c'];
@@ -1599,14 +1603,18 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             const costHtml = item.costDisplay
               ? `<span style="color:#22c55e; font-family:monospace; font-weight:700; font-size:12px; cursor:help;" title="${escapeAttr(item.priceVendor || '官网')}: ${escapeAttr(item.priceNote || '')}">约 ${item.costDisplay}</span>`
               : '';
+            const cacheHtml = item.cachedTokens > 0
+              ? `<span style="color:#38bdf8; font-size:11px;" title="命中缓存: ${item.cachedTokensDisplay} tokens">⚡ 缓存 ${item.cacheHitRate}</span>`
+              : '';
             return `
-              <div class="rank-row" title="模型: ${escapeAttr(item.name)}&#10;消耗: ${item.totalTokensDisplay} tokens&#10;官网折算价钱: ${item.costDisplay || '¥0.00'}&#10;定价依据: ${escapeAttr(item.priceVendor || '')} - ${escapeAttr(item.priceNote || '')}">
+              <div class="rank-row" title="模型: ${escapeAttr(item.name)}&#10;消耗: ${item.totalTokensDisplay} tokens&#10;缓存命中: ${item.cachedTokensDisplay || '0'} tokens (${item.cacheHitRate || '0.0%'})&#10;官网折算价钱: ${item.costDisplay || '¥0.00'}&#10;定价依据: ${escapeAttr(item.priceVendor || '')} - ${escapeAttr(item.priceNote || '')}">
                 <span class="rank-name" title="${item.name}">${item.name}</span>
                 <div class="rank-track">
                   <div class="rank-fill" style="width: ${item.percentNum}%; background: ${color};"></div>
                 </div>
                 <div style="display:flex; align-items:center; gap:8px;">
                   <span class="rank-val" style="color:var(--text-main); font-size:12px;">${item.totalTokensDisplay}</span>
+                  ${cacheHtml}
                   ${costHtml}
                 </div>
                 <span class="rank-pct">${item.percentage}</span>
@@ -1617,7 +1625,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           modelRankBox.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:15px;">该区间暂无模型调用数据</div>';
         }
 
-        // 3. 每日历史趋势 (Daily Trend Table - 全部完整显示，包含每日折算价钱)
+        // 3. 每日历史趋势 (Daily Trend Table - 全部完整显示，包含每日折算价钱与缓存命中)
         const dailyBody = document.getElementById('dailyTrendBody');
         const badgeTrend = document.getElementById('badgeDailyTrendTotal');
         if (badgeTrend && Array.isArray(m.dailyTrend)) {
@@ -1638,6 +1646,10 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
               ? `<span class="badge badge-blue" style="font-family:monospace; font-size:11px;">${escapeHtml(d.topModel)}</span>`
               : `<span style="color:var(--text-muted);">-</span>`;
 
+            const cacheCell = (d.cachedTokens || 0) > 0
+              ? `<span style="color:#38bdf8; font-family:monospace; font-weight:700;">${d.cachedTokensDisplay}</span> <span style="font-size:10px; color:#4ade80;">(${d.cacheHitRate || '0.0%'})</span>`
+              : `<span style="color:var(--text-muted); font-family:monospace;">0</span> <span style="font-size:10px; color:var(--text-muted);">(0.0%)</span>`;
+
             return `
               <tr>
                 <td><code>${d.date}</code>${dateBadge}</td>
@@ -1647,13 +1659,14 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
                 <td>${topModelHtml}</td>
                 <td style="color:var(--text-muted); font-family:monospace;">${d.inputTokensDisplay}</td>
                 <td style="color:var(--text-muted); font-family:monospace;">${d.outputTokensDisplay}</td>
+                <td>${cacheCell}</td>
                 <td><b style="color:var(--accent); font-family:monospace; font-size:13px;">${d.totalTokensDisplay}</b></td>
                 <td><b style="color:#22c55e; font-family:monospace; font-size:12px;">${d.totalCostDisplay || '¥0.00'}</b></td>
               </tr>
             `;
           }).join('');
         } else {
-          dailyBody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:20px;">暂无历史趋势记录</td></tr>';
+          dailyBody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:20px;">暂无历史趋势记录</td></tr>';
         }
 
       } catch (err) {

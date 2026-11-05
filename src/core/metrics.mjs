@@ -379,7 +379,12 @@ export function getMetricsReport(range = 'all') {
   // 模型排行列表 (包含按官网 Tokens 价格折算的大概使用的价钱，同时支持缓存命中折算)
   const modelsList = Object.entries(modelsMap)
     .map(([id, m]) => {
-      const costInfo = calculateModelUsageCost(id, m.inputTokens || 0, m.outputTokens || 0);
+      const modelCached = m.cachedTokens || 0;
+      const costInfo = calculateModelUsageCost(id, m.inputTokens || 0, m.outputTokens || 0, modelCached);
+      const hitRate = m.inputTokens > 0
+        ? (((modelCached) / m.inputTokens) * 100).toFixed(1) + '%'
+        : '0.0%';
+
       return {
         id,
         name: m.name || id,
@@ -387,6 +392,10 @@ export function getMetricsReport(range = 'all') {
         successRequests: m.successRequests || 0,
         inputTokens: m.inputTokens || 0,
         outputTokens: m.outputTokens || 0,
+        cachedTokens: modelCached,
+        cachedTokensDisplay: formatTokenNumber(modelCached),
+        cacheHitRate: hitRate,
+        isRealCache: costInfo.isRealCache,
         totalTokens: m.totalTokens || 0,
         totalTokensDisplay: formatTokenNumber(m.totalTokens || 0),
         cost: costInfo.standardCost,
@@ -411,6 +420,9 @@ export function getMetricsReport(range = 'all') {
   const totalCachedCostDisplay = formatCurrency(totalCachedCost);
   const totalSavedCost = Math.max(0, totalCost - totalCachedCost);
   const totalSavedCostDisplay = formatCurrency(totalSavedCost);
+  const overallCacheHitRate = inputTokens > 0
+    ? (((cachedTokens) / inputTokens) * 100).toFixed(1) + '%'
+    : '0.0%';
 
   // 账号排行列表
   const accountsList = Object.entries(accountsMap)
@@ -447,10 +459,16 @@ export function getMetricsReport(range = 'all') {
 
       // 计算当天各个模型折算出的官方总价值
       let dayCostTotal = 0;
+      let dayCachedCostTotal = 0;
+      const dayCachedTokens = d.cachedTokens || 0;
       for (const [mId, mData] of Object.entries(d.models || {})) {
-        const c = calculateModelUsageCost(mId, mData.inputTokens || 0, mData.outputTokens || 0);
-        dayCostTotal += c.totalCost;
+        const c = calculateModelUsageCost(mId, mData.inputTokens || 0, mData.outputTokens || 0, mData.cachedTokens || 0);
+        dayCostTotal += c.standardCost;
+        dayCachedCostTotal += c.cachedCost;
       }
+      const dayHitRate = d.inputTokens > 0
+        ? (((dayCachedTokens) / d.inputTokens) * 100).toFixed(1) + '%'
+        : '0.0%';
 
       return {
         date,
@@ -466,6 +484,9 @@ export function getMetricsReport(range = 'all') {
         inputTokensDisplay: formatTokenNumber(d.inputTokens || 0),
         outputTokens: d.outputTokens || 0,
         outputTokensDisplay: formatTokenNumber(d.outputTokens || 0),
+        cachedTokens: dayCachedTokens,
+        cachedTokensDisplay: formatTokenNumber(dayCachedTokens),
+        cacheHitRate: dayHitRate,
         totalTokens: d.totalTokens || 0,
         totalTokensDisplay: formatTokenNumber(d.totalTokens || 0),
         totalCost: dayCostTotal,
@@ -483,6 +504,9 @@ export function getMetricsReport(range = 'all') {
     inputTokensDisplay: formatTokenNumber(inputTokens),
     outputTokens,
     outputTokensDisplay: formatTokenNumber(outputTokens),
+    cachedTokens,
+    cachedTokensDisplay: formatTokenNumber(cachedTokens),
+    overallCacheHitRate,
 
     totalCost,
     totalCostDisplay,

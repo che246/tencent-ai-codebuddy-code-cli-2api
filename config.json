@@ -14,6 +14,7 @@
   "modelFallbackEnabled": true,
   "modelFallback": {
     "deepseek-v4.1-flash": [
+      "hy4-preview-x",
       "glm-5.3-flash"
     ]
   }

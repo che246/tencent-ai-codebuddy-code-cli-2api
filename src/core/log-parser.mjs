@@ -12,6 +12,7 @@ export function rebuildRealStatsFromLog() {
   let failedRequests = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let totalCachedTokens = 0;
 
   const daily = {};
   const models = {};
@@ -44,7 +45,7 @@ export function rebuildRealStatsFromLog() {
       totalInputTokens += estimatedInput;
 
       if (!daily[date]) {
-        daily[date] = { requests: 0, successRequests: 0, failedRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, models: {}, accounts: {} };
+        daily[date] = { requests: 0, successRequests: 0, failedRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0, models: {}, accounts: {} };
       }
       daily[date].requests++;
       daily[date].inputTokens += estimatedInput;
@@ -52,14 +53,14 @@ export function rebuildRealStatsFromLog() {
 
       if (!daily[date].models) daily[date].models = {};
       if (!daily[date].models[model]) {
-        daily[date].models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        daily[date].models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
       }
       daily[date].models[model].requests++;
       daily[date].models[model].inputTokens += estimatedInput;
       daily[date].models[model].totalTokens += estimatedInput;
 
       if (!models[model]) {
-        models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
       }
       models[model].requests++;
       models[model].inputTokens += estimatedInput;
@@ -68,14 +69,14 @@ export function rebuildRealStatsFromLog() {
       const accKey = currentAcc.uid || currentAcc.name;
       if (!daily[date].accounts) daily[date].accounts = {};
       if (!daily[date].accounts[accKey]) {
-        daily[date].accounts[accKey] = { uid: currentAcc.uid, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        daily[date].accounts[accKey] = { uid: currentAcc.uid, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
       }
       daily[date].accounts[accKey].requests++;
       daily[date].accounts[accKey].inputTokens += estimatedInput;
       daily[date].accounts[accKey].totalTokens += estimatedInput;
 
       if (!accounts[accKey]) {
-        accounts[accKey] = { uid: currentAcc.uid, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        accounts[accKey] = { uid: currentAcc.uid, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
       }
       accounts[accKey].requests++;
       accounts[accKey].inputTokens += estimatedInput;
@@ -88,6 +89,10 @@ export function rebuildRealStatsFromLog() {
       const duration = durationMatch ? parseInt(durationMatch[1], 10) : 1000;
       const estimatedOutput = Math.max(15, Math.round(duration / 15));
       totalOutputTokens += estimatedOutput;
+
+      const cacheMatch = line.match(/缓存命中:\s*(\d+)\s*tok/);
+      const cachedHit = cacheMatch ? parseInt(cacheMatch[1], 10) : 0;
+      totalCachedTokens += cachedHit;
 
       const modelMatch = line.match(/(?:输出完成|回复完成)\s+\[([a-zA-Z0-9.\-_]+)\]/);
       const model = modelMatch ? modelMatch[1] : 'deepseek-v4.1-flash';
@@ -107,36 +112,41 @@ export function rebuildRealStatsFromLog() {
       if (daily[date]) {
         daily[date].successRequests++;
         daily[date].outputTokens += estimatedOutput;
+        daily[date].cachedTokens = (daily[date].cachedTokens || 0) + cachedHit;
         daily[date].totalTokens += estimatedOutput;
 
         if (!daily[date].models) daily[date].models = {};
         if (!daily[date].models[model]) {
-          daily[date].models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+          daily[date].models[model] = { name: model, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
         }
         daily[date].models[model].successRequests++;
         daily[date].models[model].outputTokens += estimatedOutput;
+        daily[date].models[model].cachedTokens = (daily[date].models[model].cachedTokens || 0) + cachedHit;
         daily[date].models[model].totalTokens += estimatedOutput;
 
         if (!daily[date].accounts) daily[date].accounts = {};
         if (!daily[date].accounts[accKey]) {
-          daily[date].accounts[accKey] = { uid: accKey, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+          daily[date].accounts[accKey] = { uid: accKey, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
         }
         daily[date].accounts[accKey].successRequests++;
         daily[date].accounts[accKey].outputTokens += estimatedOutput;
+        daily[date].accounts[accKey].cachedTokens = (daily[date].accounts[accKey].cachedTokens || 0) + cachedHit;
         daily[date].accounts[accKey].totalTokens += estimatedOutput;
       }
 
       if (models[model]) {
         models[model].successRequests++;
         models[model].outputTokens += estimatedOutput;
+        models[model].cachedTokens = (models[model].cachedTokens || 0) + cachedHit;
         models[model].totalTokens += estimatedOutput;
       }
 
       if (!accounts[accKey]) {
-        accounts[accKey] = { uid: accKey, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        accounts[accKey] = { uid: accKey, name: currentAcc.name, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
       }
       accounts[accKey].successRequests++;
       accounts[accKey].outputTokens += estimatedOutput;
+      accounts[accKey].cachedTokens = (accounts[accKey].cachedTokens || 0) + cachedHit;
       accounts[accKey].totalTokens += estimatedOutput;
     }
 
@@ -153,6 +163,7 @@ export function rebuildRealStatsFromLog() {
       failedRequests,
       totalInputTokens,
       totalOutputTokens,
+      totalCachedTokens,
       totalTokens: totalInputTokens + totalOutputTokens
     },
     models,

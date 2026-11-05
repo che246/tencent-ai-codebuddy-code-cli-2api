@@ -250,31 +250,40 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       const decoder = new TextDecoder();
       let toolCallObserved = false;
       let streamUsage = null;
-      let streamTail = '';
+      let sseBuffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         const str = decoder.decode(value, { stream: true });
-        if (str.includes('"tool_calls"')) toolCallObserved = true;
-        if (str.includes('"usage"')) {
-          streamTail += str;
-          const uMatch = streamTail.match(/"usage"\s*:\s*(\{[\s\S]*?\})/);
-          if (uMatch) {
-            try { streamUsage = JSON.parse(uMatch[1]); } catch (_) {}
-          }
-        }
         res.write(str);
+        if (str.includes('"tool_calls"')) toolCallObserved = true;
+
+        sseBuffer += str;
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop(); // 保留尚未结束的行片段
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const dataStr = trimmed.slice(5).trim();
+          if (dataStr === '[DONE]') continue;
+          try {
+            const chunk = JSON.parse(dataStr);
+            if (chunk.usage) {
+              streamUsage = chunk.usage;
+            }
+          } catch (_) {}
+        }
       }
 
       activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
       const latency = Date.now() - startTime;
-      const inTokens = streamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
-      const outTokens = streamUsage?.completion_tokens || Math.max(1, Math.round(latency / 15));
-      const cachedTok = streamUsage?.prompt_cache_hit_tokens ||
-                        streamUsage?.cache_read_input_tokens ||
-                        streamUsage?.prompt_tokens_details?.cached_tokens ||
-                        streamUsage?.cached_tokens || 0;
+      const inTokens = streamUsage?.prompt_tokens ?? Math.max(10, Math.round(rawBody.length / 4));
+      const outTokens = streamUsage?.completion_tokens ?? Math.max(1, Math.round(latency / 15));
+      const cachedTok = streamUsage?.prompt_cache_hit_tokens ??
+                        streamUsage?.prompt_tokens_details?.cached_tokens ??
+                        streamUsage?.cache_read_input_tokens ?? 0;
 
       recordApiCall({
         accountUid: activeAcc?.uid,
@@ -368,12 +377,11 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       }
 
       const latency = Date.now() - startTime;
-      const inTokens = nonStreamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
-      const outTokens = nonStreamUsage?.completion_tokens || Math.max(1, Math.round(fullContent.length / 4));
-      const cachedTok = nonStreamUsage?.prompt_cache_hit_tokens ||
-                        nonStreamUsage?.cache_read_input_tokens ||
-                        nonStreamUsage?.prompt_tokens_details?.cached_tokens ||
-                        nonStreamUsage?.cached_tokens || 0;
+      const inTokens = nonStreamUsage?.prompt_tokens ?? Math.max(10, Math.round(rawBody.length / 4));
+      const outTokens = nonStreamUsage?.completion_tokens ?? Math.max(1, Math.round(fullContent.length / 4));
+      const cachedTok = nonStreamUsage?.prompt_cache_hit_tokens ??
+                        nonStreamUsage?.prompt_tokens_details?.cached_tokens ??
+                        nonStreamUsage?.cache_read_input_tokens ?? 0;
 
       recordApiCall({
         accountUid: activeAcc?.uid,
@@ -398,9 +406,13 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
           finish_reason: finishReason
         }],
         usage: {
-          prompt_tokens: 0,
-          completion_tokens: fullContent.length,
-          total_tokens: fullContent.length
+          prompt_tokens: inTokens,
+          completion_tokens: outTokens,
+          total_tokens: inTokens + outTokens,
+          prompt_tokens_details: {
+            cached_tokens: cachedTok
+          },
+          prompt_cache_hit_tokens: cachedTok
         }
       }));
     }
