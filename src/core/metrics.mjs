@@ -101,6 +101,109 @@ export function saveStats() {
   saveStatsSync();
 }
 
+/**
+ * 按时间清理报表统计记录
+ * @param {Object} options
+ * @param {'today_only' | 'days' | 'all'} options.mode - 'today_only': 仅保留今天; 'days': 保留最近N天; 'all': 一键清空全部统计
+ * @param {number} [options.keepDays=1] - 当 mode === 'days' 时保留的天数 (如 3, 7, 30)
+ */
+export function pruneStatsByTime({ mode = 'today_only', keepDays = 1 } = {}) {
+  const stats = loadStats();
+  const today = getTodayString();
+  let deletedDaysCount = 0;
+
+  if (mode === 'all') {
+    stats.summary = {
+      totalRequests: 0,
+      successRequests: 0,
+      failedRequests: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCachedTokens: 0,
+      totalTokens: 0
+    };
+    stats.models = {};
+    stats.accounts = {};
+    deletedDaysCount = Object.keys(stats.daily || {}).length;
+    stats.daily = {};
+  } else {
+    let cutoffDate = today;
+    if (mode === 'days') {
+      const days = Math.max(1, parseInt(keepDays, 10) || 1);
+      cutoffDate = getShiftedDateString(today, -(days - 1));
+    }
+
+    // 清理 cutoffDate 之前的旧日期记录
+    const existingDates = Object.keys(stats.daily || {});
+    for (const d of existingDates) {
+      if (d < cutoffDate) {
+        delete stats.daily[d];
+        deletedDaysCount++;
+      }
+    }
+
+    // 根据保留的 daily 记录重新聚合核算 summary, models 与 accounts
+    const newSummary = {
+      totalRequests: 0,
+      successRequests: 0,
+      failedRequests: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCachedTokens: 0,
+      totalTokens: 0
+    };
+    const newModels = {};
+    const newAccounts = {};
+
+    for (const dObj of Object.values(stats.daily || {})) {
+      newSummary.totalRequests += (dObj.requests || 0);
+      newSummary.successRequests += (dObj.successRequests || 0);
+      newSummary.failedRequests += (dObj.failedRequests || 0);
+      newSummary.totalInputTokens += (dObj.inputTokens || 0);
+      newSummary.totalOutputTokens += (dObj.outputTokens || 0);
+      newSummary.totalCachedTokens += (dObj.cachedTokens || 0);
+      newSummary.totalTokens += (dObj.totalTokens || 0);
+
+      for (const [mName, mObj] of Object.entries(dObj.models || {})) {
+        if (!newModels[mName]) {
+          newModels[mName] = { name: mName, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
+        }
+        newModels[mName].requests += (mObj.requests || 0);
+        newModels[mName].successRequests += (mObj.successRequests || 0);
+        newModels[mName].inputTokens += (mObj.inputTokens || 0);
+        newModels[mName].outputTokens += (mObj.outputTokens || 0);
+        newModels[mName].cachedTokens += (mObj.cachedTokens || 0);
+        newModels[mName].totalTokens += (mObj.totalTokens || 0);
+      }
+
+      for (const [accId, accObj] of Object.entries(dObj.accounts || {})) {
+        if (!newAccounts[accId]) {
+          newAccounts[accId] = { uid: accId, name: accObj.name || accId, requests: 0, successRequests: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 };
+        }
+        newAccounts[accId].requests += (accObj.requests || 0);
+        newAccounts[accId].successRequests += (accObj.successRequests || 0);
+        newAccounts[accId].inputTokens += (accObj.inputTokens || 0);
+        newAccounts[accId].outputTokens += (accObj.outputTokens || 0);
+        newAccounts[accId].cachedTokens += (accObj.cachedTokens || 0);
+        newAccounts[accId].totalTokens += (accObj.totalTokens || 0);
+      }
+    }
+
+    stats.summary = newSummary;
+    stats.models = newModels;
+    stats.accounts = newAccounts;
+  }
+
+  saveStatsSync();
+  return {
+    ok: true,
+    mode,
+    deletedDaysCount,
+    remainingDaysCount: Object.keys(stats.daily || {}).length,
+    summary: stats.summary
+  };
+}
+
 export function recordApiCall({ accountUid = null, accountName = null, model = 'unknown', isSuccess = true, inputTokens = 0, outputTokens = 0, cachedTokens = 0 }) {
   const stats = loadStats();
   const today = getTodayString();

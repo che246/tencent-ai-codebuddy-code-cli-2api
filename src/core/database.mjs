@@ -235,6 +235,36 @@ class LogDatabaseEngine {
     }
   }
 
+  pruneLogsByTime({ mode = 'today_only', keepDays = 1 } = {}) {
+    if (!this.useSqlite || !this.sqliteDb) return { ok: false, reason: 'sqlite_unavailable' };
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      let deletedRows = 0;
+      let cutoffDate = today;
+
+      if (mode === 'all') {
+        const c = this.sqliteDb.prepare('SELECT count(*) as total FROM logs').get();
+        deletedRows = c?.total || 0;
+        this.sqliteDb.exec('DELETE FROM logs');
+      } else {
+        if (mode === 'days') {
+          const days = Math.max(1, parseInt(keepDays, 10) || 1);
+          const cutoffTime = Date.now() - (days - 1) * 24 * 60 * 60 * 1000;
+          cutoffDate = new Date(cutoffTime).toISOString().slice(0, 10);
+        }
+        const c = this.sqliteDb.prepare('SELECT count(*) as total FROM logs WHERE date < ?').get(cutoffDate);
+        deletedRows = c?.total || 0;
+        this.sqliteDb.prepare('DELETE FROM logs WHERE date < ?').run(cutoffDate);
+      }
+
+      this.sqliteDb.exec('VACUUM');
+      const rem = this.sqliteDb.prepare('SELECT count(*) as total FROM logs').get()?.total || 0;
+      return { ok: true, mode, cutoffDate, deletedRows, remainingRows: rem };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
   pruneOldLogs(retentionDays = 3) {
     if (!this.useSqlite || !this.sqliteDb) return;
     try {

@@ -310,6 +310,7 @@
                   <button class="filter-btn" onclick="switchMetricsRange('30d', this)">30天</button>
                 </div>
                 <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadMetrics(currentMetricsRange)">🔄 刷新</button>
+                <button class="btn-outline" style="font-size:12px; padding:4px 10px; color:#f87171; border-color:rgba(239,68,68,0.4);" onclick="openMetricsPruneModal()" title="按时间清理或一键清空报表统计">🗑️ 清理统计</button>
               </div>
             </div>
 
@@ -490,6 +491,7 @@
                   <th>今日签到</th>
                   <th>实时并发</th>
                   <th>健康状态</th>
+                  <th>模型锁池状态</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -591,7 +593,7 @@
                 </select>
                 <input id="logSearch" class="search-input" placeholder="🔍 检索日志关键字 / 状态码..." oninput="filterLogs()" style="width:190px;">
                 <button class="btn-outline" onclick="toggleAutoScroll()" id="btnAutoScroll">⏸ 滚动锁定: 开</button>
-                <button class="btn-outline" onclick="clearLiveLogs()">🧹 清屏</button>
+                <button class="btn-outline" style="color:#f87171; border-color:rgba(239,68,68,0.4);" onclick="openLogsPruneModal()" title="按时间清理或一键清空运行日志与释放磁盘">🗑️ 清理日记</button>
                 <button class="btn-primary" onclick="exportLogFile()">📥 导出单天/完整日志</button>
               </div>
             </div>
@@ -909,6 +911,102 @@
           折算公式: <code>无缓存标准总价 = (输入/1M)×输入单价 + (输出/1M)×输出单价</code> · <code>缓存折后价 = (80%缓存命中/1M)×命中单价 + (20%输入/1M)×输入单价 + (输出/1M)×输出单价</code>
         </div>
         <button class="btn-outline" onclick="closePricingModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 报表统计按时间清理 Modal -->
+  <div class="modal" id="metricsPruneModal">
+    <div class="modal-content" style="max-width:480px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0; font-size:16px; color:#f87171;">🗑️ 报表统计按时间清理与归档</h3>
+        <button onclick="closeMetricsPruneModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
+      </div>
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:14px; line-height:1.5;">
+        请选择统计数据的清理策略（清理后将自动根据保留的日期重新核算总 Token 与请求数，并自动生成灾备快照）：
+      </p>
+
+      <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:18px;">
+        <label style="background:var(--code-bg); padding:10px 14px; border-radius:8px; border:1px solid var(--card-border); display:flex; align-items:center; gap:10px; cursor:pointer;">
+          <input type="radio" name="metricsPruneOpt" value="today_only" checked>
+          <div>
+            <div style="font-size:13px; font-weight:bold; color:var(--text-main);">📅 仅保留今天统计</div>
+            <div style="font-size:11px; color:var(--text-muted);">清理今天以前的所有历史按日流水，保留今天发生的调用量</div>
+          </div>
+        </label>
+
+        <label style="background:var(--code-bg); padding:10px 14px; border-radius:8px; border:1px solid var(--card-border); display:flex; align-items:center; gap:10px; cursor:pointer;">
+          <input type="radio" name="metricsPruneOpt" value="days">
+          <div style="flex:1;">
+            <div style="font-size:13px; font-weight:bold; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+              <span>🗓️ 保留最近</span>
+              <input type="number" id="inputMetricsKeepDays" class="search-input" style="width:60px; padding:3px 6px; font-size:12px; text-align:center;" value="7" min="1" max="365">
+              <span>天的统计</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">清理更早以前的历史记录，保留近 N 天用量</div>
+          </div>
+        </label>
+
+        <label style="background:var(--code-bg); padding:10px 14px; border-radius:8px; border:1px solid var(--card-border); display:flex; align-items:center; gap:10px; cursor:pointer;">
+          <input type="radio" name="metricsPruneOpt" value="all">
+          <div>
+            <div style="font-size:13px; font-weight:bold; color:#f87171;">⚠️ 一键清理全部统计记录</div>
+            <div style="font-size:11px; color:var(--text-muted);">清空所有历史流水与累计计数，将用量与请求数彻底重置归零</div>
+          </div>
+        </label>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button class="btn-outline" onclick="closeMetricsPruneModal()">取消</button>
+        <button class="btn-danger" style="padding:6px 16px; font-weight:bold;" onclick="executeMetricsPrune()">确认执行清理</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 运行日记按时间清理 Modal -->
+  <div class="modal" id="logsPruneModal">
+    <div class="modal-content" style="max-width:480px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0; font-size:16px; color:#f87171;">🗑️ 运行日记按时间清理与磁盘释放</h3>
+        <button onclick="closeLogsPruneModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
+      </div>
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:14px; line-height:1.5;">
+        请选择日志数据库 (logs.db) 与日志文件的清理范围（清理后将自动执行 SQLite VACUUM 释放物理磁盘空间）：
+      </p>
+
+      <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:18px;">
+        <label style="background:var(--code-bg); padding:10px 14px; border-radius:8px; border:1px solid var(--card-border); display:flex; align-items:center; gap:10px; cursor:pointer;">
+          <input type="radio" name="logsPruneOpt" value="today_only" checked>
+          <div>
+            <div style="font-size:13px; font-weight:bold; color:var(--text-main);">📅 仅保留今天日志</div>
+            <div style="font-size:11px; color:var(--text-muted);">清理今天以前的所有历史日志，保留当天的最新运行流水</div>
+          </div>
+        </label>
+
+        <label style="background:var(--code-bg); padding:10px 14px; border-radius:8px; border:1px solid var(--card-border); display:flex; align-items:center; gap:10px; cursor:pointer;">
+          <input type="radio" name="logsPruneOpt" value="days">
+          <div style="flex:1;">
+            <div style="font-size:13px; font-weight:bold; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+              <span>🗓️ 保留最近</span>
+              <input type="number" id="inputLogsKeepDays" class="search-input" style="width:60px; padding:3px 6px; font-size:12px; text-align:center;" value="3" min="1" max="365">
+              <span>天的日志</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">清理 N 天前的旧日志流水并紧凑收缩数据库</div>
+          </div>
+        </label>
+
+        <label style="background:var(--code-bg); padding:10px 14px; border-radius:8px; border:1px solid var(--card-border); display:flex; align-items:center; gap:10px; cursor:pointer;">
+          <input type="radio" name="logsPruneOpt" value="all">
+          <div>
+            <div style="font-size:13px; font-weight:bold; color:#f87171;">⚠️ 一键清空全部日志</div>
+            <div style="font-size:11px; color:var(--text-muted);">彻底清空 logs.db 数据库、gateway.log 文件与内存环形缓冲</div>
+          </div>
+        </label>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button class="btn-outline" onclick="closeLogsPruneModal()">取消</button>
+        <button class="btn-danger" style="padding:6px 16px; font-weight:bold;" onclick="executeLogsPrune()">确认执行清理</button>
       </div>
     </div>
   </div>
@@ -1749,6 +1847,36 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             `;
           }
 
+          let lockPoolHtml = '';
+          if (a.lockedCount > 0) {
+            const listItems = (a.lockedModels || []).map(lm => `
+              <div style="font-size:12px; margin:4px 0; color:#fff; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                <span>• <b>${escapeHtml(lm.modelId)}</b></span>
+                <span style="color:#facc15; font-size:11px; font-weight:bold; white-space:nowrap;">剩 ${lm.remainingSec}s</span>
+              </div>
+              <div style="font-size:10px; color:var(--text-muted); margin-bottom:4px; padding-left:8px;">原因: ${escapeHtml(lm.reason)}</div>
+            `).join('');
+
+            lockPoolHtml = `
+              <div class="probe-tip-wrap">
+                <span class="badge badge-err" style="cursor:help;">🔒 已锁 ${a.lockedCount} 款模型</span>
+                <div class="probe-tip-popover" style="border-color:rgba(239, 68, 68, 0.6); min-width:240px;">
+                  <div style="font-weight:bold; color:#f87171; font-size:12px; margin-bottom:4px;">🔒 当前账号模型锁池清单:</div>
+                  ${listItems}
+                  <button class="btn-outline" style="font-size:10px; padding:3px 8px; margin-top:6px; width:100%; text-align:center; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')">🔓 一键解除锁池</button>
+                </div>
+              </div>
+            `;
+          } else if (a.isCooldown) {
+            lockPoolHtml = `<span class="badge badge-cool" title="账号处于全局冷却退避中">⏱️ 全局锁 (剩 ${a.cooldownRemainingSec || 0}s)</span>`;
+          } else {
+            lockPoolHtml = `<span class="badge badge-ok">🟢 全部模型可用</span>`;
+          }
+
+          const unlockBtn = (a.lockedCount > 0 || a.isCooldown)
+            ? `<button class="btn-outline" style="padding:3px 7px; font-size:11px; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')" title="立即解除锁池与冷却状态">🔓 解锁</button>`
+            : '';
+
           return `
             <tr>
               <td><code>${a.uid}</code></td>
@@ -1770,8 +1898,10 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
                   a.isCooldown ? '<span class="badge badge-cool">冷却退避</span>' : 
                   '<span class="badge badge-ok">健康活跃</span>'}
               </td>
+              <td>${lockPoolHtml}</td>
               <td style="white-space:nowrap;">
                 ${pinBtn}
+                ${unlockBtn}
                 <button class="btn-outline" style="padding:3px 8px; font-size:11px;" onclick="runCheckinSingle('${a.uid}')" title="同步积分">🔄 刷新</button>
                 <button class="btn-danger" onclick="deleteAccount('${a.uid}')">删除</button>
               </td>
@@ -2588,6 +2718,99 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           btn.disabled = false;
           btn.innerText = '🌐 联网检索官网最新价格';
         }
+      }
+    }
+
+    function openMetricsPruneModal() {
+      document.getElementById('metricsPruneModal').style.display = 'flex';
+    }
+
+    function closeMetricsPruneModal() {
+      document.getElementById('metricsPruneModal').style.display = 'none';
+    }
+
+    async function executeMetricsPrune() {
+      const opt = document.querySelector('input[name="metricsPruneOpt"]:checked')?.value || 'today_only';
+      const keepDays = parseInt(document.getElementById('inputMetricsKeepDays').value, 10) || 1;
+      const confirmMsg = opt === 'all'
+        ? '确定一键清空全部报表统计记录吗？此操作将把所有请求数和Token统计重置为0！'
+        : (opt === 'today_only' ? '确定仅保留今天的统计数据，清理今天之前的所有历史记录吗？' : `确定仅保留最近 ${keepDays} 天的统计数据，清理更早之前的记录吗？`);
+      if (!confirm(confirmMsg)) return;
+
+      try {
+        const res = await fetch('/api/metrics/prune', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: opt, keepDays })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          alert(`✅ 统计数据清理成功！已清理 ${d.deletedDaysCount} 个历史日期的统计记录。`);
+          closeMetricsPruneModal();
+          loadMetrics(currentMetricsRange);
+        } else {
+          alert('清理失败: ' + (d.error || '未知错误'));
+        }
+      } catch (e) {
+        alert('网络异常: ' + e.message);
+      }
+    }
+
+    function openLogsPruneModal() {
+      document.getElementById('logsPruneModal').style.display = 'flex';
+    }
+
+    function closeLogsPruneModal() {
+      document.getElementById('logsPruneModal').style.display = 'none';
+    }
+
+    async function executeLogsPrune() {
+      const opt = document.querySelector('input[name="logsPruneOpt"]:checked')?.value || 'today_only';
+      const keepDays = parseInt(document.getElementById('inputLogsKeepDays').value, 10) || 1;
+      const confirmMsg = opt === 'all'
+        ? '确定一键清空全部运行日志吗？此操作将清空 logs.db 数据库、日志文件并重置！'
+        : (opt === 'today_only' ? '确定仅保留今天的运行日志，清理今天之前的所有历史日志吗？' : `确定仅保留最近 ${keepDays} 天的运行日志，清理更早之前的记录吗？`);
+      if (!confirm(confirmMsg)) return;
+
+      try {
+        const res = await fetch('/api/logs/prune', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: opt, keepDays })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          alert(`✅ 日志清理成功！已从数据库删除 ${d.deletedRows} 条历史日志，并执行 VACUUM 释放物理磁盘。`);
+          closeLogsPruneModal();
+          await loadLogDates();
+          fetchLogs();
+        } else {
+          alert('清理失败: ' + (d.error || '未知错误'));
+        }
+      } catch (e) {
+        alert('网络异常: ' + e.message);
+      }
+    }
+
+    async function unlockAccountModels(uid, modelId = null) {
+      const targetLabel = modelId ? `模型 [${modelId}]` : '所有模型的锁池与冷却状态';
+      if (!confirm(`确定为该账号解除 ${targetLabel} 吗？`)) return;
+      try {
+        const res = await fetch('/api/accounts/unlock-models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid, modelId })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          alert('✅ ' + (d.msg || '锁池状态已成功解除！'));
+          loadAccounts();
+          loadModels(true);
+        } else {
+          alert('解除失败: ' + (d.error || '未知错误'));
+        }
+      } catch (e) {
+        alert('网络异常: ' + e.message);
       }
     }
 

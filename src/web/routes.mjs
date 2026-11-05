@@ -17,7 +17,7 @@ import { LogDatabase } from '../core/database.mjs';
 import { AccountScheduler } from '../core/scheduler.mjs';
 import { TlsCertificateStack } from '../core/tls-certs.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
-import { getMetricsReport, loadStats, formatTokenNumber } from '../core/metrics.mjs';
+import { getMetricsReport, loadStats, formatTokenNumber, pruneStatsByTime } from '../core/metrics.mjs';
 import { loadModelPrices, saveModelPrices, searchOfficialPricingOnline } from '../core/pricing.mjs';
 
 const HTML_FILE_PATH = path.resolve(ROOT_DIR, 'src/web/public/index.html');
@@ -332,19 +332,44 @@ export async function handleApiRoutes(req, res, url) {
   }
 
   // 6. 账号列表查询
+  // 6. 账号列表查询 (包含模型锁池状态、锁定剩余时间及原因)
   if (url.pathname === '/api/accounts' && req.method === 'GET') {
     const stats = loadStats();
     const accStatsMap = stats.accounts || {};
     const advanceDays = (typeof config.tokenRefreshAdvanceDays === 'number' && config.tokenRefreshAdvanceDays > 0) ? config.tokenRefreshAdvanceDays : 7;
     const advanceMs = advanceDays * 24 * 60 * 60 * 1000;
+    const now = Date.now();
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(accounts.map(a => {
       const accStats = accStatsMap[a.uid] || accStatsMap[a.email] || {};
       const tokens = accStats.totalTokens || 0;
-      const daysRemaining = a.expiresAt ? Math.max(0, Number(((a.expiresAt - Date.now()) / (24 * 3600 * 1000)).toFixed(1))) : null;
+      const daysRemaining = a.expiresAt ? Math.max(0, Number(((a.expiresAt - now) / (24 * 3600 * 1000)).toFixed(1))) : null;
       const canAutoRefresh = Boolean(a.refreshToken);
-      const isRefreshEligible = canAutoRefresh && (!a.expiresAt || Date.now() > (a.expiresAt - advanceMs));
+      const isRefreshEligible = canAutoRefresh && (!a.expiresAt || now > (a.expiresAt - advanceMs));
+
+      // 提取该账号当前所有活跃被锁的模型、剩余解锁秒数与限流原因
+      const activeLockedModels = [];
+      if (a.modelCooldowns) {
+        for (const [mId, expireAt] of Object.entries(a.modelCooldowns)) {
+          if (now < expireAt) {
+            const remainingSec = Math.ceil((expireAt - now) / 1000);
+            const reason = a.modelCooldownReasons?.[mId] || '上游限频退避';
+            activeLockedModels.push({
+              modelId: mId,
+              remainingSec,
+              expireAt,
+              reason
+            });
+          } else {
+            delete a.modelCooldowns[mId];
+            if (a.modelCooldownReasons) delete a.modelCooldownReasons[mId];
+          }
+        }
+      }
+
+      const isGlobalCooldown = now < (a.cooldownUntil || 0);
+      const globalCooldownRemainingSec = isGlobalCooldown ? Math.ceil((a.cooldownUntil - now) / 1000) : 0;
 
       return {
         uid: a.uid,
@@ -364,7 +389,10 @@ export async function handleApiRoutes(req, res, url) {
         daysRemaining,
         advanceDays,
         isRefreshEligible,
-        isCooldown: Date.now() < (a.cooldownUntil || 0),
+        isCooldown: isGlobalCooldown,
+        cooldownRemainingSec: globalCooldownRemainingSec,
+        lockedModels: activeLockedModels,
+        lockedCount: activeLockedModels.length,
         isCheckedInToday: a.lastCheckinDate === today && (a.lastCheckinSuccess || a.lastCheckinMsg?.includes('已签到') || a.lastCheckinMsg?.includes('成功')),
         lastCheckinMsg: (a.lastCheckinDate === today && (a.lastCheckinSuccess || a.lastCheckinMsg?.includes('已签到') || a.lastCheckinMsg?.includes('成功'))) ? (a.lastCheckinMsg || '今天已签到') : '今日未签到'
       };
@@ -626,6 +654,76 @@ export async function handleApiRoutes(req, res, url) {
         const refreshResult = await AccountScheduler.refreshSessionToken(acc);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(refreshResult));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 12.9. 一键解除账号模型锁池/冷却状态
+  if (url.pathname === '/api/accounts/unlock-models' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const { uid, modelId } = JSON.parse(b || '{}');
+        const acc = accounts.find(a => a.uid === uid);
+        if (!acc) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Account not found' }));
+        }
+        if (modelId) {
+          if (acc.modelCooldowns) delete acc.modelCooldowns[modelId];
+          if (acc.modelCooldownReasons) delete acc.modelCooldownReasons[modelId];
+          Logger.info('COOLDOWN', `已手动解除账号 [${formatAccountFullDesc(acc)}] 对模型 [${modelId}] 的锁池冷却`);
+        } else {
+          acc.modelCooldowns = {};
+          acc.modelCooldownReasons = {};
+          acc.cooldownUntil = 0;
+          Logger.info('COOLDOWN', `已手动一键解除账号 [${formatAccountFullDesc(acc)}] 的所有模型锁池与冷却状态`);
+        }
+        saveAccounts();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, msg: '锁池状态已成功解除' }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 12.10. 报表统计按时间清理接口 (保留今天 / 保留N天 / 一键清空全部)
+  if (url.pathname === '/api/metrics/prune' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const { mode, keepDays } = JSON.parse(b || '{}');
+        const pruneRes = pruneStatsByTime({ mode, keepDays });
+        Logger.info('STATS', `统计报表按时间清理完成 (模式: ${mode}, 保留天数: ${keepDays || 1}, 删除历史天数: ${pruneRes.deletedDaysCount})`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(pruneRes));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 12.11. 运行日记按时间清理接口 (保留今天 / 保留N天 / 一键清空全部)
+  if (url.pathname === '/api/logs/prune' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const { mode, keepDays } = JSON.parse(b || '{}');
+        const pruneRes = Logger.pruneLogsByTime({ mode, keepDays });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(pruneRes));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));

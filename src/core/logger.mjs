@@ -83,6 +83,55 @@ export class Logger {
     LogDatabase.clearLogs();
   }
 
+  static pruneLogsByTime({ mode = 'today_only', keepDays = 1 } = {}) {
+    const dbRes = LogDatabase.pruneLogsByTime({ mode, keepDays });
+    const today = new Date().toISOString().slice(0, 10);
+    let cutoffDate = today;
+    if (mode === 'days') {
+      const days = Math.max(1, parseInt(keepDays, 10) || 1);
+      const cutoffTime = Date.now() - (days - 1) * 24 * 60 * 60 * 1000;
+      cutoffDate = new Date(cutoffTime).toISOString().slice(0, 10);
+    }
+
+    if (mode === 'all') {
+      this.ringBuffer = [];
+      if (fs.existsSync(LOG_FILE_PATH)) {
+        try { fs.writeFileSync(LOG_FILE_PATH, '', 'utf8'); } catch (_) {}
+      }
+    } else {
+      this.ringBuffer = this.ringBuffer.filter(item => {
+        const itemDate = (item.time || '').slice(0, 10);
+        return itemDate >= cutoffDate;
+      });
+
+      if (fs.existsSync(LOG_FILE_PATH)) {
+        try {
+          const content = fs.readFileSync(LOG_FILE_PATH, 'utf8');
+          const lines = content.split('\n');
+          const retained = [];
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const m = line.match(/^\[(\d{4}-\d{2}-\d{2})/);
+            if (m) {
+              if (m[1] >= cutoffDate) retained.push(line);
+            } else {
+              if (retained.length > 0) retained.push(line);
+            }
+          }
+          fs.writeFileSync(LOG_FILE_PATH, retained.join('\n') + (retained.length > 0 ? '\n' : ''), 'utf8');
+        } catch (_) {}
+      }
+    }
+
+    this.info('SYSTEM', `日志按时间清理完成: 模式 [${mode}], 截止日期 [${mode === 'all' ? '全部清空' : cutoffDate}], 共清理 ${dbRes.deletedRows || 0} 条数据库日志`);
+    return {
+      ok: true,
+      mode,
+      deletedRows: dbRes.deletedRows || 0,
+      remainingRows: dbRes.remainingRows || 0
+    };
+  }
+
   // ─── 日志保留策略：保留指定天数，并根据 MB 上限自动收缩释放磁盘 ─────────────────────
   static pruneOldLogs(retentionDays = 3) {
     LogDatabase.pruneOldLogs(retentionDays);
