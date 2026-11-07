@@ -12,7 +12,9 @@ export const ServerErrorCode = {
   ConversationLimitExceeded: 10105,
   ModelNotFound: 11102,
   ContextTooLong: 11115,        // 输入 token 超出模型上下文窗口 (PTL)
+  RequestIllegal: 11128,        // 请求非法（国际版：首条消息必须是 system prompt）
   InvalidParams: 11133,
+  ModelNotAllowed: 11158,       // 模型不被当前用户类型允许（如个人免费账号访问 GPT/Grok）
   UsageLimitExceeded: 14001,    // 个人额度用尽
   ConversationChatTooMany: 14002,
   RateLimitError: 14003,        // 模型接口调用频率限制

@@ -1,4 +1,4 @@
-import { SEARCH_URL, WEBFETCH_URL, USER_AGENT, formatAccountFullDesc } from '../config.mjs';
+import { endpointsFor, USER_AGENT, formatAccountFullDesc } from '../config.mjs';
 import { AccountScheduler } from '../core/scheduler.mjs';
 import { Logger } from '../core/logger.mjs';
 
@@ -16,7 +16,7 @@ export async function handleSearch(req, res, rawBody) {
     const queryStr = bodyObj.query || '';
     Logger.info('SEARCH', `发起联网检索 [${queryStr}]`, { account: formatAccountFullDesc(acc) });
 
-    const searchRes = await fetch(SEARCH_URL, {
+    const searchRes = await fetch(endpointsFor(acc).search, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${acc.accessToken}`,
@@ -55,7 +55,7 @@ export async function handleWebFetch(req, res, rawBody) {
     const targetUrl = bodyObj.url || '';
     Logger.info('FETCH', `发起网页内容抓取 [${targetUrl}]`, { account: formatAccountFullDesc(acc) });
 
-    const fetchRes = await fetch(WEBFETCH_URL, {
+    const fetchRes = await fetch(endpointsFor(acc).webfetch, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${acc.accessToken}`,

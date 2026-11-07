@@ -1,20 +1,30 @@
 import crypto from 'node:crypto';
-import { UPSTREAM_URL, config, formatAccountLogName, formatAccountFullDesc } from '../config.mjs';
+import { endpointsFor, config, formatAccountLogName, formatAccountFullDesc, isModelBlacklisted, isStepUnavailableByBlacklist } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { AccountScheduler, sessionStickyMap } from '../core/scheduler.mjs';
 import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
 import {
   extractStructuredBizCode,
   MODEL_FALLBACK_CODES,
-  QUOTA_EXHAUSTED_CODES
+  QUOTA_EXHAUSTED_CODES,
+  ServerErrorCode
 } from '../upstream/errors.mjs';
 import {
   formatMessagesForUpstream,
   applyModelCapabilityGuards,
+  applyReasoningParams,
+  ensureLeadingSystemMessage,
+  parseModelRegion,
   prepareUpstreamBody
 } from '../upstream/payload.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
 import { recordApiCall } from '../core/metrics.mjs';
+import {
+  createUpstreamLifecycle,
+  readUpstreamStream,
+  startHeartbeat,
+  logStreamOutcome
+} from '../upstream/stream-guard.mjs';
 
 // ─── POST /v1/messages 与 POST /messages (Anthropic 协议适配，供 Claude Code 使用) ─
 export async function handleAnthropicMessages(req, res, rawBody) {
@@ -23,15 +33,39 @@ export async function handleAnthropicMessages(req, res, rawBody) {
     const anthropicPayload = JSON.parse(rawBody);
     const isClientStream = Boolean(anthropicPayload.stream);
 
-    let targetModel = anthropicPayload.model || 'deepseek-v4.1-flash';
+    // 模型名可带区域前缀（cn: / intl:），剥掉后作为上游真实模型名，前缀用于锁定账号区域
+    const parsedModel = parseModelRegion(anthropicPayload.model || 'deepseek-v4.1-flash');
+    let targetModel = parsedModel.bare || 'deepseek-v4.1-flash';
+    const forcedRegion = parsedModel.region;
+
     if (targetModel.includes('claude') || targetModel.includes('sonnet') || targetModel.includes('opus')) {
       targetModel = 'deepseek-v4.1-flash';
+    }
+
+    if (forcedRegion) {
+      Logger.info('ANTHROPIC', `模型名带区域前缀，已锁定区域 [${forcedRegion}]，实际上游模型: ${targetModel}`);
+    }
+
+    // 黑名单拦截：与 /v1/models 保持一致，禁用的模型不允许被硬编码调用
+    if (isModelBlacklisted(anthropicPayload.model || targetModel, targetModel, forcedRegion)) {
+      Logger.warn('ANTHROPIC', `模型 [${anthropicPayload.model || targetModel}] 命中黑名单，已拒绝请求`);
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'permission_error',
+          message: `Model "${anthropicPayload.model || targetModel}" is disabled by the gateway administrator (blacklisted).`
+        }
+      }));
     }
 
     Logger.info('ANTHROPIC', `收到 Claude Code 协议请求 [${targetModel}] (流式: ${isClientStream})`, {
       clientIp: req.socket.remoteAddress,
       toolsCount: anthropicPayload.tools?.length || 0
     });
+
+    // 流式稳定性：首字节超时 + 客户端断开感知 + 静默看门狗
+    const lifecycle = createUpstreamLifecycle(req, res, `anthropic:${targetModel}`);
 
     const openAiMessages = [];
     if (anthropicPayload.system) {
@@ -117,50 +151,99 @@ export async function handleAnthropicMessages(req, res, rawBody) {
     const modelMeta = allMeta.find(m => m.id === targetModel);
     upstreamPayload = applyModelCapabilityGuards(upstreamPayload, modelMeta);
 
-    if (targetModel.includes('deepseek') || targetModel.includes('hy')) {
-      upstreamPayload.thinking = { type: 'enabled' };
-      upstreamPayload.reasoning_effort = 'high';
-      upstreamPayload.reasoning = { effort: 'high', summary: 'auto' };
+    // 推理参数规整：把 Anthropic 的 thinking / budget_tokens 映射成官方上游的平铺字段，
+    // 客户端显式值优先，缺省才用官方默认；不发 thinking / reasoning 嵌套对象。
+    const anthThinking = anthropicPayload.thinking;
+    let anthEffort;
+    if (anthThinking && typeof anthThinking === 'object') {
+      if (anthThinking.type === 'disabled') {
+        anthEffort = 'none';
+      } else if (anthThinking.type === 'enabled') {
+        // budget_tokens → effort 档位映射（对齐官方 EXTENDED_THINKING_LEVELS）
+        const budget = Number(anthThinking.budget_tokens) || 0;
+        if (budget <= 0) anthEffort = 'high';
+        else if (budget < 2048) anthEffort = 'minimal';
+        else if (budget < 8192) anthEffort = 'low';
+        else if (budget < 16384) anthEffort = 'medium';
+        else if (budget < 32768) anthEffort = 'high';
+        else anthEffort = 'xhigh';
+      }
+    } else if (typeof anthThinking === 'boolean') {
+      anthEffort = anthThinking ? 'high' : 'none';
     }
+
+    upstreamPayload = applyReasoningParams(
+      upstreamPayload,
+      {
+        reasoning_effort: anthropicPayload.reasoning_effort || anthEffort,
+        verbosity: anthropicPayload.verbosity,
+        reasoning_summary: anthropicPayload.reasoning_summary
+      },
+      modelMeta
+    );
 
     const sessionKey = req.headers['x-session-id'] || 
       crypto.createHash('md5').update(JSON.stringify(openAiMessages.slice(0, 2))).digest('hex');
 
     // 核心执行链路：支持多级备用模型降级链 (A -> B -> C -> ...) + 账号池多账号自愈轮换
+    // 降级链中的每个模型都可以带区域前缀（cn: / intl:），未带前缀时继承主模型区域
     async function executeRequestChain(initialModel) {
       const isFallbackEnabled = config.modelFallbackEnabled !== false;
-      const candidateModels = [initialModel];
+      const candidateSteps = [{ model: initialModel, region: forcedRegion }];
+      const chainKeySeen = new Set([`${forcedRegion || ''}:${initialModel}`]);
 
       if (isFallbackEnabled && config.modelFallback) {
-        const raw = config.modelFallback[initialModel];
-        if (Array.isArray(raw)) {
-          for (const m of raw) {
-            if (m && typeof m === 'string' && !candidateModels.includes(m.trim())) {
-              candidateModels.push(m.trim());
-            }
+        const lookupKeys = [
+          forcedRegion ? `${forcedRegion}:${initialModel}` : null,
+          initialModel,
+        ].filter(Boolean);
+
+        let raw = null;
+        for (const k of lookupKeys) {
+          const v = config.modelFallback[k];
+          if (v) { raw = v; break; }
+        }
+
+        const list = Array.isArray(raw) ? raw : (typeof raw === 'string' ? [raw] : []);
+        for (const item of list) {
+          if (!item || typeof item !== 'string') continue;
+          const parsed = parseModelRegion(item.trim());
+          if (!parsed.bare) continue;
+          const stepRegion = parsed.region || forcedRegion || null;
+          const sig = `${stepRegion || ''}:${parsed.bare}`;
+          if (chainKeySeen.has(sig)) continue;
+          chainKeySeen.add(sig);
+          // 黑名单：禁用模型不参与自动降级轮换
+          if (isStepUnavailableByBlacklist(parsed.bare, stepRegion)) {
+            Logger.warn('REROUTE', `Anthropic 协议: 备用模型 [${item.trim()}] 命中黑名单，已从降级链中剔除`);
+            continue;
           }
-        } else if (typeof raw === 'string' && raw.trim() && !candidateModels.includes(raw.trim())) {
-          candidateModels.push(raw.trim());
+          candidateSteps.push({ model: parsed.bare, region: stepRegion });
         }
       }
 
       let modelIndex = 0;
 
-      while (modelIndex < candidateModels.length) {
-        const curModel = candidateModels[modelIndex];
+      while (modelIndex < candidateSteps.length) {
+        const step = candidateSteps[modelIndex];
+        const curModel = step.model;
+        const curRegion = step.region;
+        const curLabel = curRegion ? `${curRegion}:${curModel}` : curModel;
         let attemptedUids = new Set();
 
         while (true) {
           // 1. 账号调度：在当前模型 curModel 下选择未在该模型尝试过的账号
           const acc = AccountScheduler.selectAccount(curModel, sessionKey, {
-            excludeUids: Array.from(attemptedUids)
+            excludeUids: Array.from(attemptedUids),
+            region: curRegion
           });
 
           if (!acc) {
             // 账号池所有账号在当前模型 curModel 下均已受限
-            if (modelIndex + 1 < candidateModels.length) {
-              const nextModel = candidateModels[modelIndex + 1];
-              Logger.warn('REROUTE', `Anthropic 协议: 账号池所有账号对模型 [${curModel}] 均已限流，自动降级切换至下一个备用模型 [${nextModel}] (${modelIndex + 1}/${candidateModels.length - 1})`);
+            if (modelIndex + 1 < candidateSteps.length) {
+              const nextStep = candidateSteps[modelIndex + 1];
+              const nextModel = nextStep.region ? `${nextStep.region}:${nextStep.model}` : nextStep.model;
+              Logger.warn('REROUTE', `Anthropic 协议: 账号池所有账号对模型 [${curLabel}] 均已限流，自动降级切换至下一个备用模型 [${nextModel}] (${modelIndex + 1}/${candidateSteps.length - 1})`);
               modelIndex++;
               break; // 跳出账号内循环，进入下一个备选模型
             }
@@ -169,7 +252,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
             return {
               ok: false,
               status: 429,
-              errText: JSON.stringify({ error: { message: `All upstream accounts and fallback models in the chain ([${candidateModels.join(' -> ')}]) are rate-limited or busy.`, type: 'rate_limit_error', code: 'rate_limit_exceeded' } }),
+              errText: JSON.stringify({ error: { message: `All upstream accounts and fallback models in the chain ([${candidateSteps.map(s => s.region ? `${s.region}:${s.model}` : s.model).join(' -> ')}]) are rate-limited or busy.`, type: 'rate_limit_error', code: 'rate_limit_exceeded' } }),
               bizCode: ServerErrorCode.CraftRateLimit
             };
           }
@@ -179,14 +262,21 @@ export async function handleAnthropicMessages(req, res, rawBody) {
 
           try {
             upstreamPayload.model = curModel;
+            // 国际版要求首条消息必须是 system，缺则补一条（国内版不受影响）
+            upstreamPayload.messages = ensureLeadingSystemMessage(upstreamPayload.messages, acc.region);
             const { body, isGzip } = prepareUpstreamBody(upstreamPayload);
             const headers = buildOfficialUpstreamHeaders(acc.accessToken, curModel, sessionKey, acc.uid, isGzip);
 
-            let upstreamRes = await fetch(UPSTREAM_URL, {
+            // 按账号所属区域选择上游（国内 / 国际），端点结构完全一致
+            const ep = endpointsFor(acc);
+            let upstreamRes = await fetch(ep.upstream, {
               method: 'POST',
               headers,
-              body
+              body,
+              // 首字节超时 + 客户端断开由 lifecycle 的 AbortController 兜住
+              signal: lifecycle.signal
             });
+            lifecycle.markFirstByte();
 
             if (!upstreamRes.ok) {
               acc.inFlight = Math.max(0, acc.inFlight - 1);
@@ -228,9 +318,10 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                 }
 
                 // 2) 账号池所有账号在当前模型下均受限：检查是否还有下一个备用模型
-                if (modelIndex + 1 < candidateModels.length) {
-                  const nextModel = candidateModels[modelIndex + 1];
-                  Logger.warn('REROUTE', `Anthropic 协议: 账号池所有账号对模型 [${curModel}] 均已限流，自动降级切换至下一个备用模型 [${nextModel}] (${modelIndex + 1}/${candidateModels.length - 1})`);
+                if (modelIndex + 1 < candidateSteps.length) {
+                  const nextStep = candidateSteps[modelIndex + 1];
+                  const nextModel = nextStep.region ? `${nextStep.region}:${nextStep.model}` : nextStep.model;
+                  Logger.warn('REROUTE', `Anthropic 协议: 账号池所有账号对模型 [${curLabel}] 均已限流，自动降级切换至下一个备用模型 [${nextModel}] (${modelIndex + 1}/${candidateSteps.length - 1})`);
                   modelIndex++;
                   break; // 跳出账号内循环，进入下一个备选模型
                 }
@@ -261,6 +352,14 @@ export async function handleAnthropicMessages(req, res, rawBody) {
 
           } catch (networkErr) {
             acc.inFlight = Math.max(0, acc.inFlight - 1);
+            if (lifecycle.state.reason === 'client-gone') {
+              Logger.info('STREAM', `[anthropic] 客户端已断开，停止重试`);
+              return { ok: false, status: 499, errText: 'Client closed request', bizCode: 'CLIENT_GONE' };
+            }
+            if (lifecycle.state.reason === 'first-byte-timeout') {
+              Logger.warn('NETWORK', `账号 [${formatAccountLogName(acc)}] 首字节超时，切换下一个账号`);
+              continue;
+            }
             Logger.error('NETWORK', `请求账号 [${formatAccountLogName(acc)}] 网络异常: ${networkErr.message}`);
             continue; // 网络抖动，尝试下一个账号
           }
@@ -303,7 +402,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       })}\n\n`);
 
       const reader = upstreamRes.body.getReader();
-      const decoder = new TextDecoder();
+      const heartbeat = startHeartbeat(res, `anthropic:${actualModel}`);
       let thinkingBlockStarted = false;
       let thinkingBlockStopped = false;
       let textBlockStarted = false;
@@ -311,24 +410,38 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       let activeToolIndices = new Set();
       let streamUsage = null;
       let buffer = '';
+      let sawFinish = false;
+      let sawError = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
+      try {
+        const result = await readUpstreamStream(reader, lifecycle, {
+          label: `anthropic:${actualModel}`,
+          onChunk: (str) => {
+            if (res.writableEnded || res.destroyed) return;
+            heartbeat.touch();
+            buffer += str;
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-          const dataStr = trimmed.slice(5).trim();
-          if (dataStr === '[DONE]') continue;
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data:')) continue;
+              const dataStr = trimmed.slice(5).trim();
+              if (dataStr === '[DONE]') {
+                // 上游话已说完：此后客户端挂断属正常收尾，不算「客户端断开」
+                lifecycle.markUpstreamEnded();
+                continue;
+              }
 
-          try {
-            const chunk = JSON.parse(dataStr);
-            if (chunk.usage) streamUsage = chunk.usage;
-            const delta = chunk.choices?.[0]?.delta;
+              try {
+                const chunk = JSON.parse(dataStr);
+                if (chunk.usage) streamUsage = chunk.usage;
+                if (chunk.error) sawError = true;
+                if (chunk.choices?.[0]?.finish_reason) {
+                  sawFinish = true;
+                  lifecycle.markUpstreamEnded();
+                }
+                const delta = chunk.choices?.[0]?.delta;
 
             // 思考流原生映射 (对齐 package streamed-reasoning-collector: 兼容 reasoning_content 与 reasoning)
             const reasoningText = delta?.reasoning_content || delta?.reasoning;
@@ -406,9 +519,22 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                 }
               }
             }
-          } catch (_) {}
-        }
+              } catch (_) {}
+            }
+          }
+        });
+
+        logStreamOutcome(`anthropic:${actualModel}`, result, { model: actualModel });
+      } finally {
+        // 无论成功/异常/客户端断开，都必须释放名额
+        lifecycle.markFinished();
+        activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
+        heartbeat.stop();
+        lifecycle.dispose();
+        try { reader.releaseLock?.(); } catch (_) {}
       }
+
+      if (res.writableEnded || res.destroyed) return;
 
       if (thinkingBlockStarted && !thinkingBlockStopped) {
         res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
@@ -421,6 +547,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
         res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: idx })}\n\n`);
       }
 
+      const latency = Date.now() - startTime;
       const stopReason = activeToolIndices.size > 0 ? 'tool_use' : 'end_turn';
       const outTokens = streamUsage?.completion_tokens || Math.max(1, Math.round(latency / 15));
       const inTokens = streamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
@@ -436,8 +563,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       })}\n\n`);
 
       res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
-      activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
-      const latency = Date.now() - startTime;
+      lifecycle.markUpstreamEnded();
       recordApiCall({
         accountUid: activeAcc?.uid,
         accountName: formatAccountLogName(activeAcc),
@@ -448,7 +574,8 @@ export async function handleAnthropicMessages(req, res, rawBody) {
         cachedTokens: cachedTok
       });
       Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${stopReason})`);
-      return res.end();
+      if (!res.writableEnded) return res.end();
+      return;
 
     } else {
       const reader = upstreamRes.body.getReader();
@@ -456,6 +583,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       let fullContent = '';
       let fullReasoning = '';
       let toolCallsMap = new Map();
+      let streamUsage = null;
       let buffer = '';
 
       while (true) {
@@ -540,6 +668,8 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       Logger.info('ANTHROPIC', `非流式完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${stopReason})`);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
+      lifecycle.markFinished();
+      lifecycle.dispose();
       return res.end(JSON.stringify({
         id: msgId,
         type: 'message',

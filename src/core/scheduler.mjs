@@ -6,6 +6,10 @@ import {
   getLocalTimeString,
   SUMMARY_URL,
   CHECKIN_URL,
+  endpointsFor,
+  resolveAccountRegion,
+  normalizeRegion,
+  REGION_CN,
   USER_AGENT,
   formatAccountLogName,
   formatAccountFullDesc
@@ -35,6 +39,9 @@ export class AccountScheduler {
     const maxLimit = config.concurrencyLimitEnabled !== false ? (config.maxInFlightPerAccount || 3) : 9999;
     const excludeUids = Array.isArray(options.excludeUids) ? options.excludeUids : [];
     const strategy = options.strategy || config.routingStrategy || 'least-inflight';
+    // 区域限制：模型名带 cn:/intl: 前缀时，只允许调度该区域的账号
+    const forcedRegion = options.region ? normalizeRegion(options.region) : null;
+    const regionAllowed = (a) => !forcedRegion || resolveAccountRegion(a) === forcedRegion;
 
     // 1. 优先检查：网关侧全局指定账号 (config.pinnedAccount)
     if (config.pinnedAccount) {
@@ -48,7 +55,9 @@ export class AccountScheduler {
 
       if (matched) {
         let restrictedReason = null;
-        if (excludeUids.includes(matched.uid)) {
+        if (!regionAllowed(matched)) {
+          restrictedReason = `区域不符 (需要 ${forcedRegion})`;
+        } else if (excludeUids.includes(matched.uid)) {
           restrictedReason = '本轮重试已尝试过';
         } else if (matched.status !== 'healthy') {
           restrictedReason = `状态异常 (${matched.status})`;
@@ -78,7 +87,7 @@ export class AccountScheduler {
       const sticky = sessionStickyMap.get(sessionKey);
       if (!excludeUids.includes(sticky.uid)) {
         const acc = accounts.find(a => a.uid === sticky.uid);
-        if (acc && acc.status === 'healthy' && now > (acc.cooldownUntil || 0) && (acc.inFlight || 0) < maxLimit) {
+        if (acc && regionAllowed(acc) && acc.status === 'healthy' && now > (acc.cooldownUntil || 0) && (acc.inFlight || 0) < maxLimit) {
           const isModelCooling = requestedModel && acc.modelCooldowns?.[requestedModel] && now < acc.modelCooldowns[requestedModel];
           if (!isModelCooling) {
             sticky.lastActive = now;
@@ -102,6 +111,9 @@ export class AccountScheduler {
       if (a.cooldownUntil && now < a.cooldownUntil) return false;
 
       if (excludeUids.includes(a.uid)) return false;
+
+      // 区域限制：模型带 cn:/intl: 前缀时只允许对应区域账号
+      if (!regionAllowed(a)) return false;
 
       // 自动清理已过期的单模型局部冷却时间戳
       if (requestedModel && a.modelCooldowns) {
@@ -327,7 +339,9 @@ export class AccountScheduler {
   static async refreshSessionToken(acc) {
     if (!acc.refreshToken) return { ok: false, msg: '该账号缺少 refreshToken，需重新扫码授权' };
     try {
-      const res = await fetch('https://copilot.tencent.com/v2/plugin/auth/token/refresh', {
+      // refresh token 按签发域校验，必须打回账号所属区域
+      const ep = endpointsFor(acc);
+      const res = await fetch(ep.authRefresh, {
         method: 'POST',
         headers: {
           'X-Refresh-Token': acc.refreshToken,
@@ -371,6 +385,14 @@ export class AccountScheduler {
 
   static async dailyCheckin(acc, force = false) {
     if (!acc.accessToken) return { success: false, msg: '无有效 Token' };
+
+    // 国际版没有签到功能：上游不提供该接口，直接跳过，不打请求也不报错。
+    // （实测 www.codebuddy.ai 的 /v2/billing/meter/daily-checkin 返回 401，
+    //   且国际版账号体系中本就没有「每日签到领积分」这一机制。）
+    if (resolveAccountRegion(acc) !== REGION_CN) {
+      return { success: false, skipped: true, unsupported: true, msg: '国际版账号无签到功能' };
+    }
+
     const today = getTodayString();
 
     // 1. 前置状态判断：当天若已成功签到且非强制，则直接返回已签到状态，避免频繁重复调用上游
@@ -384,7 +406,7 @@ export class AccountScheduler {
     }
 
     try {
-      const res = await fetch(CHECKIN_URL, {
+      const res = await fetch(endpointsFor(acc).checkin, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${acc.accessToken}`,
@@ -437,9 +459,16 @@ export class AccountScheduler {
     const today = getTodayString();
     let checkedCount = 0;
     let skippedCount = 0;
+    let unsupportedCount = 0;
 
     for (const acc of accounts) {
       if (!acc.accessToken || acc.status !== 'healthy') continue;
+
+      // 国际版没有签到机制，轮巡时直接跳过，不产生请求也不写日志噪音
+      if (resolveAccountRegion(acc) !== REGION_CN) {
+        unsupportedCount++;
+        continue;
+      }
 
       // 检查当天签到状态：如果当天已完成，则跳过，直至次日零点跨天后再检测
       const isAlreadyDoneToday = acc.lastCheckinDate === today && (acc.lastCheckinSuccess || acc.lastCheckinMsg?.includes('已签到') || acc.lastCheckinMsg?.includes('成功'));
@@ -453,8 +482,12 @@ export class AccountScheduler {
       if (res.success) checkedCount++;
     }
 
-    if (checkedCount > 0) {
-      Logger.info('SCHEDULER', `每小时签到巡检：成功为 ${checkedCount} 个未签到账号完成签到，${skippedCount} 个账号今日已签自动跳过`);
+    if (checkedCount > 0 || unsupportedCount > 0) {
+      const parts = [];
+      if (checkedCount > 0) parts.push(`成功为 ${checkedCount} 个未签到账号完成签到`);
+      if (skippedCount > 0) parts.push(`${skippedCount} 个账号今日已签自动跳过`);
+      if (unsupportedCount > 0) parts.push(`${unsupportedCount} 个国际版账号无签到功能已跳过`);
+      Logger.info('SCHEDULER', `每小时签到巡检：${parts.join('，')}`);
     }
   }
 
@@ -487,8 +520,10 @@ export class AccountScheduler {
     ];
 
     try {
+      // 计费接口按账号区域选择 base（国际版与国内版路径一致）
+      const ep = endpointsFor(acc);
       // 1. 套餐总览
-      const resSummary = await fetch(SUMMARY_URL, {
+      const resSummary = await fetch(ep.summary, {
         method: 'POST',
         headers,
         body: '{}'
@@ -496,7 +531,7 @@ export class AccountScheduler {
       const summaryData = (await resSummary.json()).data || {};
 
       // 2. 免费/活动赠送包明细
-      const resFree = await fetch('https://copilot.tencent.com/billing/meter/get-user-resource-free-packages', {
+      const resFree = await fetch(`${ep.apiBase}/billing/meter/get-user-resource-free-packages`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -512,7 +547,7 @@ export class AccountScheduler {
       // 3. 购买加量包明细
       let paidPackages = [];
       try {
-        const resPaid = await fetch('https://copilot.tencent.com/billing/meter/get-user-resource-paid-packages', {
+        const resPaid = await fetch(`${ep.apiBase}/billing/meter/get-user-resource-paid-packages`, {
           method: 'POST',
           headers,
           body: JSON.stringify({

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CodeBuddy 2API · 生产级官方模型网关</title>
+  <title>CodeBuddy 2API · 生产级双区域官方模型网关</title>
   <style>
     :root {
       --bg: #090d16;
@@ -348,17 +348,20 @@
               <div class="kpi-card">
                 <div class="kpi-label">总 Token</div>
                 <div class="kpi-value" style="color:#c084fc;"><span id="repTotalTokens">-</span></div>
-                <div class="kpi-hint">输入+输出 (<span id="repTokensSplit">-</span>) · 缓存 <b id="repHitRate" style="color:#4ade80;">0.0%</b></div>
+                <div class="kpi-hint">输入 + 输出 = <span id="repTokensSplit">-</span></div>
               </div>
 
-              <!-- 2. 官网预估折算总价 (基于联网检索官方价格) -->
+              <!-- 2. 缓存命中率 (Prompt Cache Hit Rate) —— 替代原「官网折算总价」大数字位 -->
               <div class="kpi-card">
                 <div class="kpi-label" style="display:flex; justify-content:space-between; align-items:center;">
-                  <span>官网折算总价</span>
+                  <span>缓存命中率</span>
                   <button class="btn-copy" style="font-size:10px; padding:1px 6px;" onclick="openPricingModal()" title="基于网关官方联网检索功能核验大模型官网价格与Prompt缓存单价">🔍 联网核价</button>
                 </div>
-                <div class="kpi-value" style="color:#22c55e;"><span id="repTotalCost">-</span></div>
-                <div class="kpi-hint">缓存折后 <b id="repCachedCost" style="color:#4ade80;">-</b> (省 <span id="repSavedCost" style="color:#facc15;">-</span>)</div>
+                <div class="kpi-value" style="color:#4ade80;"><span id="repHitRate">-</span></div>
+                <div class="kpi-hint">命中 <b id="repCachedTokens" style="color:#38bdf8;">-</b> tok · 省 <span id="repSavedCost" style="color:#facc15;">-</span></div>
+                <div style="margin-top:7px; height:4px; background:rgba(255,255,255,0.08); border-radius:2px; overflow:hidden;">
+                  <div id="repHitRateBar" style="height:100%; width:0%; background:linear-gradient(90deg,#38bdf8,#4ade80); border-radius:2px; transition:width .45s ease;"></div>
+                </div>
               </div>
 
               <!-- 3. 成功请求数 -->
@@ -403,11 +406,12 @@
             <!-- 模型用量排行榜 -->
             <div class="card" style="margin-bottom:0;">
               <div class="card-title">
-                <div style="display:flex; align-items:center; gap:8px;">
-                  <span>🧠 模型用量与官网折算价钱</span>
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                  <span>🧠 模型用量与缓存命中</span>
+                  <span class="badge badge-ok" id="badgeTotalCachedCost" style="font-size:10.5px;" title="按各模型官网价格折算的缓存折后总价">缓存折后 <b id="repCachedCost">-</b></span>
                   <button class="btn-copy" style="font-size:10px; padding:2px 8px;" onclick="openPricingModal()" title="查看并基于网关联网检索各大模型官网 Tokens 价格">💰 官网价格对照</button>
                 </div>
-                <span class="badge badge-purple" id="badgeModelUsageSummary">按总 Token / 官网价格统计</span>
+                <span class="badge badge-purple" id="badgeModelUsageSummary">按总 Token / 缓存命中率统计</span>
               </div>
               <div id="modelRankList" style="display:flex; flex-direction:column; gap:6px;">
                 <div style="color:var(--text-muted); text-align:center; padding:20px;">正在加载模型分布...</div>
@@ -538,10 +542,28 @@
               <div style="display:flex; gap:10px;">
                 <input id="modelSearch" class="search-input" placeholder="🔍 搜索模型 ID 或名称..." oninput="filterModels()">
                 <button class="btn-primary" onclick="loadModels(true)">🔄 刷新上游</button>
+                <button class="btn-outline" onclick="openBlacklistModal()">🚫 黑名单 <span id="blacklistCountBadge"></span></button>
                 <button class="btn-outline" onclick="exportAllRawJson()">📥 导出全量 JSON</button>
               </div>
             </div>
+
+            <!-- 黑名单生效提示条：有屏蔽时高亮，无屏蔽时提示可加入 -->
+            <div id="blacklistNotice" style="display:none; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; margin-bottom:12px; border-radius:8px; background:rgba(239,68,68,0.10); border:1px solid rgba(239,68,68,0.35);">
+              <span style="font-size:12.5px; color:#f87171; font-weight:600;">🚫 黑名单生效中</span>
+              <span id="blacklistNoticeText" style="font-size:12px; color:var(--text-muted);"></span>
+              <button class="btn-copy" style="font-size:11px; padding:2px 8px; margin-left:auto;" onclick="openBlacklistModal()">管理黑名单</button>
+            </div>
             
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+              <!-- 区域分区：国内版 / 国际版模型分开展示 -->
+              <div class="filter-bar" style="margin-bottom:0;" id="modelRegionTabs">
+                <button class="filter-btn active" data-region="all" onclick="setRegionFilter('all', this)">🌏 全部区域</button>
+                <button class="filter-btn" data-region="cn" onclick="setRegionFilter('cn', this)">🇨🇳 国内版 <span id="cnCount" style="opacity:.7;"></span></button>
+                <button class="filter-btn" data-region="intl" onclick="setRegionFilter('intl', this)">🌐 国际版 <span id="intlCount" style="opacity:.7;"></span></button>
+                <button class="filter-btn" data-region="both" onclick="setRegionFilter('both', this)">🔀 两区皆有 <span id="bothCount" style="opacity:.7;"></span></button>
+              </div>
+            </div>
+
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
               <div class="filter-bar" style="margin-bottom:0;" id="modelCategoryTabs">
                 <button class="filter-btn active" onclick="setFilter('all', this)">全部</button>
@@ -568,6 +590,7 @@
               <thead>
                 <tr>
                   <th>模型 ID</th>
+                  <th>所属区域</th>
                   <th>显示名称</th>
                   <th>上游繁忙度</th>
                   <th>实时探针 (本地账号)</th>
@@ -841,9 +864,70 @@
     </main>
   </div>
 
+  <!-- 模型黑名单管理 Modal -->
+  <div class="modal" id="blacklistModal">
+    <div class="modal-content" style="max-width: 760px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <h3 style="margin:0; font-size:16px; color:#f87171;">🚫 模型黑名单 (Model Blacklist)</h3>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:3px;">命中黑名单的模型不会出现在 <code>/v1/models</code>，客户端看不到也选不到；硬编码调用会被 403 拒绝。</div>
+        </div>
+        <button onclick="closeBlacklistModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
+      </div>
+
+      <!-- 快速添加 -->
+      <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+        <input id="blacklistInput" class="search-input" style="flex:1; min-width:200px;" placeholder="输入模型名，如 intl:gpt-6-astra 或 intl:*" onkeydown="if(event.key==='Enter')addBlacklistRule()">
+        <button class="btn-primary" style="padding:7px 14px; white-space:nowrap;" onclick="addBlacklistRule()">➕ 加入黑名单</button>
+      </div>
+
+      <!-- 多选面板：从现有模型批量勾选 -->
+      <div style="background:var(--code-bg); padding:12px; border-radius:8px; border:1px solid var(--card-border); margin-bottom:12px;">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+          <span style="font-size:12px; font-weight:700; color:var(--text-main);">📋 从现有模型批量选择</span>
+          <span class="badge badge-purple" id="blacklistPickCountBadge" style="font-size:10px;">已选 0</span>
+          <input id="blacklistPickSearch" class="search-input" style="flex:1; min-width:140px; padding:4px 10px; font-size:12px;" placeholder="🔍 筛选模型..." oninput="renderBlacklistPickList()">
+          <button class="btn-copy" style="font-size:11px; padding:3px 9px;" onclick="blacklistPickAll(true)">全选</button>
+          <button class="btn-copy" style="font-size:11px; padding:3px 9px;" onclick="blacklistPickAll(false)">清空</button>
+          <button class="btn-primary" style="font-size:11px; padding:3px 10px;" onclick="applyBlacklistPicks()">＋ 加入选中的</button>
+        </div>
+        <div id="blacklistPickList" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(215px, 1fr)); gap:4px; max-height:190px; overflow-y:auto; padding-right:4px;">
+          <div style="color:var(--text-muted); text-align:center; padding:12px; font-size:12px; grid-column:1/-1;">正在加载模型列表...</div>
+        </div>
+      </div>
+
+      <!-- 规则说明 -->
+      <div style="font-size:11.5px; color:var(--text-muted); line-height:1.7; background:var(--code-bg); padding:10px 12px; border-radius:8px; border:1px solid var(--card-border); margin-bottom:12px;">
+        <b style="color:var(--text-main);">匹配规则</b><br>
+        · <code>intl:gpt-6-astra</code> → 仅屏蔽国际版的该模型<br>
+        · <code>gpt-6-astra</code> → 屏蔽该裸名（两个区域都不再输出）<br>
+        · <code>intl:*</code> → 屏蔽整个国际版全部模型<br>
+        · <code>gpt-6-*</code> → 前缀通配，屏蔽 gpt-6 系列
+      </div>
+
+      <!-- 当前规则列表 -->
+      <div style="font-size:12px; font-weight:600; color:var(--text-main); margin-bottom:6px;">当前规则 (<span id="blacklistRuleCount">0</span> 条)</div>
+      <div id="blacklistRuleList" style="display:flex; flex-direction:column; gap:6px; max-height:240px; overflow-y:auto; margin-bottom:12px;">
+        <div style="color:var(--text-muted); text-align:center; padding:14px; font-size:12px;">暂无黑名单规则</div>
+      </div>
+
+      <!-- 命中预览 -->
+      <div id="blacklistPreviewWrap" style="display:none; margin-bottom:12px;">
+        <div style="font-size:12px; font-weight:600; color:var(--text-main); margin-bottom:6px;">
+          📋 实际被屏蔽的模型 (<span id="blacklistPreviewCount">0</span> 个) —— 这些不会出现在 <code>/v1/models</code>
+        </div>
+        <div id="blacklistPreviewList" style="display:flex; flex-wrap:wrap; gap:6px; max-height:150px; overflow-y:auto; background:var(--code-bg); padding:10px; border-radius:8px; border:1px solid var(--card-border);"></div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button class="btn-outline" onclick="closeBlacklistModal()">取消</button>
+        <button class="btn-primary" onclick="saveBlacklist()">💾 保存并生效</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 原始数据查看 Modal -->
-  <div class="modal" id="rawModal">
-    <div class="modal-content">
+  <div class="modal" id="rawModal">    <div class="modal-content">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <h3 style="margin:0; font-size:16px; color:var(--accent);">腾讯云官方原始数据 · <span id="rawModalTitle"></span></h3>
         <button onclick="closeRawModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
@@ -877,7 +961,28 @@
   <!-- OAuth 扫码登录 Modal -->
   <div class="modal" id="oauthModal">
     <div class="modal-content" style="text-align:center; max-width:480px;">
-      <h3 style="margin-bottom:8px; font-size:18px;">腾讯云官方扫码授权</h3>
+      <h3 style="margin-bottom:8px; font-size:18px;">官方扫码授权</h3>
+
+      <!-- 区域选择：国内版 / 国际版。两版账号与模型互不相通，token 按签发域校验 -->
+      <div style="margin: 0 0 14px; text-align:left;">
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">选择账号所属版本：</div>
+        <div style="display:flex; gap:8px;">
+          <label id="regionCnLabel" style="flex:1; cursor:pointer; padding:9px 10px; border-radius:8px; border:2px solid var(--primary); background:rgba(2,132,199,0.12); text-align:center; font-size:12px;">
+            <input type="radio" name="oauthRegion" value="cn" checked onchange="onOAuthRegionChange('cn')" style="margin-right:5px; vertical-align:middle;">
+            <span style="font-weight:bold;">国内版</span>
+            <div style="font-size:10px; color:var(--text-muted); margin-top:3px;">copilot.tencent.com</div>
+          </label>
+          <label id="regionIntlLabel" style="flex:1; cursor:pointer; padding:9px 10px; border-radius:8px; border:2px solid transparent; background:rgba(255,255,255,0.04); text-align:center; font-size:12px;">
+            <input type="radio" name="oauthRegion" value="intl" onchange="onOAuthRegionChange('intl')" style="margin-right:5px; vertical-align:middle;">
+            <span style="font-weight:bold;">国际版</span>
+            <div style="font-size:10px; color:var(--text-muted); margin-top:3px;">www.codebuddy.ai</div>
+          </label>
+        </div>
+        <div id="regionHint" style="font-size:11px; color:var(--text-muted); margin-top:8px; line-height:1.5;">
+          国内版含 DeepSeek / GLM / Kimi 等；国际版额外含 GPT-6 / Grok / Gemini 系列。两者账号不通用。
+        </div>
+      </div>
+
       <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">可直接在当前浏览器打开，或复制授权链接发送至手机/微信扫码：</p>
       <div style="margin: 16px 0;">
         <a id="loginLink" href="#" target="_blank" style="display:block; padding:10px 18px; background:var(--primary); color:#fff; border-radius:8px; text-decoration:none; font-weight:bold; box-shadow:0 4px 12px rgba(2, 132, 199, 0.3); margin-bottom:12px;">
@@ -1034,6 +1139,40 @@
       <div style="display:flex; justify-content:flex-end; gap:10px;">
         <button class="btn-outline" onclick="closeLogsPruneModal()">取消</button>
         <button class="btn-danger" style="padding:6px 16px; font-weight:bold;" onclick="executeLogsPrune()">确认执行清理</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新建主模型降级链：选择主模型（带区域前缀，按国内/国际分组） -->
+  <div class="modal" id="pickPrimaryModelModal">
+    <div class="modal-content" style="max-width:560px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0; font-size:16px; color:var(--accent);">➕ 新建主模型降级链</h3>
+        <button onclick="closePickPrimaryModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
+      </div>
+
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px; line-height:1.5;">
+        选择要配置降级链的主模型。<b>cn:</b> 为国内版（copilot.tencent.com），<b>intl:</b> 为国际版（www.codebuddy.ai）。
+        同一模型在两区都有时会分别列出，按需选择。
+      </p>
+
+      <!-- 区域快速筛选 -->
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <button class="filter-btn active" data-pick-region="all" onclick="setPickPrimaryRegion('all', this)">全部</button>
+        <button class="filter-btn" data-pick-region="cn" onclick="setPickPrimaryRegion('cn', this)">🇨🇳 国内版</button>
+        <button class="filter-btn" data-pick-region="intl" onclick="setPickPrimaryRegion('intl', this)">🌐 国际版</button>
+      </div>
+
+      <input type="text" id="pickPrimarySearch" class="search-input" placeholder="🔍 搜索模型名..." oninput="renderPickPrimaryList()" style="width:100%; margin-bottom:10px;">
+
+      <div id="pickPrimaryList" style="max-height:340px; overflow-y:auto; background:var(--code-bg); border:1px solid var(--card-border); border-radius:8px; padding:6px;"></div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; gap:10px;">
+        <span id="pickPrimaryCount" style="font-size:11px; color:var(--text-muted);"></span>
+        <div style="display:flex; gap:10px;">
+          <button class="btn-outline" onclick="closePickPrimaryModal()">取消</button>
+          <button class="btn-primary" onclick="confirmPickPrimaryModel()">确定创建</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1240,11 +1379,20 @@
       openai: `# OpenAI 兼容客户端配置 (如 Cursor / NextChat / Chatbox / LobeChat)
 Base URL: http://127.0.0.1:{{PORT}}/v1
 API Key : {{API_KEY}}
-常用模型: deepseek-v4.1-flash (100万上下文/思考模式), hy4-preview, hy3 (免费)`,
+
+# 模型名支持区域前缀：cn: 走国内版，intl: 走国际版（不带前缀则按账号池自动路由）
+常用模型:
+  cn:deepseek-v4.1-flash   (国内版, 100万上下文/思考模式)
+  cn:hy4-preview
+  intl:deepseek-v4.1-flash-sg
+  intl:gpt-6-astra         (国际版专属, 需国际版付费等级)
+  intl:grok-4.7
+完整列表: GET http://127.0.0.1:{{PORT}}/v1/models`,
       claude: `# Claude Code 官方命令行原生适配 (零配置直连)
 export ANTHROPIC_BASE_URL=http://127.0.0.1:{{PORT}}
 export ANTHROPIC_API_KEY={{API_KEY}}
-export ANTHROPIC_MODEL=deepseek-v4.1-flash
+export ANTHROPIC_MODEL=cn:deepseek-v4.1-flash
+# 国际版账号可换成: intl:deepseek-v4.1-flash-sg
 
 claude`,
       search: `# 官方免费服务端联网检索与抓取
@@ -1256,7 +1404,13 @@ curl http://127.0.0.1:{{PORT}}/v1/search \\
 curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
   -H "Authorization: Bearer {{API_KEY}}" \\
   -H "Content-Type: application/json" \\
-  -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"你好"}],"stream":false}'`
+  -d '{"model":"cn:deepseek-v4.1-flash","messages":[{"role":"user","content":"你好"}],"stream":false}'
+
+# 国际版账号（需该账号有对应模型权限）
+curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
+  -H "Authorization: Bearer {{API_KEY}}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"intl:deepseek-v4.1-flash-sg","messages":[{"role":"user","content":"你好"}],"stream":false}'`
     };
 
     function switchGuide(type, el) {
@@ -1290,6 +1444,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     }
 
     let currentSettings = { concurrencyLimitEnabled: true, maxInFlightPerAccount: 3, modelFallbackEnabled: true, accountFailoverEnabled: true, routingStrategy: 'least-inflight' };
+    let currentBlacklist = [];      // 已保存的模型黑名单规则（服务端返回）
 
     async function loadSettings() {
       try {
@@ -1384,9 +1539,91 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         } else {
           currentSettings.modelFallback = {};
         }
+        // 降级链要标出被黑名单剔除的步骤，先确保黑名单已加载
+        if (Array.isArray(s.modelBlacklist)) {
+          currentBlacklist = s.modelBlacklist.filter(Boolean);
+        } else if (currentBlacklist.length === 0) {
+          try {
+            const blRes = await fetch('/api/models/blacklist');
+            const blData = await blRes.json();
+            currentBlacklist = Array.isArray(blData.blacklist) ? blData.blacklist : [];
+          } catch (_) {}
+        }
         renderFallbackChains();
 
       } catch (_) {}
+    }
+
+    /**
+     * 把 /api/models-detail 的裸模型列表展开成「带区域前缀」的可选项。
+     * 每个模型按它可用的区域各生成一条：cn:xxx / intl:xxx，
+     * 与 /v1/models 的输出保持一致，避免用户在下拉里选到裸名后无法确定走哪个区。
+     */
+    function buildRegionPrefixedOptions() {
+      const out = [];
+      const seen = new Set();
+      for (const m of allModels) {
+        const regions = Array.isArray(m.regions) && m.regions.length ? m.regions : ['cn'];
+        for (const r of regions) {
+          const id = `${r}:${m.id}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          out.push({ id, bare: m.id, region: r, label: r === 'intl' ? '国际版' : '国内版' });
+        }
+      }
+      // 按区域分组：国内在前，国际在后；组内按裸名排序
+      out.sort((a, b) => {
+        if (a.region !== b.region) return a.region === 'cn' ? -1 : 1;
+        return a.bare.localeCompare(b.bare);
+      });
+      return out;
+    }
+
+    /** 生成带 <optgroup> 分组的 <option> HTML */
+    function buildRegionSelectOptions(excludeSet) {
+      const opts = buildRegionPrefixedOptions();
+      const cnItems = opts.filter(o => o.region === 'cn' && (!excludeSet || !excludeSet.has(o.id)));
+      const intlItems = opts.filter(o => o.region === 'intl' && (!excludeSet || !excludeSet.has(o.id)));
+      const mk = (arr) => arr.map(o => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.id)}</option>`).join('');
+      let html = '';
+      if (cnItems.length) html += `<optgroup label="🇨🇳 国内版 (${cnItems.length})">${mk(cnItems)}</optgroup>`;
+      if (intlItems.length) html += `<optgroup label="🌐 国际版 (${intlItems.length})">${mk(intlItems)}</optgroup>`;
+      return html;
+    }
+
+    /**
+     * 判断降级链中的某个步骤是否会被黑名单剔除。
+     * 与后端 isStepUnavailableByBlacklist 保持一致：
+     *   · 带区域前缀 → 该区域被屏蔽即失效
+     *   · 不带前缀   → 两个区域都被屏蔽才失效
+     */
+    function isStepBlockedByBlacklist(step) {
+      const s = String(step || '').trim();
+      if (!s) return true;
+      const hasRegion = s.startsWith('cn:') || s.startsWith('intl:');
+      const region = hasRegion ? s.slice(0, s.indexOf(':')) : null;
+      const bare = hasRegion ? s.slice(s.indexOf(':') + 1) : s;
+
+      const matchOne = (pattern, value) => {
+        if (!pattern) return false;
+        if (!pattern.includes('*')) return pattern.toLowerCase() === value.toLowerCase();
+        const esc = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+        try { return new RegExp(`^${esc}$`, 'i').test(value); } catch (_) { return false; }
+      };
+      const isBlockedIn = (r) => {
+        const pid = `${r}:${bare}`;
+        return currentBlacklist.some(rule => {
+          const ruleHasRegion = rule.startsWith('cn:') || rule.startsWith('intl:');
+          if (ruleHasRegion) {
+            const ruleRegion = rule.slice(0, rule.indexOf(':'));
+            return ruleRegion === r && matchOne(rule, pid);
+          }
+          return matchOne(rule, bare) || matchOne(rule, pid);
+        });
+      };
+
+      if (region) return isBlockedIn(region);
+      return isBlockedIn('cn') && isBlockedIn('intl');
     }
 
     function renderFallbackChains() {
@@ -1400,23 +1637,31 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         return;
       }
 
-      const availableModels = allModels.map(m => m.id);
-
       container.innerHTML = entries.map(([primary, fallbacks]) => {
         const fallbackList = Array.isArray(fallbacks) ? fallbacks : [];
-        const remainingModels = availableModels.filter(m => m !== primary && !fallbackList.includes(m));
+        // 已用过的（主模型 + 链中已有）不再出现在下拉里
+        const usedSet = new Set([primary, ...fallbackList]);
+        const remainingCount = buildRegionPrefixedOptions().filter(o => !usedSet.has(o.id)).length;
 
-        const stepsHtml = fallbackList.map((fb, idx) => `
-          <div style="background:rgba(255, 255, 255, 0.05); border:1px solid var(--card-border); padding:5px 10px; border-radius:6px; display:inline-flex; align-items:center; gap:6px;">
-            <span style="font-family:monospace; font-weight:600; color:#4ade80;">${idx + 2}. ${escapeHtml(fb)}</span>
+        const stepsHtml = fallbackList.map((fb, idx) => {
+          // 该备用模型是否会被黑名单剔除（与后端 isStepUnavailableByBlacklist 同逻辑）
+          const unavailable = isStepBlockedByBlacklist(fb);
+          const tip = unavailable
+            ? '该模型命中黑名单，运行时会被自动跳过，不会参与降级轮换'
+            : '正常参与降级轮换';
+          return `
+          <div style="background:${unavailable ? 'rgba(239,68,68,0.10)' : 'rgba(255, 255, 255, 0.05)'}; border:1px solid ${unavailable ? 'rgba(239,68,68,0.45)' : 'var(--card-border)'}; padding:5px 10px; border-radius:6px; display:inline-flex; align-items:center; gap:6px;" title="${escapeAttr(tip)}">
+            <span style="font-family:monospace; font-weight:600; color:${unavailable ? '#f87171' : '#4ade80'}; ${unavailable ? 'text-decoration:line-through; opacity:0.75;' : ''}">${idx + 2}. ${escapeHtml(fb)}</span>
+            ${unavailable ? '<span class="badge badge-err" style="font-size:9px; padding:1px 5px;">🚫 已屏蔽</span>' : ''}
             <button onclick="moveFallbackStep('${escapeAttr(primary)}', ${idx}, -1)" title="上移/前移优先" class="btn-outline" style="padding:1px 5px; font-size:10px;" ${idx === 0 ? 'disabled style="opacity:0.35;"' : ''}>↑</button>
             <button onclick="moveFallbackStep('${escapeAttr(primary)}', ${idx}, 1)" title="下移/后移后备" class="btn-outline" style="padding:1px 5px; font-size:10px;" ${idx === fallbackList.length - 1 ? 'disabled style="opacity:0.35;"' : ''}>↓</button>
             <button onclick="removeFallbackStep('${escapeAttr(primary)}', ${idx})" title="移除此备用模型" style="background:transparent; color:#f87171; border:none; cursor:pointer; font-size:13px; font-weight:bold; padding:0 3px;">✕</button>
           </div>
           ${idx < fallbackList.length - 1 ? '<span style="color:var(--text-muted); font-size:13px;">➔</span>' : ''}
-        `).join('');
+        `;
+        }).join('');
 
-        const selectOptions = remainingModels.map(m => `<option value="${m}">${m}</option>`).join('');
+        const selectOptions = buildRegionSelectOptions(usedSet);
 
         return `
           <div style="background:var(--code-bg); border:1px solid var(--card-border); border-radius:10px; padding:16px;">
@@ -1441,7 +1686,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
               <select id="selAddFallback_${escapeAttr(primary)}" class="search-input" style="width:240px; padding:4px 8px; font-size:12px;">
                 ${selectOptions || '<option value="">无更多可选模型</option>'}
               </select>
-              <button class="btn-outline" style="padding:4px 10px; font-size:11px;" onclick="appendFallbackStep('${escapeAttr(primary)}')" ${remainingModels.length === 0 ? 'disabled' : ''}>➕ 追加备用模型到链尾</button>
+              <button class="btn-outline" style="padding:4px 10px; font-size:11px;" onclick="appendFallbackStep('${escapeAttr(primary)}')" ${remainingCount === 0 ? 'disabled' : ''}>➕ 追加备用模型到链尾</button>
             </div>
           </div>
         `;
@@ -1477,21 +1722,94 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       renderFallbackChains();
     }
 
+    // ─── 新建降级链：主模型选择弹窗 ──────────────────────────────────────
+    let pickPrimaryRegion = 'all';
+    let pickPrimarySelected = null;
+
+    function setPickPrimaryRegion(region, el) {
+      pickPrimaryRegion = region;
+      document.querySelectorAll('#pickPrimaryModelModal [data-pick-region]').forEach(b => b.classList.remove('active'));
+      if (el) el.classList.add('active');
+      renderPickPrimaryList();
+    }
+
+    function getPickPrimaryCandidates() {
+      const existing = new Set(Object.keys(currentSettings.modelFallback || {}));
+      const q = (document.getElementById('pickPrimarySearch')?.value || '').toLowerCase().trim();
+      return buildRegionPrefixedOptions().filter(o => {
+        if (existing.has(o.id)) return false;
+        if (pickPrimaryRegion !== 'all' && o.region !== pickPrimaryRegion) return false;
+        if (q && !o.id.toLowerCase().includes(q)) return false;
+        return true;
+      });
+    }
+
+    function renderPickPrimaryList() {
+      const box = document.getElementById('pickPrimaryList');
+      if (!box) return;
+      const list = getPickPrimaryCandidates();
+      const countEl = document.getElementById('pickPrimaryCount');
+      if (countEl) countEl.innerText = `共 ${list.length} 个可选模型`;
+
+      if (list.length === 0) {
+        box.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:20px; font-size:12px;">没有匹配的可选模型</div>';
+        return;
+      }
+
+      box.innerHTML = list.map(o => {
+        const isSel = pickPrimarySelected === o.id;
+        const bg = isSel ? 'rgba(2,132,199,0.22)' : 'transparent';
+        const bd = isSel ? '1px solid rgba(56,189,248,0.6)' : '1px solid transparent';
+        const tag = o.region === 'intl'
+          ? '<span style="font-size:9px; padding:1px 5px; border-radius:4px; background:rgba(168,85,247,0.18); color:#c084fc; border:1px solid rgba(168,85,247,0.45);">🌐 国际</span>'
+          : '<span style="font-size:9px; padding:1px 5px; border-radius:4px; background:rgba(2,132,199,0.18); color:#38bdf8; border:1px solid rgba(2,132,199,0.45);">🇨🇳 国内</span>';
+        return `<div onclick="selectPickPrimary('${escapeAttr(o.id)}')" style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:7px 10px; border-radius:6px; cursor:pointer; background:${bg}; border:${bd}; margin-bottom:2px;">
+            <code style="font-size:12px; color:var(--text-main);">${escapeHtml(o.id)}</code>
+            ${tag}
+          </div>`;
+      }).join('');
+    }
+
+    function selectPickPrimary(id) {
+      pickPrimarySelected = id;
+      renderPickPrimaryList();
+    }
+
+    function confirmPickPrimaryModel() {
+      const list = getPickPrimaryCandidates();
+      if (!list.length) return alert('没有可选模型');
+      const chosen = pickPrimarySelected && list.some(o => o.id === pickPrimarySelected)
+        ? pickPrimarySelected
+        : list[0].id;
+      if (!currentSettings.modelFallback) currentSettings.modelFallback = {};
+      if (!currentSettings.modelFallback[chosen]) currentSettings.modelFallback[chosen] = [];
+      closePickPrimaryModal();
+      renderFallbackChains();
+    }
+
+    function closePickPrimaryModal() {
+      const m = document.getElementById('pickPrimaryModelModal');
+      if (m) m.style.display = 'none';
+      pickPrimarySelected = null;
+    }
+
     function addFallbackChainRule() {
-      const available = allModels.map(m => m.id);
-      const existing = Object.keys(currentSettings.modelFallback || {});
-      const candidates = available.filter(m => !existing.includes(m));
+      const candidates = buildRegionPrefixedOptions()
+        .filter(o => !new Set(Object.keys(currentSettings.modelFallback || {})).has(o.id));
       if (candidates.length === 0) {
         return alert('所有已同步模型均已建立降级链！');
       }
-      const model = prompt('请输入或选择需要配置降级链的主模型 ID：\n可选：' + candidates.slice(0, 8).join(', '), candidates[0]);
-      if (!model) return;
-      const trimModel = model.trim();
-      if (!currentSettings.modelFallback) currentSettings.modelFallback = {};
-      if (!currentSettings.modelFallback[trimModel]) {
-        currentSettings.modelFallback[trimModel] = [];
-      }
-      renderFallbackChains();
+      // 重置状态并打开选择弹窗
+      pickPrimarySelected = null;
+      pickPrimaryRegion = 'all';
+      document.querySelectorAll('#pickPrimaryModelModal [data-pick-region]').forEach(b => {
+        b.classList.toggle('active', b.dataset.pickRegion === 'all');
+      });
+      const search = document.getElementById('pickPrimarySearch');
+      if (search) search.value = '';
+      const modal = document.getElementById('pickPrimaryModelModal');
+      if (modal) modal.style.display = 'flex';
+      renderPickPrimaryList();
     }
 
     function removeFallbackChain(primary) {
@@ -1693,20 +2011,25 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           }
         }
 
-        // 1. 统计概览 7 卡片 (含官网预估折算总价与真实缓存命中率)
+        // 1. 统计概览 7 卡片 (缓存命中率成为主指标，官网折算价降为辅助信息)
         document.getElementById('repTotalTokens').innerText = m.totalTokensDisplay || '0';
         document.getElementById('repTokensSplit').innerText = `${m.inputTokensDisplay || '0'} + ${m.outputTokensDisplay || '0'}`;
         if (document.getElementById('repHitRate')) {
           document.getElementById('repHitRate').innerText = m.overallCacheHitRate || '0.0%';
         }
-        if (document.getElementById('repTotalCost')) {
-          document.getElementById('repTotalCost').innerText = m.totalCostDisplay || '¥0.00';
+        if (document.getElementById('repCachedTokens')) {
+          document.getElementById('repCachedTokens').innerText = m.cachedTokensDisplay || '0';
         }
-        if (document.getElementById('repCachedCost')) {
-          document.getElementById('repCachedCost').innerText = m.totalCachedCostDisplay || '¥0.00';
+        // 命中率进度条：把百分比数字直接映射为宽度（0~100）
+        if (document.getElementById('repHitRateBar')) {
+          const rateNum = parseFloat(String(m.overallCacheHitRate || '0').replace('%', '')) || 0;
+          document.getElementById('repHitRateBar').style.width = Math.max(0, Math.min(100, rateNum)) + '%';
         }
         if (document.getElementById('repSavedCost')) {
           document.getElementById('repSavedCost').innerText = m.totalSavedCostDisplay || '¥0.00';
+        }
+        if (document.getElementById('repCachedCost')) {
+          document.getElementById('repCachedCost').innerText = m.totalCachedCostDisplay || '¥0.00';
         }
         document.getElementById('repSuccessReq').innerText = (m.successRequests || 0).toLocaleString();
         document.getElementById('repSuccessRate').innerText = m.successRate || '100%';
@@ -1895,13 +2218,23 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           : '无限制';
 
         tbody.innerHTML = data.map(a => {
-          const checkinBadge = a.isCheckedInToday
-            ? `<span class="badge badge-ok" title="${a.lastCheckinMsg || ''}">✅ 已签到</span>`
-            : `<span class="badge badge-cool">⏳ 未签到</span> <button class="btn-primary" style="padding:2px 8px; font-size:11px; margin-left:6px;" onclick="runCheckinSingle('${a.uid}')">打卡</button>`;
+          // 国际版上游不提供签到接口，展示为「无签到」且不给打卡按钮
+          const isIntlAcc = a.region === 'intl';
+          const checkinBadge = isIntlAcc
+            ? `<span class="badge badge-cool" title="国际版（www.codebuddy.ai）账号体系没有每日签到功能">🚫 无签到</span>`
+            : a.isCheckedInToday
+              ? `<span class="badge badge-ok" title="${a.lastCheckinMsg || ''}">✅ 已签到</span>`
+              : `<span class="badge badge-cool">⏳ 未签到</span> <button class="btn-primary" style="padding:2px 8px; font-size:11px; margin-left:6px;" onclick="runCheckinSingle('${a.uid}')">打卡</button>`;
 
           const noteHtml = a.note 
             ? `<span class="acc-note-tag" onclick="editAccountNote('${a.uid}', '${escapeAttr(a.note)}')" title="点击修改备注">📝 ${escapeHtml(a.note)}</span>` 
             : `<span class="acc-note-empty" onclick="editAccountNote('${a.uid}', '')" title="点击添加备注">➕ 添加备注</span>`;
+
+          // 区域标识：国内版 / 国际版。点击可在两版之间切换（token 不通用，切换后需重新授权）
+          const accRegion = a.region === 'intl' ? 'intl' : 'cn';
+          const regionBadge = accRegion === 'intl'
+            ? `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(168,85,247,0.18); color:#c084fc; border:1px solid rgba(168,85,247,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','cn')" title="当前为国际版 (www.codebuddy.ai)。点击切换为国内版">🌐 国际版</span>`
+            : `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(2,132,199,0.18); color:#38bdf8; border:1px solid rgba(2,132,199,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','intl')" title="当前为国内版 (copilot.tencent.com)。点击切换为国际版">🇨🇳 国内版</span>`;
 
           const isPinned = currentSettings && currentSettings.pinnedAccount === a.uid;
           const pinBtn = isPinned
@@ -1972,7 +2305,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             <tr>
               <td><code>${a.uid}</code></td>
               <td><b>${a.email || a.uid}</b></td>
-              <td>${noteHtml}</td>
+              <td>${noteHtml}<div style="margin-top:4px;">${regionBadge}</div></td>
               <td>${tokenExpiryHtml}</td>
               <td>
                 <b style="color:#4ade80; font-size:14px; cursor:pointer;" onclick="showCreditDetails('${a.uid}')" title="点击查看官方 plans-usage 积分构成明细">${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b>
@@ -2237,6 +2570,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         document.getElementById('modelTotalBadge').innerText = '正在同步...';
         const res = await fetch('/api/models-detail' + (force ? '?refresh=1' : ''));
         allModels = await res.json();
+        await refreshBlacklistState();
         document.getElementById('modelTotalBadge').innerText = `已同步 ${allModels.length} 款模型`;
         renderModels();
       } catch (e) {
@@ -2293,13 +2627,57 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       renderModels();
     }
 
+    // 区域筛选：'all' | 'cn' | 'intl' | 'both'
+    let currentRegionFilter = 'all';
+
+    function setRegionFilter(region, el) {
+      currentRegionFilter = region;
+      document.querySelectorAll('#modelRegionTabs .filter-btn').forEach(b => b.classList.remove('active'));
+      if (el) el.classList.add('active');
+      renderModels();
+    }
+
+    /** 取模型的区域标记（兼容旧数据：无 regions 字段时按国内版处理） */
+    function modelRegions(m) {
+      if (Array.isArray(m.regions) && m.regions.length) return m.regions;
+      return ['cn'];
+    }
+
+    /** 更新区域标签页上的计数 */
+    function updateRegionCounts() {
+      let cn = 0, intl = 0, both = 0;
+      for (const m of allModels) {
+        const rs = modelRegions(m);
+        const hasCn = rs.includes('cn');
+        const hasIntl = rs.includes('intl');
+        if (hasCn) cn++;
+        if (hasIntl) intl++;
+        if (hasCn && hasIntl) both++;
+      }
+      const set = (id, n) => { const e = document.getElementById(id); if (e) e.innerText = `(${n})`; };
+      set('cnCount', cn);
+      set('intlCount', intl);
+      set('bothCount', both);
+    }
+
     function renderModels() {
       const query = document.getElementById('modelSearch').value.toLowerCase().trim();
       const tbody = document.getElementById('modelBody');
 
+      updateRegionCounts();
+
       let filtered = allModels.filter(m => {
         if (query && !m.id.toLowerCase().includes(query) && !(m.name||'').toLowerCase().includes(query)) {
           return false;
+        }
+        // 区域筛选
+        if (currentRegionFilter !== 'all') {
+          const rs = modelRegions(m);
+          const hasCn = rs.includes('cn');
+          const hasIntl = rs.includes('intl');
+          if (currentRegionFilter === 'cn' && !hasCn) return false;
+          if (currentRegionFilter === 'intl' && !hasIntl) return false;
+          if (currentRegionFilter === 'both' && !(hasCn && hasIntl)) return false;
         }
         if (currentFilter === '1m') return m.maxInputTokens >= 900000;
         if (currentFilter === 'free') return (m.credits || '').includes('0.00') || (m.credits || '').includes('0.08') || (m.credits || '').includes('0.11');
@@ -2318,7 +2696,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
 
       if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
         return;
       }
 
@@ -2328,6 +2706,19 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         const badgeCredit = isFree 
           ? '<span class="badge badge-ok">免费 x0.00</span>' 
           : `<span class="badge badge-cool">${m.credits || 'x' + mult.toFixed(2)}</span>`;
+
+        // 区域徽章：国内 / 国际 / 两区皆有
+        const rs = modelRegions(m);
+        const hasCn = rs.includes('cn');
+        const hasIntl = rs.includes('intl');
+        let regionHtml;
+        if (hasCn && hasIntl) {
+          regionHtml = '<span class="badge" style="font-size:9px;padding:1px 5px;background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);">🔀 两区</span>';
+        } else if (hasIntl) {
+          regionHtml = '<span class="badge" style="font-size:9px;padding:1px 5px;background:rgba(168,85,247,0.18);color:#c084fc;border:1px solid rgba(168,85,247,0.45);">🌐 国际</span>';
+        } else {
+          regionHtml = '<span class="badge" style="font-size:9px;padding:1px 5px;background:rgba(2,132,199,0.18);color:#38bdf8;border:1px solid rgba(2,132,199,0.45);">🇨🇳 国内</span>';
+        }
 
         const ctxFmt = m.maxInputTokens >= 1000000 ? '1,000,000 (1M)' : 
           m.maxInputTokens >= 1000 ? `${(m.maxInputTokens/1000).toFixed(0)}K` : (m.maxInputTokens || '-');
@@ -2342,6 +2733,11 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         }
 
         const desc = m.descriptionZh || m.descriptionEn || '-';
+
+        // 该模型在当前展示区域下是否被黑名单屏蔽（两区都屏蔽才整体灰显）
+        const blockedRegions = rs.filter(r => currentBlacklist.includes(`${r === 'intl' ? 'intl:' : 'cn:'}${m.id}`));
+        const isBlocked = blockedRegions.length === rs.length;
+        const isPartBlocked = blockedRegions.length > 0 && !isBlocked;
 
         // 1. 上游繁忙度展示列 (从上游获取到的模型繁忙度)
         const busyBadgeClass = m.upstreamBusyLevel === 'overload' 
@@ -2407,8 +2803,9 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         }
 
         return `
-          <tr>
-            <td><code>${m.id}</code></td>
+          <tr style="${isBlocked ? 'opacity:0.45;' : ''}">
+            <td><code>${m.id}</code>${isBlocked ? ' <span class="badge badge-err" style="font-size:9px; padding:1px 5px;">🚫 已屏蔽</span>' : (isPartBlocked ? ' <span class="badge badge-cool" style="font-size:9px; padding:1px 5px;" title="部分区域被屏蔽">🚫 部分屏蔽</span>' : '')}</td>
+            <td>${regionHtml}</td>
             <td><b>${m.name || m.id}</b></td>
             <td>${upstreamHtml}</td>
             <td>${probeHtml}</td>
@@ -2424,6 +2821,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             <td style="white-space:nowrap;">
               <button class="btn-copy" onclick="copyText('${m.id}')">📋 复制</button>
               <button class="btn-json" onclick="showRawJson('${m.id}')">🔍 原始JSON</button>
+              <button class="btn-copy" style="color:${isBlocked ? '#4ade80' : '#f87171'}; border-color:${isBlocked ? 'rgba(74,222,128,0.4)' : 'rgba(239,68,68,0.4)'};" onclick="toggleModelBlacklistByModel('${m.id}')" title="${isBlocked ? '解除屏蔽，重新出现在 /v1/models' : '加入黑名单，从 /v1/models 中移除'}">${isBlocked ? '✅ 恢复' : '🚫 屏蔽'}</button>
             </td>
           </tr>
         `;
@@ -2436,6 +2834,302 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       document.getElementById('rawModalTitle').innerText = model.id;
       document.getElementById('rawModalCode').innerText = JSON.stringify(model, null, 2);
       document.getElementById('rawModal').style.display = 'flex';
+    }
+
+    // ─── 模型黑名单管理 ───────────────────────────────────────────────────
+    let draftBlacklist = [];        // 弹窗内编辑中的规则
+    let blacklistPickSet = new Set(); // 多选面板里勾中的模型（暂存，未提交）
+
+    /** 拉取黑名单规则并在页面提示条上显示生效状态 */
+    async function refreshBlacklistState() {
+      try {
+        const res = await fetch('/api/models/blacklist');
+        const data = await res.json();
+        currentBlacklist = Array.isArray(data.blacklist) ? data.blacklist : [];
+        draftBlacklist = [...currentBlacklist];
+
+        const badge = document.getElementById('blacklistCountBadge');
+        if (badge) badge.innerText = currentBlacklist.length ? `(${currentBlacklist.length})` : '';
+
+        const notice = document.getElementById('blacklistNotice');
+        const noticeText = document.getElementById('blacklistNoticeText');
+        if (notice && noticeText) {
+          if (currentBlacklist.length > 0) {
+            notice.style.display = 'flex';
+            const blocked = data.blockedCount || 0;
+            noticeText.innerText = `${currentBlacklist.length} 条规则，实际屏蔽 ${blocked} 个模型条目：${currentBlacklist.join('、')}${currentBlacklist.length > 4 ? ' ...' : ''}`;
+          } else {
+            notice.style.display = 'none';
+          }
+        }
+      } catch (e) {
+        currentBlacklist = [];
+        draftBlacklist = [];
+      }
+    }
+
+    async function openBlacklistModal() {
+      draftBlacklist = [...currentBlacklist];
+      blacklistPickSet = new Set();
+      if (document.getElementById('blacklistPickSearch')) {
+        document.getElementById('blacklistPickSearch').value = '';
+      }
+      renderBlacklistModal();
+      document.getElementById('blacklistModal').style.display = 'flex';
+      renderBlacklistPickList();
+
+      // 拉一次命中预览
+      try {
+        const res = await fetch('/api/models/blacklist');
+        const data = await res.json();
+        renderBlacklistPreview(data.blockedPreview || []);
+      } catch (_) {}
+    }
+
+    function closeBlacklistModal() {
+      document.getElementById('blacklistModal').style.display = 'none';
+    }
+
+    // ─── 多选面板：复选框勾选，支持筛选 / 全选 / 批量加入 ───────────────
+    /** 收集当前矩阵里所有「带区域前缀」的模型条目 */
+    function collectPickableModels() {
+      const out = [];
+      for (const m of allModels) {
+        for (const r of modelRegions(m)) {
+          const pid = `${r === 'intl' ? 'intl:' : 'cn:'}${m.id}`;
+          out.push({ id: pid, region: r, bare: m.id, name: m.name || m.id });
+        }
+      }
+      out.sort((a, b) => a.id.localeCompare(b.id));
+      return out;
+    }
+
+    /** 按当前筛选词渲染复选框列表（已选状态来自 blacklistPickSet） */
+    function renderBlacklistPickList() {
+      const box = document.getElementById('blacklistPickList');
+      if (!box) return;
+      const q = (document.getElementById('blacklistPickSearch')?.value || '').toLowerCase().trim();
+
+      let items = collectPickableModels();
+      if (q) {
+        items = items.filter(x => x.id.toLowerCase().includes(q) || x.name.toLowerCase().includes(q));
+      }
+
+      // 计数徽章
+      const badge = document.getElementById('blacklistPickCountBadge');
+      if (badge) badge.innerText = `已选 ${blacklistPickSet.size}`;
+
+      if (items.length === 0) {
+        box.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:12px; font-size:12px; grid-column:1/-1;">无匹配模型</div>';
+        return;
+      }
+
+      box.innerHTML = items.map(x => {
+        const checked = blacklistPickSet.has(x.id);
+        const already = draftBlacklist.includes(x.id);
+        const isIntl = x.region === 'intl';
+        const color = isIntl ? '#c084fc' : '#38bdf8';
+        return `
+          <label style="display:flex; align-items:center; gap:7px; padding:5px 8px; border-radius:6px; cursor:pointer; font-size:11.5px; ${checked ? 'background:rgba(56,189,248,0.14);' : 'background:transparent;'} ${already ? 'opacity:0.55;' : ''}" title="${escapeAttr(x.id)}${already ? ' (已在黑名单)' : ''}">
+            <input type="checkbox" ${checked ? 'checked' : ''} ${already ? 'disabled' : ''} onchange="toggleBlacklistPick('${escapeAttr(x.id)}', this.checked)" style="margin:0; cursor:pointer; flex-shrink:0;">
+            <span style="color:${color}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(x.id)}</span>
+            ${already ? '<span style="color:#f87171; font-size:10px; flex-shrink:0;">已禁</span>' : ''}
+          </label>
+        `;
+      }).join('');
+    }
+
+    function toggleBlacklistPick(id, checked) {
+      if (checked) blacklistPickSet.add(id);
+      else blacklistPickSet.delete(id);
+      renderBlacklistPickList();
+    }
+
+    /** 全选/清空（仅作用于当前筛选结果，且跳过已在黑名单的条目） */
+    function blacklistPickAll(select) {
+      const q = (document.getElementById('blacklistPickSearch')?.value || '').toLowerCase().trim();
+      let items = collectPickableModels();
+      if (q) items = items.filter(x => x.id.toLowerCase().includes(q) || x.name.toLowerCase().includes(q));
+      for (const x of items) {
+        if (draftBlacklist.includes(x.id)) continue;
+        if (select) blacklistPickSet.add(x.id);
+        else blacklistPickSet.delete(x.id);
+      }
+      renderBlacklistPickList();
+    }
+
+    /** 把勾中的条目一次性加入草稿黑名单 */
+    function applyBlacklistPicks() {
+      if (blacklistPickSet.size === 0) { alert('请先在下方勾选要屏蔽的模型'); return; }
+      let added = 0;
+      for (const id of blacklistPickSet) {
+        if (!draftBlacklist.includes(id)) { draftBlacklist.push(id); added++; }
+      }
+      blacklistPickSet.clear();
+      renderBlacklistModal();
+      renderBlacklistPickList();
+      // 命中预览按草稿实时刷新：直接在前端算，避免多打一次上游
+      renderBlacklistPreview(computeDraftPreview());
+      if (added === 0) alert('所选模型已在黑名单中');
+    }
+
+    /** 前端按当前草稿规则估算会被屏蔽的模型（与服务端匹配逻辑保持一致） */
+    function computeDraftPreview() {
+      const matchOne = (pattern, value) => {
+        if (!pattern) return false;
+        if (!pattern.includes('*')) return pattern.toLowerCase() === value.toLowerCase();
+        const esc = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+        try { return new RegExp(`^${esc}$`, 'i').test(value); } catch (_) { return false; }
+      };
+      const out = [];
+      for (const m of allModels) {
+        for (const r of modelRegions(m)) {
+          const pid = `${r === 'intl' ? 'intl:' : 'cn:'}${m.id}`;
+          const hit = draftBlacklist.some(rule => {
+            const hasRegion = rule.startsWith('cn:') || rule.startsWith('intl:');
+            if (hasRegion) {
+              const ruleRegion = rule.slice(0, rule.indexOf(':'));
+              return ruleRegion === r && matchOne(rule, pid);
+            }
+            return matchOne(rule, m.id) || matchOne(rule, pid);
+          });
+          if (hit) out.push({ id: pid, bare: m.id, region: r });
+        }
+      }
+      return out;
+    }
+
+    function renderBlacklistModal() {
+      const box = document.getElementById('blacklistRuleList');
+      const cnt = document.getElementById('blacklistRuleCount');
+      if (cnt) cnt.innerText = draftBlacklist.length;
+      if (!box) return;
+
+      if (draftBlacklist.length === 0) {
+        box.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:14px; font-size:12px;">暂无黑名单规则</div>';
+        return;
+      }
+      box.innerHTML = draftBlacklist.map((rule, i) => `
+        <div style="display:flex; align-items:center; gap:10px; background:var(--code-bg); padding:8px 12px; border-radius:7px; border:1px solid var(--card-border);">
+          <code style="flex:1; font-size:12px; color:#f87171;">${escapeHtml(rule)}</code>
+          <button class="btn-copy" style="font-size:11px; padding:2px 8px; color:#f87171; border-color:rgba(239,68,68,0.4);" onclick="removeBlacklistRule(${i})">✕ 移除</button>
+        </div>
+      `).join('');
+    }
+
+    function addBlacklistRule() {
+      const input = document.getElementById('blacklistInput');
+      const raw = (input?.value || '').trim();
+      if (!raw) { alert('请输入要屏蔽的模型名'); return; }
+      if (draftBlacklist.includes(raw)) { alert('该规则已存在'); return; }
+      draftBlacklist.push(raw);
+      if (input) input.value = '';
+      renderBlacklistModal();
+      renderBlacklistPickList();
+      renderBlacklistPreview(computeDraftPreview());
+    }
+
+    function removeBlacklistRule(idx) {
+      draftBlacklist.splice(idx, 1);
+      renderBlacklistModal();
+      renderBlacklistPickList();
+      renderBlacklistPreview(computeDraftPreview());
+    }
+
+    function renderBlacklistPreview(list) {
+      const wrap = document.getElementById('blacklistPreviewWrap');
+      const box = document.getElementById('blacklistPreviewList');
+      const cnt = document.getElementById('blacklistPreviewCount');
+      if (!wrap || !box) return;
+      if (!list || list.length === 0) {
+        wrap.style.display = 'none';
+        return;
+      }
+      wrap.style.display = 'block';
+      if (cnt) cnt.innerText = list.length;
+      box.innerHTML = list.map(x => {
+        const isIntl = x.region === 'intl';
+        return `<span class="badge" style="font-size:10.5px; ${isIntl ? 'background:rgba(168,85,247,0.18); color:#c084fc; border:1px solid rgba(168,85,247,0.45);' : 'background:rgba(2,132,199,0.18); color:#38bdf8; border:1px solid rgba(2,132,199,0.45);'}">${escapeHtml(x.id)}</span>`;
+      }).join('');
+    }
+
+    async function saveBlacklist() {
+      try {
+        const res = await fetch('/api/models/blacklist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ blacklist: draftBlacklist })
+        });
+        const data = await res.json();
+        if (!data.success) { alert('保存失败: ' + (data.error || '未知错误')); return; }
+        currentBlacklist = data.blacklist || [];
+        draftBlacklist = [...currentBlacklist];
+        blacklistPickSet.clear();
+        closeBlacklistModal();
+        await refreshBlacklistState();
+        // /v1/models 已变化，模型页计数也同步刷新
+        renderModels();
+        alert(`黑名单已保存并即时生效（共 ${currentBlacklist.length} 条规则）。\n/v1/models 已同步屏蔽。`);
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+
+    /** 单行「禁用」快捷操作：直接往黑名单里加/删该模型的两个区域条目 */
+    async function toggleModelBlacklist(prefixedId) {
+      const exists = currentBlacklist.includes(prefixedId);
+      let next;
+      if (exists) {
+        next = currentBlacklist.filter(x => x !== prefixedId);
+      } else {
+        next = [...currentBlacklist, prefixedId];
+      }
+      try {
+        const res = await fetch('/api/models/blacklist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ blacklist: next })
+        });
+        const data = await res.json();
+        if (!data.success) { alert('操作失败: ' + (data.error || '未知错误')); return; }
+        currentBlacklist = data.blacklist || [];
+        draftBlacklist = [...currentBlacklist];
+        await refreshBlacklistState();
+        renderModels();
+      } catch (e) {
+        alert('操作失败: ' + e.message);
+      }
+    }
+
+    /** 单行「屏蔽/恢复」：对该模型的所有区域条目一起切换 */
+    async function toggleModelBlacklistByModel(bareId) {
+      const model = allModels.find(x => x.id === bareId);
+      if (!model) return;
+      const targets = modelRegions(model).map(r => `${r === 'intl' ? 'intl:' : 'cn:'}${bareId}`);
+      const allBlocked = targets.every(t => currentBlacklist.includes(t));
+
+      let next;
+      if (allBlocked) {
+        next = currentBlacklist.filter(x => !targets.includes(x));
+      } else {
+        next = [...currentBlacklist];
+        for (const t of targets) if (!next.includes(t)) next.push(t);
+      }
+      try {
+        const res = await fetch('/api/models/blacklist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ blacklist: next })
+        });
+        const data = await res.json();
+        if (!data.success) { alert('操作失败: ' + (data.error || '未知错误')); return; }
+        currentBlacklist = data.blacklist || [];
+        draftBlacklist = [...currentBlacklist];
+        await refreshBlacklistState();
+        renderModels();
+      } catch (e) {
+        alert('操作失败: ' + e.message);
+      }
     }
 
     function closeRawModal() {
@@ -2509,10 +3203,43 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
     }
 
+    // ─── OAuth 区域选择 ───────────────────────────────────────────────────
+    let oauthRegion = 'cn';
+
+    function onOAuthRegionChange(region) {
+      oauthRegion = region;
+      const cnLabel = document.getElementById('regionCnLabel');
+      const intlLabel = document.getElementById('regionIntlLabel');
+      const hint = document.getElementById('regionHint');
+      const on = '2px solid var(--primary)';
+      const onBg = 'rgba(2,132,199,0.12)';
+      const off = '2px solid transparent';
+      const offBg = 'rgba(255,255,255,0.04)';
+      if (cnLabel) { cnLabel.style.border = region === 'cn' ? on : off; cnLabel.style.background = region === 'cn' ? onBg : offBg; }
+      if (intlLabel) { intlLabel.style.border = region === 'intl' ? on : off; intlLabel.style.background = region === 'intl' ? onBg : offBg; }
+      if (hint) {
+        hint.innerHTML = region === 'intl'
+          ? '国际版账号（www.codebuddy.ai）。额外可用 GPT-6 / Grok / Gemini 系列，需用国际版账号扫码。'
+          : '国内版账号（copilot.tencent.com）。包含 DeepSeek / GLM / Kimi 等，需用国内账号扫码。';
+      }
+    }
+
     async function startOAuth() {
-      const res = await fetch('/api/oauth/start', { method: 'POST' });
+      // 默认沿用上次选择；首次为 cn
+      const checked = document.querySelector('input[name="oauthRegion"]:checked');
+      if (checked) oauthRegion = checked.value;
+
+      const res = await fetch('/api/oauth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ region: oauthRegion })
+      });
       const data = await res.json();
       if (!data.state) return alert('获取登录链接失败');
+
+      const regionLabel = data.region === 'intl' ? '国际版' : '国内版';
+      const titleEl = document.querySelector('#oauthModal h3');
+      if (titleEl) titleEl.innerText = `${regionLabel} · 官方扫码授权`;
 
       document.getElementById('loginLink').href = data.loginUrl;
       const urlInput = document.getElementById('loginUrlInput');
@@ -2528,12 +3255,12 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         const pRes = await fetch('/api/oauth/poll', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ state: data.state })
+          body: JSON.stringify({ state: data.state, region: data.region || oauthRegion })
         });
         const pData = await pRes.json();
         if (pData.ok) {
           clearInterval(pollTimer);
-          document.getElementById('pollStatus').innerText = '✅ 登录成功，账号已录入池！';
+          document.getElementById('pollStatus').innerText = `✅ ${regionLabel}账号登录成功，已录入池！`;
           setTimeout(() => { closeModal(); loadAccounts(); loadModels(true); fetchLogs(); }, 1200);
         }
       }, 2000);
@@ -2567,6 +3294,36 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         .replace(/\\/g, '\\\\')
         .replace(/'/g, "\\'")
         .replace(/"/g, '&quot;');
+    }
+
+    // 切换账号所属版本（国内版 / 国际版）。
+    // 两版的上游路径完全同构，但 token 按签发域校验：切换后原 token 会 401，
+    // 需重新扫码授权。因此这里要明确告知用户，避免误以为切换即生效。
+    async function switchAccountRegion(uid, targetRegion) {
+      const label = targetRegion === 'intl' ? '国际版 (www.codebuddy.ai)' : '国内版 (copilot.tencent.com)';
+      const msg = `确认将该账号切换为「${label}」？\n\n`
+        + `注意：账号 token 按签发域校验，切换后原 token 将无法使用，\n`
+        + `需要在对应版本重新扫码授权（OAuth 里选择相同版本）。\n\n`
+        + `是否继续？`;
+      if (!confirm(msg)) return;
+      try {
+        const res = await fetch('/api/accounts/region', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid, region: targetRegion })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          loadAccounts();
+          loadModels(true);
+          fetchLogs();
+          alert(`已切换为${label}。\n请在「扫码添加账号」中选择同一版本重新授权。`);
+        } else {
+          alert('切换失败: ' + (data.error || '未知错误'));
+        }
+      } catch (e) {
+        alert('网络异常: ' + e.message);
+      }
     }
 
     async function editAccountNote(uid, currentNote) {

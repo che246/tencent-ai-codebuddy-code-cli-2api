@@ -1,11 +1,56 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CONFIG_URL, USER_AGENT, accounts, ROOT_DIR } from '../config.mjs';
+import { CONFIG_URL, endpointsFor, resolveAccountRegion, REGION_CN, REGION_BASE, USER_AGENT, accounts, ROOT_DIR } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 
-// ─── 动态获取可用模型矩阵 (深度融合官方 package/product.*.json) ────────────
+// ─── 动态获取可用模型矩阵 ───────────────────────────────────────────────────
+// 策略：在线时从上游 /v3/config 拉取，并把结果写入 product.json；
+//       离线/冷启动时只读 product.json 一个文件，不依赖 package/ 目录。
+export const PRODUCT_JSON_PATH = path.resolve(ROOT_DIR, 'product.json');
+
 let cachedRawUpstreamModels = null;
 let lastModelFetchTimestamp = 0;
+
+/**
+ * 把上游返回的模型矩阵持久化到 product.json（保留原有其他字段）。
+ * 上游只提供 models / agents / productFeatures，prompts/tools 等由官方文件自带；
+ * 这里采用"合并"而非"覆盖"，避免丢失本地已有的非模型字段。
+ */
+function persistModelsToProductJson(models) {
+  if (!Array.isArray(models) || models.length === 0) return false;
+  try {
+    let base = {};
+    if (fs.existsSync(PRODUCT_JSON_PATH)) {
+      try { base = JSON.parse(fs.readFileSync(PRODUCT_JSON_PATH, 'utf8')); } catch (_) { base = {}; }
+    }
+    const prevIds = new Set((base.models || []).map(m => m.id));
+    base.models = models;
+    base.modelsSyncedAt = new Date().toISOString();
+    fs.writeFileSync(PRODUCT_JSON_PATH, JSON.stringify(base, null, 2), 'utf8');
+
+    const added = models.map(m => m.id).filter(id => !prevIds.has(id));
+    if (added.length > 0) {
+      Logger.info('CONFIG', `product.json 已更新模型矩阵 (${models.length} 款，新增: ${added.join(', ')})`);
+    } else {
+      Logger.info('CONFIG', `product.json 已同步模型矩阵 (${models.length} 款)`);
+    }
+    return true;
+  } catch (e) {
+    Logger.warn('CONFIG', `写入 product.json 失败: ${e.message}`);
+    return false;
+  }
+}
+
+/** 从 product.json 读取模型矩阵（唯一离线数据源） */
+function loadModelsFromProductJson() {
+  if (!fs.existsSync(PRODUCT_JSON_PATH)) return [];
+  try {
+    const p = JSON.parse(fs.readFileSync(PRODUCT_JSON_PATH, 'utf8'));
+    return Array.isArray(p.models) ? p.models : [];
+  } catch (_) {
+    return [];
+  }
+}
 
 export async function fetchDetailedModels(forceRefresh = false) {
   const now = Date.now();
@@ -13,10 +58,18 @@ export async function fetchDetailedModels(forceRefresh = false) {
     return attachProbeStatus(cachedRawUpstreamModels);
   }
 
+  // 1) 在线优先：按账号所属区域分别拉取，合并去重
+  //    国内版与国际版的模型集合不同（国际版有 gpt-6-astra/grok-4.7 等），
+  //    两个区域都拉到才能让客户端看到完整可用列表。
+  //    每个模型额外打上 regions 标记（可能同时存在于两区），供前端分区展示。
+  const merged = new Map();
+  const regionStat = {};
   for (const acc of accounts) {
     if (acc.status !== 'healthy' || !acc.accessToken) continue;
+    const ep = endpointsFor(acc);
+    const region = resolveAccountRegion(acc);
     try {
-      const res = await fetch(CONFIG_URL, {
+      const res = await fetch(ep.config, {
         headers: {
           'Authorization': `Bearer ${acc.accessToken}`,
           'User-Agent': USER_AGENT
@@ -26,45 +79,47 @@ export async function fetchDetailedModels(forceRefresh = false) {
         const data = await res.json();
         const models = data.data?.models || [];
         if (models.length > 0) {
-          cachedRawUpstreamModels = models;
-          lastModelFetchTimestamp = now;
-          Logger.info('CONFIG', `成功从腾讯云上游拉取全量模型矩阵 (共 ${models.length} 款)`);
-          return attachProbeStatus(models);
+          regionStat[region] = (regionStat[region] || 0) + models.length;
+          for (const m of models) {
+            if (!m || !m.id) continue;
+            const exist = merged.get(m.id);
+            if (exist) {
+              // 两区都有的模型：合并 regions 标记
+              if (!exist.regions.includes(region)) exist.regions.push(region);
+            } else {
+              merged.set(m.id, { ...m, regions: [region] });
+            }
+          }
         }
       }
     } catch (_) {}
   }
 
-  // 离线/冷启动兜底：深度融合 package/product.json 与 package/product.internal.json
-  const fallbackModels = [];
-  const modelMap = new Map();
-  const candidateFiles = [
-    path.resolve(ROOT_DIR, 'product.json'),
-    path.resolve(ROOT_DIR, 'package/product.json'),
-    path.resolve(ROOT_DIR, 'package/product.internal.json')
-  ];
-
-  for (const f of candidateFiles) {
-    if (fs.existsSync(f)) {
-      try {
-        const p = JSON.parse(fs.readFileSync(f, 'utf8'));
-        if (Array.isArray(p.models)) {
-          for (const m of p.models) {
-            if (!modelMap.has(m.id)) {
-              modelMap.set(m.id, m);
-              fallbackModels.push(m);
-            }
-          }
-        }
-      } catch (_) {}
-    }
+  if (merged.size > 0) {
+    const models = [...merged.values()];
+    cachedRawUpstreamModels = models;
+    lastModelFetchTimestamp = now;
+    const regionDesc = Object.entries(regionStat)
+      .map(([r, n]) => `${REGION_BASE[r]?.label || r}:${n}`)
+      .join(' ');
+    Logger.info('CONFIG', `成功从上游拉取模型矩阵 (合并去重后共 ${models.length} 款；${regionDesc})`);
+    persistModelsToProductJson(models);
+    return attachProbeStatus(models);
   }
 
+  // 2) 离线兜底：只读 product.json
+  //    product.json 里的模型快照已含 regions 标记（在线同步时写入）；
+  //    若为旧版快照缺该字段，统一按国内版展示，不阻断渲染。
+  const fallbackModels = loadModelsFromProductJson().map(m => (
+    Array.isArray(m?.regions) && m.regions.length ? m : { ...m, regions: [REGION_CN] }
+  ));
   if (fallbackModels.length > 0) {
     cachedRawUpstreamModels = fallbackModels;
-    return attachProbeStatus(cachedRawUpstreamModels);
+    Logger.info('CONFIG', `上游不可达，已从 product.json 加载离线模型矩阵 (共 ${fallbackModels.length} 款)`);
+    return attachProbeStatus(fallbackModels);
   }
 
+  Logger.warn('CONFIG', '上游不可达且 product.json 无模型数据，模型列表为空');
   return attachProbeStatus([]);
 }
 

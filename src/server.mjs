@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { config, accounts, saveAccounts, saveConfig } from './config.mjs';
+import { config, accounts, saveAccounts, saveConfig, resolveAccountRegion, REGION_BASE } from './config.mjs';
 import { Logger } from './core/logger.mjs';
 import { TlsCertificateStack } from './core/tls-certs.mjs';
 import { AccountScheduler } from './core/scheduler.mjs';
@@ -69,8 +69,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 4. GET /v1/models (标准 OpenAI 模型列表)
+  //    支持 ?region=cn|intl|both|all 或 X-Region 头做区域区分
   if (req.method === 'GET' && url.pathname === '/v1/models') {
-    return handleOpenAiModels(req, res);
+    return handleOpenAiModels(req, res, url);
   }
 
   // 5. 官方免费服务端联网检索: POST /v1/search & POST /search
@@ -136,18 +137,63 @@ if (config.autoCheckin !== false) {
 
 // 启动时初始化：清理过期日志并主动预热刷新所有账号积分
 Logger.pruneOldLogs(3);
+
+// inFlight 是「当前进行中的请求数」，属于进程内瞬态状态。
+// 它会被 saveAccounts() 一并持久化，若上次进程异常退出（崩溃/强杀）就会把
+// 非零值留在 accounts.json 里，重启后永久占用并发名额。启动时统一归零。
+let staleInFlightCleared = 0;
+for (const acc of accounts) {
+  if (acc.inFlight && acc.inFlight > 0) {
+    staleInFlightCleared += acc.inFlight;
+    acc.inFlight = 0;
+  }
+}
+if (staleInFlightCleared > 0) {
+  saveAccounts();
+  Logger.info('SYSTEM', `已重置历史残留的并发计数 (共 ${staleInFlightCleared} 个)，避免占用账号名额`);
+}
+
 for (const acc of accounts) {
   AccountScheduler.refreshCredits(acc);
 }
 
 // 4. 监听端口
 const PORT = config.port || 8317;
+
+/** 汇总账号池的区域构成，用于启动横幅 */
+function summarizeAccountRegions() {
+  const stat = { cn: 0, intl: 0 };
+  for (const acc of accounts) {
+    stat[resolveAccountRegion(acc)] = (stat[resolveAccountRegion(acc)] || 0) + 1;
+  }
+  return stat;
+}
+
+/** 版本描述：只含国内版 / 只含国际版 / 双区域 —— 由实际账号池决定，不写死 */
+function buildEditionLabel(stat) {
+  const hasCn = stat.cn > 0;
+  const hasIntl = stat.intl > 0;
+  if (hasCn && hasIntl) return '国内版 + 国际版 双区域';
+  if (hasIntl) return '国际版';
+  return '国内版';
+}
+
 server.listen(PORT, () => {
-  Logger.info('SYSTEM', `CodeBuddy 国内版生产级网关已启动，监听端口: ${PORT}`);
+  const regionStat = summarizeAccountRegions();
+  const edition = buildEditionLabel(regionStat);
+  const accountDesc = Object.entries(regionStat)
+    .filter(([, n]) => n > 0)
+    .map(([r, n]) => `${REGION_BASE[r]?.label || r} ${n} 个`)
+    .join(' / ');
+
+  Logger.info('SYSTEM', `CodeBuddy ${edition}生产级网关已启动，监听端口: ${PORT}`);
   console.log(`\n======================================================`);
-  console.log(`🚀 CodeBuddy 国内版生产级多协议网关已启动!`);
+  console.log(`🚀 CodeBuddy ${edition}生产级多协议网关已启动!`);
   console.log(`📡 监听地址: http://127.0.0.1:${PORT}`);
   console.log(`🔑 网关 API Key: ${config.apiKey}`);
+  console.log(`👥 账号池: 共 ${accounts.length} 个${accountDesc ? `（${accountDesc}）` : ''}`);
+  console.log(`🌍 上游区域: 国内版 ${REGION_BASE.cn.api}${regionStat.intl > 0 ? ` | 国际版 ${REGION_BASE.intl.api}` : '（未启用国际版）'}`);
+  console.log(`🏷️  模型区隔: cn:<模型> 走国内版，intl:<模型> 走国际版`);
   console.log(`✨ 协议支持: OpenAI (/v1/chat/completions) + Anthropic (/v1/messages)`);
   console.log(`🌐 联网扩展: POST /v1/search & POST /v1/fetch`);
   console.log(`🔒 TLS 堆栈: 官方同款运行栈已激活 (${TlsCertificateStack.loadedCount} 张 CA 根证书已载入)`);

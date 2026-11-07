@@ -13,14 +13,14 @@
   "maxInFlightPerAccount": 3,
   "modelFallbackEnabled": true,
   "modelFallback": {
-    "deepseek-v4.1-flash": [
-      "deepseek-v4-flash",
-      "glm-5.3-flash",
-      "hy3"
+    "cn:deepseek-v4.1-flash": [
+      "intl:deepseek-v4.1-flash-sg",
+      "cn:deepseek-v4-flash",
+      "cn:hy3"
     ],
-    "hy4-preview": [
-      "hy3-x",
-      "hy3"
+    "cn:hy4-preview": [
+      "cn:hy3-x",
+      "cn:hy3"
     ]
   }
 }

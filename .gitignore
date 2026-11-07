@@ -1,5 +1,10 @@
 # 凭据与敏感数据（严禁提交）
 accounts.json
+accounts*.json
+!accounts.example.json
+# config.json 含 apiKey / webPassword，只跟踪 config.example.json 模板
+config.json
+!config.example.json
 stats.json
 *.db
 *.bak
@@ -11,6 +16,17 @@ node_modules/
 *.tgz
 extracted/
 package/
+_dist/
+
+# 抓包与调试产物（含请求日志，可能夹带凭据）
+.capture/
+
+# 运行期临时输出
+_run.out
+_run.err
+
+# 上游模型矩阵快照：由 /v3/config 自动同步，随上游随时漂移，不入库
+product.json
 
 # 系统临时文件
 .DS_Store

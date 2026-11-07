@@ -10,7 +10,13 @@ import {
   USER_AGENT,
   CURRENT_VERSION,
   ROOT_DIR,
-  formatAccountFullDesc
+  formatAccountFullDesc,
+  endpointsFor,
+  normalizeRegion,
+  REGION_BASE,
+  getModelBlacklist,
+  setModelBlacklist,
+  isModelBlacklisted
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -155,7 +161,8 @@ export async function handleApiRoutes(req, res, url) {
       tokenRefreshAdvanceDays: config.tokenRefreshAdvanceDays || 7,
       maxLogDbSizeMb: config.maxLogDbSizeMb || 30,
       logDbSizeMb: LogDatabase.getSizeMb(),
-      autoCheckin: Boolean(config.autoCheckin)
+      autoCheckin: Boolean(config.autoCheckin),
+      modelBlacklist: getModelBlacklist()
     }));
   }
 
@@ -380,6 +387,8 @@ export async function handleApiRoutes(req, res, url) {
         uid: a.uid,
         email: a.email,
         note: a.note || '',
+        // 所属区域：前后端都用它决定上游 base 域名
+        region: normalizeRegion(a.region),
         creditsRemain: a.creditsRemain,
         totalTokens: tokens,
         totalTokensDisplay: formatTokenNumber(tokens),
@@ -430,10 +439,67 @@ export async function handleApiRoutes(req, res, url) {
     return res.end(JSON.stringify(detailedModels));
   }
 
-  // 8. OAuth 扫码授权开始 (完全对齐 package: ExternalLinkAuthenticationProvider.fetchAuthState)
-  if (url.pathname === '/api/oauth/start' && req.method === 'POST') {
+  // 7.1 模型黑名单：读取（附带命中预览，便于确认规则生效范围）
+  if (url.pathname === '/api/models/blacklist' && req.method === 'GET') {
+    const list = getModelBlacklist();
+    // 预览：对当前模型矩阵逐条判定，给出每个区域的命中结果
+    let preview = [];
     try {
-      const oauthRes = await fetch('https://copilot.tencent.com/v2/plugin/auth/state?platform=CLI', {
+      const detailed = await fetchDetailedModels();
+      for (const m of detailed) {
+        const regions = Array.isArray(m.regions) && m.regions.length ? m.regions : ['cn'];
+        for (const r of regions) {
+          const prefixed = `${r === 'intl' ? 'intl:' : 'cn:'}${m.id}`;
+          if (isModelBlacklisted(prefixed, m.id, r)) {
+            preview.push({ id: prefixed, bare: m.id, region: r });
+          }
+        }
+      }
+    } catch (_) {}
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ blacklist: list, blockedPreview: preview, blockedCount: preview.length }));
+  }
+
+  // 7.2 模型黑名单：保存（整体替换，热生效并落盘）
+  if (url.pathname === '/api/models/blacklist' && req.method === 'POST') {
+    let b = '';
+    await new Promise((resolve) => {
+      req.on('data', (c) => { b += c; });
+      req.on('end', resolve);
+    });
+    try {
+      const body = JSON.parse(b || '{}');
+      const input = Array.isArray(body.blacklist) ? body.blacklist : [];
+      const clean = setModelBlacklist(input);
+      saveConfig();
+      Logger.info('CONFIG', `模型黑名单已更新 (共 ${clean.length} 条规则，已热生效)`, {
+        blacklist: clean
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: true, blacklist: clean, count: clean.length }));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+  }
+
+  // 8. OAuth 扫码授权开始 (完全对齐 package: ExternalLinkAuthenticationProvider.fetchAuthState)
+  // region 由请求体或查询参数指定，默认国内版；国际版端点结构完全一致。
+  if (url.pathname === '/api/oauth/start' && req.method === 'POST') {
+    let bodyRaw = '';
+    await new Promise((resolve) => {
+      req.on('data', (c) => { bodyRaw += c; });
+      req.on('end', resolve);
+    });
+    let reqRegion = url.searchParams.get('region');
+    if (!reqRegion && bodyRaw) {
+      try { reqRegion = JSON.parse(bodyRaw).region; } catch (_) {}
+    }
+    const region = normalizeRegion(reqRegion);
+    const ep = endpointsFor({ region });
+
+    try {
+      const oauthRes = await fetch(ep.authState, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
         body: '{}'
@@ -441,11 +507,11 @@ export async function handleApiRoutes(req, res, url) {
       const oauthData = await oauthRes.json();
       const payload = oauthData.data || oauthData;
       const state = payload.state;
-      const loginUrl = payload.authUrl || `https://copilot.tencent.com/login?platform=CLI&state=${state}`;
+      const loginUrl = payload.authUrl || ep.login(state);
 
-      Logger.info('OAUTH', `发起设备码授权, state: ${state}`);
+      Logger.info('OAUTH', `发起设备码授权 [${REGION_BASE[region].label}], state: ${state}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ state, loginUrl }));
+      return res.end(JSON.stringify({ state, loginUrl, region }));
     } catch (e) {
       Logger.error('OAUTH', `生成登录链接失败: ${e.message}`);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -458,10 +524,12 @@ export async function handleApiRoutes(req, res, url) {
     let b = '';
     req.on('data', c => b += c);
     req.on('end', async () => {
-      const { state } = JSON.parse(b);
+      const { state, region: bodyRegion } = JSON.parse(b || '{}');
+      const pollRegion = normalizeRegion(bodyRegion || url.searchParams.get('region'));
+      const ep = endpointsFor({ region: pollRegion });
       try {
         // 官方原生使用 GET 方法轮询 token
-        const pollRes = await fetch(`https://copilot.tencent.com/v2/plugin/auth/token?state=${encodeURIComponent(state)}`, {
+        const pollRes = await fetch(ep.authToken(state), {
           method: 'GET',
           headers: { 'User-Agent': USER_AGENT }
         });
@@ -482,7 +550,7 @@ export async function handleApiRoutes(req, res, url) {
           // 调用官方账号快照接口 GET /v2/plugin/accounts (对齐 getAccountSnapshot)
           let accountInfo = null;
           try {
-            const accRes = await fetch('https://copilot.tencent.com/v2/plugin/accounts', {
+            const accRes = await fetch(ep.accounts, {
               headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'User-Agent': USER_AGENT
@@ -498,7 +566,7 @@ export async function handleApiRoutes(req, res, url) {
           // 兜底备用：GET /v2/plugin/login/account?state=
           if (!accountInfo) {
             try {
-              const fallbackRes = await fetch(`https://copilot.tencent.com/v2/plugin/login/account?state=${encodeURIComponent(state)}`, {
+              const fallbackRes = await fetch(ep.loginAccount(state), {
                 headers: {
                   'Authorization': `Bearer ${accessToken}`,
                   'User-Agent': USER_AGENT
@@ -520,7 +588,8 @@ export async function handleApiRoutes(req, res, url) {
             email: nickname,
             phoneNumber: accountInfo?.phoneNumber || '',
             type: accountInfo?.type || 'personal',
-            region: 'cn',
+            // 区域由授权时选择决定，后续所有上游调用都按此字段选 base 域名
+            region: pollRegion,
             accessToken: accessToken,
             refreshToken: refreshToken,
             expiresAt: Date.now() + expiresIn * 1000,
@@ -611,6 +680,34 @@ export async function handleApiRoutes(req, res, url) {
         Logger.info('ACCOUNTS', `已更新账号 [${formatAccountFullDesc(acc)}] 备注为: "${acc.note}"`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, note: acc.note }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 12.5b. 修改账号所属区域（国内版 / 国际版）
+  // 两个区域的上游路径完全同构，仅 base 域名不同；token 按签发域隔离，
+  // 因此切换 region 后必须确保该 token 确实属于目标区域，否则 chat 会 401。
+  if (url.pathname === '/api/accounts/region' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const { uid, region } = JSON.parse(b);
+        const acc = accounts.find(a => a.uid === uid);
+        if (!acc) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Account not found' }));
+        }
+        const next = normalizeRegion(region);
+        acc.region = next;
+        saveAccounts();
+        Logger.info('ACCOUNTS', `已将账号 [${formatAccountFullDesc(acc)}] 区域设为 ${REGION_BASE[next].label}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, region: next, label: REGION_BASE[next].label }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));

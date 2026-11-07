@@ -2,7 +2,9 @@
 
 基于腾讯云 **CodeBuddy Code (CLI 2.179.0)** 官方协议打造的纯模型层、多账号高并发代理网关。
 
-支持将腾讯 CodeBuddy 国内版账号转换为标准的 **OpenAI** 与 **Anthropic** 兼容 API，提供 100 万大上下文模型（如 `deepseek-v4.1-flash`、`hy4-preview` 等），并将 **Agent 工具调用执行权 100% 交还给下游客户端**（如 Cursor、Claude Code、Cline、Roo Code、NextChat 等）。
+支持将腾讯 CodeBuddy **国内版（copilot.tencent.com）与国际版（www.codebuddy.ai）** 账号统一转换为标准的 **OpenAI** 与 **Anthropic** 兼容 API，提供 100 万大上下文模型（如 `deepseek-v4.1-flash`、`hy4-preview` 等），并将 **Agent 工具调用执行权 100% 交还给下游客户端**（如 Cursor、Claude Code、Cline、Roo Code、NextChat 等）。
+
+两版账号与模型互不相通：token 按签发域校验（国内 token 打国际版 chat 一律 401），模型集合也不同（国际版额外含 `gpt-6-astra`、`grok-4.7`、`gemini-3.8-flash` 等）。网关按账号 `region` 自动选择上游域名，并通过模型名前缀 `cn:` / `intl:` 显式区分两区模型，支持同一降级链内跨区编排。
 
 ---
 
@@ -37,7 +39,7 @@
   - 账号池负载、积分状态一览（含今日签到标记与快捷单号签到）
   - 一键扫码添加账号（微信 / 腾讯云官方 OAuth 设备码授权）
   - 一键全员每日签到打卡并弹出结构化通知横幅
-  - 全量 33 款上游模型矩阵看板、分类搜索、实时繁忙度探针（🟢畅通 / 🟡局部限流 / 🔴冷却）及 100% 原始 JSON 审查与导出。
+  - 全量上游模型矩阵看板（国内版 + 国际版双区展示、区域分页与计数）、分类搜索、实时繁忙度探针（🟢畅通 / 🟡局部限流 / 🔴冷却）及 100% 原始 JSON 审查与导出。
 
 ---
 
@@ -48,11 +50,11 @@
 ### 1. 环境准备
 
 - **操作系统**：Linux / macOS / Windows
-- **Node.js 运行时**：>= 18.0.0（支持原生 `fetch` 与 ES 模块）
-- **网络要求**：服务器或本机能够正常访问 `copilot.tencent.com` 与 `codebuddy.cn`
+- **Node.js 运行时**：>= 22.0.0（项目使用内置 `node:sqlite` 持久化日志，22 以下无此模块）
+- **网络要求**：国内版需可访问 `copilot.tencent.com` 与 `codebuddy.cn`；国际版需可访问 `codebuddy.ai`。只用一个版本时，仅需放通对应域名。
 
 ```bash
-# 检查 Node.js 版本（确保 >= 18）
+# 检查 Node.js 版本（确保 >= 22）
 node -v
 ```
 
@@ -65,10 +67,14 @@ node -v
 git clone https://github.com/che246/tencent-ai-codebuddy-code-cli-2api.git
 cd tencent-ai-codebuddy-code-cli-2api
 
-# 复制默认配置文件
+# 复制默认配置文件（config.json / accounts.json 含凭据，不入库，需自行创建）
 cp config.example.json config.json
 cp accounts.example.json accounts.json
 ```
+
+> `config.json`、`accounts.json`、`product.json` 均已在 `.gitignore` 中排除：
+> 前两者含 API Key / 访问密码 / 账号令牌，第三个是上游模型矩阵快照，
+> 会在首次启动时由 `/v3/config` 自动拉取生成，无需手工准备。
 
 #### `config.json` 核心配置项解析：
 ```json
@@ -87,11 +93,16 @@ cp accounts.example.json accounts.json
   "maxInFlightPerAccount": 3,                // 单账号最大同时处理在途请求数（防止触发风控）
   "modelFallbackEnabled": true,              // 全池耗尽时是否自动降级至备用模型
   "modelFallback": {
-    "deepseek-v4.1-flash": "deepseek-v4-flash",
-    "hy4-preview": "hy3"
+    // 键与值都支持 cn: / intl: 区域前缀；不带前缀时按主请求模型的区域继承
+    "deepseek-v4.1-flash": ["intl:deepseek-v4.1-flash-sg"],   // 国内版主模型降级到国际版同名/近亲模型
+    "gpt-6-astra": ["deepseek-v4.1-flash", "hy4-preview"]     // 多级链：A ➔ B ➔ C
   }
 }
 ```
+
+> **区域前缀 `cn:` / `intl:`**：`/v1/models` 会为每个可用区域各返回一条带前缀的模型 ID。
+> 带前缀时网关会锁定账号区域（避免跨区选号导致 401）；不带前缀则按账号池自动路由。
+> 国际版要求首条消息为 `system`，网关会自动补齐；国际版账号无签到功能，签到巡检会自动跳过。
 
 ---
 
@@ -261,32 +272,34 @@ curl http://127.0.0.1:8317/v1/fetch \
 
 ## 🏗️ 项目架构与模块划分 (团队协作指南)
 
-项目已全面完成工程化解耦重构，采用零第三方依赖的现代原生 ES 模块标准（Node.js >= 18），各个分层职责清晰，极大降低多人协作冲突：
+项目已全面完成工程化解耦重构，采用零第三方依赖的现代原生 ES 模块标准（Node.js >= 22，`node:sqlite` 为内置依赖），各个分层职责清晰，极大降低多人协作冲突：
 
 ```
 ├── src/
-│   ├── config.mjs              # 集中配置、环境变量、跨模块常量与账号持久化
+│   ├── config.mjs              # 集中配置、跨模块常量、双区域端点表(REGION_BASE)与账号持久化
 │   ├── server.mjs              # HTTP 网关入口、全局路由分发与定时任务调度
 │   ├── core/                   # 核心基础设施层
 │   │   ├── logger.mjs          # 统一环形缓冲日志系统 (内存缓冲 + 文件落盘)
 │   │   ├── tls-certs.mjs       # Windows / OS 原生系统根证书自动提取与 TLS 栈注入
-│   │   └── scheduler.mjs       # 账号池调度引擎 (粘性会话、并发削峰、局部冷却、打卡打标)
+│   │   └── scheduler.mjs       # 账号池调度引擎 (区域过滤、粘性会话、并发削峰、局部冷却、打卡)
 │   ├── upstream/               # 腾讯云官方客户端协议层 (对齐 package/ 权威规范)
 │   │   ├── headers.mjs         # 32 位 Hex 官方会话审计头构建 (X-Request-ID, X-IDE-*, X-Private-Data)
 │   │   ├── errors.mjs          # 递归业务码探测 (extractStructuredBizCode) 与错误映射
-│   │   ├── models.mjs          # 模型矩阵同步、探针状态绑定与离线产品配置兜底
-│   │   └── payload.mjs         # Gzip 压缩处理器、Channel 指纹清洗与模型能力守卫
+│   │   ├── models.mjs          # 双区域模型矩阵合并去重、regions 标记、探针状态与离线兜底
+│   │   ├── stream-guard.mjs    # 首字节超时 / 静默看门狗 / SSE 心跳 / 客户端断开归因
+│   │   └── payload.mjs         # Gzip 压缩、Channel 指纹清洗、区域前缀解析、模型能力守卫
 │   ├── adapters/               # 下游客户端协议转译层
 │   │   ├── openai.mjs          # OpenAI 规范适配 (/v1/chat/completions, SSE 流, 模型降级)
 │   │   ├── anthropic.mjs       # Anthropic 规范适配 (/v1/messages, 原生 Thinking 思考流)
 │   │   └── tools.mjs           # 官方免费联网搜索与网页抓取透传 (/v1/search, /v1/fetch)
 │   └── web/                    # 控制台可视化与管理层
-│       ├── routes.mjs          # /api/* 运维接口 (账号增删, 扫码授权轮询, 设置热更)
+│       ├── routes.mjs          # /api/* 运维接口 (账号增删、区域切换、扫码授权轮询、设置热更)
 │       └── public/
 │           └── index.html      # 独立的单页 Web 控制台 (支持原生高亮编辑与免转义维护)
 ├── gateway.mjs                 # 根目录启动垫片 (兼容既有 node gateway.mjs 启动命令)
+├── product.json                # 模型矩阵快照 (启动时从上游 /v3/config 自动同步)
 ├── config.json                 # 运行配置文件
-└── accounts.json               # 本地账号凭证存储
+└── accounts.json               # 本地账号凭证存储 (含 region: cn | intl)
 ```
 
 ---
