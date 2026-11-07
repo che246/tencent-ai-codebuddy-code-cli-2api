@@ -23,6 +23,7 @@ import {
   createUpstreamLifecycle,
   readUpstreamStream,
   startHeartbeat,
+  isTruncatedWithoutFinish,
   logStreamOutcome
 } from '../upstream/stream-guard.mjs';
 
@@ -402,7 +403,12 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       })}\n\n`);
 
       const reader = upstreamRes.body.getReader();
-      const heartbeat = startHeartbeat(res, `anthropic:${actualModel}`);
+      // Anthropic 协议发 `event: ping` 保活帧。模型长思考时上游可能几十秒
+      // 不吐 reasoning/content，只发注释帧会被 Claude Code 判成流异常结束。
+      const heartbeat = startHeartbeat(res, `anthropic:${actualModel}`, {
+        protocol: 'anthropic',
+        getMeta: () => ({ id: msgId, model: actualModel })
+      });
       let thinkingBlockStarted = false;
       let thinkingBlockStopped = false;
       let textBlockStarted = false;
@@ -412,13 +418,17 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       let buffer = '';
       let sawFinish = false;
       let sawError = false;
+      let truncationEmitted = false;
+      let keapalivePings = 0;
 
       try {
         const result = await readUpstreamStream(reader, lifecycle, {
           label: `anthropic:${actualModel}`,
           onChunk: (str) => {
             if (res.writableEnded || res.destroyed) return;
-            heartbeat.touch();
+            // 注意：这里不能调 heartbeat.touch()。思考型模型在上游持续吐
+            // reasoning chunk，但只在映射出可见事件时才真正写给客户端；
+            // 若在此处刷新计时器，保活帧将永远不会发出。
             buffer += str;
             const lines = buffer.split('\n');
             buffer = lines.pop();
@@ -442,6 +452,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                   lifecycle.markUpstreamEnded();
                 }
                 const delta = chunk.choices?.[0]?.delta;
+                let wroteVisible = false;   // 本轮是否真的向客户端写了可见事件
 
             // 思考流原生映射 (对齐 package streamed-reasoning-collector: 兼容 reasoning_content 与 reasoning)
             const reasoningText = delta?.reasoning_content || delta?.reasoning;
@@ -453,6 +464,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                   index: 0,
                   content_block: { type: 'thinking', thinking: '' }
                 })}\n\n`);
+                wroteVisible = true;
               }
               if (thinkingBlockStarted && !thinkingBlockStopped) {
                 res.write(`event: content_block_delta\ndata: ${JSON.stringify({
@@ -460,6 +472,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                   index: 0,
                   delta: { type: 'thinking_delta', thinking: reasoningText }
                 })}\n\n`);
+                wroteVisible = true;
               }
             }
 
@@ -476,12 +489,14 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                   index: textIdx,
                   content_block: { type: 'text', text: '' }
                 })}\n\n`);
+                wroteVisible = true;
               }
               res.write(`event: content_block_delta\ndata: ${JSON.stringify({
                 type: 'content_block_delta',
                 index: textIdx,
                 delta: { type: 'text_delta', text: delta.content }
               })}\n\n`);
+              wroteVisible = true;
             }
 
             if (Array.isArray(delta?.tool_calls)) {
@@ -509,6 +524,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                       input: {}
                     }
                   })}\n\n`);
+                  wroteVisible = true;
                 }
                 if (tc.function?.arguments) {
                   res.write(`event: content_block_delta\ndata: ${JSON.stringify({
@@ -516,13 +532,46 @@ export async function handleAnthropicMessages(req, res, rawBody) {
                     index: idx,
                     delta: { type: 'input_json_delta', partial_json: tc.function.arguments }
                   })}\n\n`);
+                  wroteVisible = true;
                 }
               }
             }
+
+            // 只有真正写出可见事件时才重置保活计时器；
+            // 纯 reasoning 但被丢弃的 chunk 不应阻止 ping 帧发出。
+            if (wroteVisible) heartbeat.touch();
               } catch (_) {}
             }
           }
         });
+
+        // 上游断流且已有产出：补一个截断终态，避免客户端拿到"没有 stop_reason 的流"
+        if (!result.abortedByClient && !result.upstreamEnded &&
+            isTruncatedWithoutFinish({ sawDone: result.sawDone, sawFinish, sawError })) {
+          if (thinkingBlockStarted || textBlockStarted || activeToolIndices.size > 0) {
+            Logger.warn('STREAM', `[anthropic:${actualModel}] 上游断流无 finish_reason，补截断终态`);
+            if (thinkingBlockStarted && !thinkingBlockStopped) {
+              thinkingBlockStopped = true;
+              res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
+            }
+            if (textBlockStarted && !textBlockStopped) {
+              textBlockStopped = true;
+              const textIdx = thinkingBlockStarted ? 1 : 0;
+              res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: textIdx })}\n\n`);
+            }
+            for (const idx of activeToolIndices) {
+              res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: idx })}\n\n`);
+            }
+            res.write(`event: message_delta\ndata: ${JSON.stringify({
+              type: 'message_delta',
+              delta: { stop_reason: 'max_tokens', stop_sequence: null },
+              usage: { output_tokens: streamUsage?.completion_tokens || 0 }
+            })}\n\n`);
+            res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+            // 已补齐终态帧，正常收尾路径不要再发一遍
+            truncationEmitted = true;
+          }
+        }
 
         logStreamOutcome(`anthropic:${actualModel}`, result, { model: actualModel });
       } finally {
@@ -530,10 +579,11 @@ export async function handleAnthropicMessages(req, res, rawBody) {
         lifecycle.markFinished();
         activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
         heartbeat.stop();
+        keapalivePings = heartbeat.pingCount || 0;
         lifecycle.dispose();
         try { reader.releaseLock?.(); } catch (_) {}
       }
-
+      if (truncationEmitted) return;
       if (res.writableEnded || res.destroyed) return;
 
       if (thinkingBlockStarted && !thinkingBlockStopped) {
@@ -573,7 +623,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
         outputTokens: outTokens,
         cachedTokens: cachedTok
       });
-      Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${stopReason})`);
+      Logger.info('ANTHROPIC', `流式回复完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${stopReason}${keapalivePings > 0 ? `, 思考保活: ${keapalivePings} 帧` : ''})`);
       if (!res.writableEnded) return res.end();
       return;
 

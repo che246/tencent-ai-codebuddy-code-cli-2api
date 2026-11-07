@@ -371,13 +371,20 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       });
 
       const reader = upstreamRes.body.getReader();
-      const heartbeat = startHeartbeat(res, `openai:${callResult.model}`);
       let toolCallObserved = false;
       let streamUsage = null;
       let sseBuffer = '';
       let sawFinish = false;
       let sawError = false;
       let lastChunkId = null;
+      let keapalivePings = 0;
+
+      // OpenAI 协议发空 delta chunk 保活。模型长思考期间上游可能长时间无输出，
+      // 只发 SSE 注释帧会被部分客户端忽略并判定流异常结束。
+      const heartbeat = startHeartbeat(res, `openai:${callResult.model}`, {
+        protocol: 'openai',
+        getMeta: () => ({ id: lastChunkId, model: callResult.model })
+      });
 
       try {
         const result = await readUpstreamStream(reader, lifecycle, {
@@ -434,6 +441,7 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
         lifecycle.markFinished();
         activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
         heartbeat.stop();
+        keapalivePings = heartbeat.pingCount || 0;
         lifecycle.dispose();
         try { reader.releaseLock?.(); } catch (_) {}
       }
@@ -454,7 +462,7 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
         outputTokens: outTokens,
         cachedTokens: cachedTok
       });
-      Logger.info('CHAT', `流式输出完成 [${callResult.model}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 是否含工具调用: ${toolCallObserved})`);
+      Logger.info('CHAT', `流式输出完成 [${callResult.model}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 是否含工具调用: ${toolCallObserved}${keapalivePings > 0 ? `, 思考保活: ${keapalivePings} 帧` : ''})`);
       if (!res.writableEnded) return res.end();
       return;
 

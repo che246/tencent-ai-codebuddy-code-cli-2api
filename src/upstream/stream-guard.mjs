@@ -14,11 +14,18 @@ export const FIRST_BYTE_TIMEOUT_MS = Number(process.env.GW_FIRST_BYTE_TIMEOUT_MS
 
 // 流中静默：收到响应头后，相邻两个数据块的间隔上限。
 // 长回复可能持续数分钟，但**静默**不该超过这个值；有数据流动就自动续命。
-// 参考实现用 60~120s，取 90s 兼顾慢思考与快速失败。
-export const STREAM_IDLE_TIMEOUT_MS = Number(process.env.GW_STREAM_IDLE_TIMEOUT_MS || 90000);
+//
+// 注意：思考型模型（deepseek/hy4 的 reasoning）在"想"的时候上游可能长时间
+// 一个字节都不吐，实测出现过 240s+ 的单轮思考。原来的 90s 会把这类请求
+// 从网关侧掐断，客户端看到的就是"流结束了却没有 finish_reason"。
+// 因此把默认值抬到 300s，并把主动保活（见 startHeartbeat）作为第一道防线：
+// 只要保活帧在发，客户端就不会判空，网关也不会因为上游静默而误杀。
+export const STREAM_IDLE_TIMEOUT_MS = Number(process.env.GW_STREAM_IDLE_TIMEOUT_MS || 300000);
 
-// 心跳间隔：SSE 注释帧，纯保活无语义。参考实现用 10s。
-export const HEARTBEAT_INTERVAL_MS = Number(process.env.GW_HEARTBEAT_INTERVAL_MS || 10000);
+// 心跳间隔：客户端能感知的保活帧间隔。
+// 取 5s——比多数客户端（Claude Code / Cursor / NextChat）的空流容忍窗口
+// 都要短。原来的 10s 注释帧在长思考场景下会被部分客户端忽略并判空。
+export const HEARTBEAT_INTERVAL_MS = Number(process.env.GW_HEARTBEAT_INTERVAL_MS || 5000);
 
 // ─── 请求生命周期 ───────────────────────────────────────────────────────────
 
@@ -217,28 +224,74 @@ export async function readUpstreamStream(reader, lifecycle, opts = {}) {
 }
 
 /**
- * SSE 心跳控制器：定期向客户端写注释帧，防止 idle 超时掐线。
- * 注释帧（":" 开头）是 SSE 规范的 no-op，所有客户端解析器都会忽略。
+ * SSE 保活控制器：在长静默期（典型场景是模型长时间思考）向客户端补帧，
+ * 防止客户端因为「迟迟收不到内容事件」而判定流异常结束。
+ *
+ * 为什么不能只发注释帧：`": keepalive"` 是 SSE 传输层的 no-op，多数客户端
+ * 解析器会在事件层直接丢弃它，不计入「本流仍然活着」的证据。思考 60s+
+ * 时 Claude Code 就会抛 `Stream ended without finish_reason`。
+ *
+ * 因此这里按协议发**语义合法且内容为空**的真实事件：
+ *   · anthropic → `event: ping`（官方心跳事件，所有 Anthropic 客户端都认）
+ *   · openai    → `data: {choices:[{delta:{},finish_reason:null}]}` 空 delta chunk
+ * 两者都不会污染正文，也不会让客户端误以为收到了内容。
+ *
+ * @param {object} res        下游响应对象
+ * @param {string} label      日志标签
+ * @param {object} opts       { protocol: 'openai'|'anthropic', getMeta(): {id, model} }
  */
-export function startHeartbeat(res, label = '') {
+export function startHeartbeat(res, label = '', opts = {}) {
   if (HEARTBEAT_INTERVAL_MS <= 0) {
     return { stop() {}, touch() {} };
   }
+  const protocol = opts.protocol === 'anthropic' ? 'anthropic' : 'openai';
+  const getMeta = typeof opts.getMeta === 'function' ? opts.getMeta : () => ({});
   let lastWrite = Date.now();
+  let pingCount = 0;
+
+  /** 构造一个客户端可识别、但不产生任何内容的保活帧 */
+  const buildKeepaliveFrame = () => {
+    if (protocol === 'anthropic') {
+      // Anthropic 官方心跳事件；客户端收到后只更新活跃时间，不产出内容块
+      return 'event: ping\ndata: {"type": "ping"}\n\n';
+    }
+    // OpenAI：空 delta + finish_reason:null，等价于「流仍在继续，暂无内容」
+    const meta = getMeta() || {};
+    const id = meta.id || `chatcmpl-keepalive-${Date.now()}`;
+    const model = meta.model || 'unknown';
+    return `data: ${JSON.stringify({
+      id,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: null }],
+    })}\n\n`;
+  };
+
   const timer = setInterval(() => {
     if (res.writableEnded || res.destroyed) return;
     // 距上次真实写入不足间隔就不补，避免与数据帧叠加
     if (Date.now() - lastWrite < HEARTBEAT_INTERVAL_MS) return;
     try {
-      res.write(': keepalive\n\n');
+      res.write(buildKeepaliveFrame());
       lastWrite = Date.now();
+      pingCount++;
     } catch (_) {}
   }, HEARTBEAT_INTERVAL_MS);
   timer.unref?.();
 
   return {
-    /** 有真实数据写出时调用，避免心跳与数据重叠 */
+    /**
+     * 告知「刚有内容真正写给了客户端」。
+     * 注意：调用方只能在**真的向 res 写入语义内容**后调用它，
+     * 不能在上游 chunk 到达时就调——思考型模型在上游持续吐 reasoning
+     * 但被适配层丢弃时，会把计时器一直刷掉，导致保活帧永远不发出。
+     */
     touch() { lastWrite = Date.now(); },
+    /** 已发送的保活帧数量（用于诊断长思考请求） */
+    get pingCount() { return pingCount; },
+    /** 距上次真实写入的毫秒数（诊断用） */
+    get idleMs() { return Date.now() - lastWrite; },
     stop() {
       clearInterval(timer);
     },
