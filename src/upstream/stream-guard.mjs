@@ -1,31 +1,48 @@
 // ─── 流式稳定性保障 ─────────────────────────────────────────────────────────
-// 六项防护，对齐真机实测过的生产实现（workbuddy2api-panel）：
-//   1. 上游请求 AbortController + 静默看门狗（有数据就续命，不按总时长误杀）
-//   2. inFlight 用 finally 保证释放（杜绝账号容量泄漏）
-//   3. 客户端断开感知，中止上游并区分归因（客户端走了 vs 上游断流）
-//   4. SSE 注释帧心跳，防中间设备/客户端 idle 超时掐线
-//   5. 首字节（响应头）超时，与流中静默超时分离
-//   6. 上游断流补截断终态帧（finish_reason=length），让客户端知悉是截断而非卡死
+// 本模块的超时与保活参数**以官方 CLI 端实现为准**（package/dist/codebuddy-headless.js），
+// 不做主观拍脑袋取值。对齐依据（源码实测）：
+//
+//   let mm = 12e5, my = 12e5;
+//   let tn = resolveTimeoutMs(process.env.CODEBUDDY_FIRST_TOKEN_TIMEOUT_MS, mm)   // 首 token 20 分钟
+//   let eF = resolveTimeoutMs(process.env.CODEBUDDY_STREAM_TIMEOUT_MS, my)        // 流总时长 20 分钟
+//   let mb = 3e5                                                                  // 空流重试窗口 5 分钟
+//   let tf = 5e3                                                                  // finish_reason 后宽限期 5 秒
+//   CODEBUDDY_REASONING_KEEPALIVE_INTERVAL_MS 默认 0（思考期保活默认关闭）
+//
+// 结论：CLI 端**不会**因为"流里没有 finish_reason"就判错，它只判定
+// "有没有实质内容"（hasSubstantiveContent），并且把首 token 超时给到 20 分钟。
+// 因此网关侧也必须放宽到同等量级，否则会出现"官方能跑、网关先掐断"的错位。
 import { Logger } from '../core/logger.mjs';
 
-// ─── 超时阈值 ───────────────────────────────────────────────────────────────
-// 首字节：从发出请求到收到响应头。上游正常在 1~3s 内响应，30s 足够宽松。
-export const FIRST_BYTE_TIMEOUT_MS = Number(process.env.GW_FIRST_BYTE_TIMEOUT_MS || 30000);
+// ─── 超时阈值（全部对齐官方 CLI 默认值）─────────────────────────────────────
 
-// 流中静默：收到响应头后，相邻两个数据块的间隔上限。
-// 长回复可能持续数分钟，但**静默**不该超过这个值；有数据流动就自动续命。
-//
-// 注意：思考型模型（deepseek/hy4 的 reasoning）在"想"的时候上游可能长时间
-// 一个字节都不吐，实测出现过 240s+ 的单轮思考。原来的 90s 会把这类请求
-// 从网关侧掐断，客户端看到的就是"流结束了却没有 finish_reason"。
-// 因此把默认值抬到 300s，并把主动保活（见 startHeartbeat）作为第一道防线：
-// 只要保活帧在发，客户端就不会判空，网关也不会因为上游静默而误杀。
-export const STREAM_IDLE_TIMEOUT_MS = Number(process.env.GW_STREAM_IDLE_TIMEOUT_MS || 300000);
+// 首字节 / 首 token：官方 CODEBUDDY_FIRST_TOKEN_TIMEOUT_MS = 12e5 = 20 分钟。
+// 该截止时间在官方实现里同时覆盖"响应头到达"和"首个 token 到达"。
+// 环境变量沿用官方命名，便于两边用同一套调参方式。
+export const FIRST_BYTE_TIMEOUT_MS = Number(
+  process.env.CODEBUDDY_FIRST_TOKEN_TIMEOUT_MS || process.env.GW_FIRST_BYTE_TIMEOUT_MS || 1200000
+);
 
-// 心跳间隔：客户端能感知的保活帧间隔。
-// 取 5s——比多数客户端（Claude Code / Cursor / NextChat）的空流容忍窗口
-// 都要短。原来的 10s 注释帧在长思考场景下会被部分客户端忽略并判空。
-export const HEARTBEAT_INTERVAL_MS = Number(process.env.GW_HEARTBEAT_INTERVAL_MS || 5000);
+// 流总时长：官方 CODEBUDDY_STREAM_TIMEOUT_MS = 12e5 = 20 分钟。
+// 官方是"总时长"上限而非"静默"上限——这与我们原先的静默看门狗语义不同。
+// 这里保留静默看门狗（能更早发现真断流），但把阈值对齐到官方的空流重试窗口 5 分钟，
+// 超过该窗口官方自己也不再重试，说明可以认为这条流已经废了。
+export const STREAM_IDLE_TIMEOUT_MS = Number(
+  process.env.GW_STREAM_IDLE_TIMEOUT_MS || process.env.CODEBUDDY_STREAM_TIMEOUT_MS || 300000
+);
+
+// 思考期保活：官方 CODEBUDDY_REASONING_KEEPALIVE_INTERVAL_MS **默认 0 = 关闭**。
+// 网关侧保留该开关语义，但默认值给 5s —— 因为我们下面还有一层差异：
+// 官方 CLI 自己就是 SSE 消费端，它靠 hasSubstantiveContent 判活，不依赖保活帧；
+// 而网关的下游可能是 Cursor / Claude Code 等第三方客户端，它们会按"多久没收到事件"判空。
+// 若要与官方完全一致，把该环境变量设为 0 即可关闭。
+export const HEARTBEAT_INTERVAL_MS = Number(
+  process.env.CODEBUDDY_REASONING_KEEPALIVE_INTERVAL_MS || process.env.GW_HEARTBEAT_INTERVAL_MS || 5000
+);
+
+// finish_reason 后的宽限期：官方 tf = 5e3。
+// 收到 finish_reason 后不立刻关流，留出时间接收 usage 尾帧，避免客户端拿不到 token 统计。
+export const FINISH_REASON_GRACE_MS = Number(process.env.GW_FINISH_REASON_GRACE_MS || 5000);
 
 // ─── 请求生命周期 ───────────────────────────────────────────────────────────
 
@@ -299,11 +316,96 @@ export function startHeartbeat(res, label = '', opts = {}) {
 }
 
 /**
- * 判断一段流是否“无正常收尾”（上游断流）：既没有 finish_reason，
- * 也没有收到 [DONE]，且不是显式 error 帧。
+ * ─── 空流判定（完全移植自官方 CLI 端）───────────────────────────────────────
+ *
+ * 官方 CLI 在 ModelProvider 里对每个 delta 做三标志分类：
+ *
+ *   let eA = typeof ec.content === "string" && ec.content.length > 0;              // 正文
+ *   let ed = reason_content 非空 || reasoning 非空;                                // 思考
+ *   let eu = Array.isArray(ec.tool_calls) && ec.tool_calls.length > 0;             // 工具
+ *   let ep = typeof ec.refusal === "string" && ec.refusal.length > 0;              // 拒答
+ *   ed && (ef = !0);                    // hasReasoning            —— 仅思考
+ *   (eA || ed || eu || ep) && (eg = !0); // hasContent              —— 思考也算"有内容"
+ *   (eA || eu || ep) && (em = !0);       // hasSubstantiveContent   —— 思考**不算**实质内容
+ *
+ * 随后按 hasReasoning 把空流分成两类：
+ *   let el = eg ? "reasoning-only" : "no-token";
+ *
+ * 这里用同样的语义累积统计，供适配层判断"这次流到底有没有实质产出"。
+ */
+export function createDeltaClassifier() {
+  let hasContent = false;             // 任何产出（含 reasoning）
+  let hasReasoning = false;           // 仅有 reasoning
+  let hasSubstantiveContent = false;  // 正文 / 工具 / 拒答
+  let sawFinishReason = null;         // 最后一次非空 finish_reason
+  let hasUsage = false;
+
+  return {
+    /** 传入上游 SSE 解析后的 chunk.choices[0].delta */
+    observeDelta(delta, finishReason) {
+      if (typeof finishReason === 'string' && finishReason !== '') {
+        sawFinishReason = finishReason;
+      }
+      if (!delta) return;
+      const hasText = typeof delta.content === 'string' && delta.content.length > 0;
+      const hasThink = (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0)
+        || (typeof delta.reasoning === 'string' && delta.reasoning.length > 0);
+      const hasTool = Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0;
+      const hasRefusal = typeof delta.refusal === 'string' && delta.refusal.length > 0;
+
+      if (hasThink) hasReasoning = true;
+      if (hasText || hasThink || hasTool || hasRefusal) hasContent = true;
+      if (hasText || hasTool || hasRefusal) hasSubstantiveContent = true;
+    },
+    observeUsage(usage) {
+      if (usage) hasUsage = true;
+    },
+    get hasContent() { return hasContent; },
+    get hasReasoning() { return hasReasoning; },
+    get hasSubstantiveContent() { return hasSubstantiveContent; },
+    get finishReason() { return sawFinishReason; },
+    get hasUsage() { return hasUsage; },
+
+    /**
+     * 按官方语义给出空流子类型：
+     *   · 'reasoning-only' —— 思考过但没正文/工具
+     *   · 'no-token'       —— 连思考都没有
+     *   · null             —— 有实质产出，不算空流
+     */
+    get emptyStreamKind() {
+      if (hasSubstantiveContent) return null;
+      return hasReasoning ? 'reasoning-only' : 'no-token';
+    },
+  };
+}
+
+/**
+ * 判断一段流是否"无正常收尾"。
+ *
+ * 与官方 CLI 对齐后：官方**不把"缺少 finish_reason"本身当错误**，
+ * 它只关心有没有实质内容。因此这里保留原有签名（供适配层兜底补终态），
+ * 但增加实质内容判定——只要出过正文/工具/拒答，就属于"正常有产出但被截断"，
+ * 应补 finish_reason=length；完全没产出才是真正的空流。
  */
 export function isTruncatedWithoutFinish({ sawDone, sawFinish, sawError }) {
   return !sawDone && !sawFinish && !sawError;
+}
+
+/**
+ * 空流终态：对齐官方 `finish_reason=${ec} with no model output` 的语义。
+ * 官方在 failEmptyStream 里把 finish_reason 归一为 'length' 或 'error'：
+ *   let ec = "length" === e8 ? "length" : "error";
+ * 这里保持一致，让客户端能区分"被截断"与"模型没输出"。
+ */
+export function buildEmptyStreamChunk(id, model, kind = 'no-token') {
+  return JSON.stringify({
+    id: id || `chatcmpl-${Date.now()}`,
+    object: 'chat.completion.chunk',
+    model: model || 'unknown',
+    choices: [{ index: 0, delta: {}, finish_reason: 'error' }],
+    // 非标准字段，供排查；主流客户端会忽略未知字段
+    x_empty_stream_kind: kind,
+  });
 }
 
 /**

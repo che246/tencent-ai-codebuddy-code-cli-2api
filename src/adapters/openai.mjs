@@ -27,6 +27,8 @@ import {
   startHeartbeat,
   isTruncatedWithoutFinish,
   buildTruncationChunk,
+  buildEmptyStreamChunk,
+  createDeltaClassifier,
   logStreamOutcome
 } from '../upstream/stream-guard.mjs';
 
@@ -378,6 +380,8 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       let sawError = false;
       let lastChunkId = null;
       let keapalivePings = 0;
+      // 与官方 CLI 同源的 delta 分类器（正文/思考/工具/拒答）
+      const classifier = createDeltaClassifier();
 
       // OpenAI 协议发空 delta chunk 保活。模型长思考期间上游可能长时间无输出，
       // 只发 SSE 注释帧会被部分客户端忽略并判定流异常结束。
@@ -411,9 +415,12 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
               try {
                 const chunk = JSON.parse(dataStr);
                 if (chunk.id) lastChunkId = chunk.id;
-                if (chunk.usage) streamUsage = chunk.usage;
+                if (chunk.usage) { streamUsage = chunk.usage; classifier.observeUsage(chunk.usage); }
                 if (chunk.error) sawError = true;
-                if (chunk.choices?.[0]?.finish_reason) {
+                const choice = chunk.choices?.[0];
+                // 与官方 CLI 同源的三标志分类（正文/思考/工具/拒答）
+                classifier.observeDelta(choice?.delta, choice?.finish_reason);
+                if (choice?.finish_reason) {
                   sawFinish = true;
                   lifecycle.markUpstreamEnded();
                 }
@@ -422,9 +429,21 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
           }
         });
 
-        // 上游断流且已有产出：补一条截断终态，让客户端知道是被截断而非卡死
-        if (!result.abortedByClient && !result.upstreamEnded && isTruncatedWithoutFinish({ sawDone: result.sawDone, sawFinish, sawError })) {
-          if (toolCallObserved || sseBuffer.length > 0 || lastChunkId) {
+        // ─── 收尾判定（对齐官方 CLI 的 emptyStreamKind 语义）──────────────
+        // 官方不把"没有 finish_reason"当错误，只区分有没有实质产出：
+        //   reasoning-only → 思考过但无正文/工具
+        //   no-token       → 连思考都没有
+        // 有实质产出但被截断 → 补 length；完全无产出 → 补 error
+        const emptyKind = classifier.emptyStreamKind;
+        if (!result.abortedByClient && !sawFinish && !sawError) {
+          if (emptyKind) {
+            Logger.warn('STREAM', `[openai:${callResult.model}] 空流 ${emptyKind}（无实质产出）: finish_reason=${classifier.finishReason || 'unknown'}, 有思考=${classifier.hasReasoning}`);
+            try {
+              res.write(`data: ${buildEmptyStreamChunk(lastChunkId, callResult.model, emptyKind)}\n\n`);
+              res.write('data: [DONE]\n\n');
+            } catch (_) {}
+          } else if (isTruncatedWithoutFinish({ sawDone: result.sawDone, sawFinish, sawError })) {
+            // 有实质产出但上游没给 finish_reason → 按截断处理
             Logger.warn('STREAM', `[openai:${callResult.model}] 上游断流无 finish_reason，补截断终态`);
             try {
               res.write(`data: ${buildTruncationChunk(lastChunkId, callResult.model)}\n\n`);
@@ -434,7 +453,8 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
         }
         logStreamOutcome(`openai:${callResult.model}`, result, {
           model: callResult.model,
-          toolCalls: toolCallObserved
+          toolCalls: toolCallObserved,
+          substantive: classifier.hasSubstantiveContent
         });
       } finally {
         // 无论成功/异常/客户端断开，都必须释放名额，杜绝 inFlight 泄漏

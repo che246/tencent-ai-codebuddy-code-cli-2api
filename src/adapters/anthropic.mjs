@@ -24,6 +24,7 @@ import {
   readUpstreamStream,
   startHeartbeat,
   isTruncatedWithoutFinish,
+  createDeltaClassifier,
   logStreamOutcome
 } from '../upstream/stream-guard.mjs';
 
@@ -420,6 +421,8 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       let sawError = false;
       let truncationEmitted = false;
       let keapalivePings = 0;
+      // 与官方 CLI 同源的 delta 分类器（正文/思考/工具/拒答）
+      const classifier = createDeltaClassifier();
 
       try {
         const result = await readUpstreamStream(reader, lifecycle, {
@@ -445,9 +448,12 @@ export async function handleAnthropicMessages(req, res, rawBody) {
 
               try {
                 const chunk = JSON.parse(dataStr);
-                if (chunk.usage) streamUsage = chunk.usage;
+                if (chunk.usage) { streamUsage = chunk.usage; classifier.observeUsage(chunk.usage); }
                 if (chunk.error) sawError = true;
-                if (chunk.choices?.[0]?.finish_reason) {
+                const choice = chunk.choices?.[0];
+                // 与官方 CLI 同源的三标志分类
+                classifier.observeDelta(choice?.delta, choice?.finish_reason);
+                if (choice?.finish_reason) {
                   sawFinish = true;
                   lifecycle.markUpstreamEnded();
                 }
@@ -545,11 +551,20 @@ export async function handleAnthropicMessages(req, res, rawBody) {
           }
         });
 
-        // 上游断流且已有产出：补一个截断终态，避免客户端拿到"没有 stop_reason 的流"
-        if (!result.abortedByClient && !result.upstreamEnded &&
-            isTruncatedWithoutFinish({ sawDone: result.sawDone, sawFinish, sawError })) {
-          if (thinkingBlockStarted || textBlockStarted || activeToolIndices.size > 0) {
+        // ─── 收尾判定（对齐官方 CLI 的 emptyStreamKind 语义）──────────────
+        // 有实质产出（正文/工具）但上游没给 finish_reason → 按截断补终态；
+        // 完全没有实质产出 → 按空流补终态，并区分 reasoning-only / no-token。
+        const emptyKind = classifier.emptyStreamKind;
+        const needsClosing =
+          !result.abortedByClient && !sawFinish && !sawError &&
+          isTruncatedWithoutFinish({ sawDone: result.sawDone, sawFinish, sawError });
+        if (needsClosing) {
+          if (emptyKind) {
+            Logger.warn('STREAM', `[anthropic:${actualModel}] 空流 ${emptyKind}（无实质产出）: finish_reason=${classifier.finishReason || 'unknown'}, 有思考=${classifier.hasReasoning}`);
+          } else {
             Logger.warn('STREAM', `[anthropic:${actualModel}] 上游断流无 finish_reason，补截断终态`);
+          }
+          if (thinkingBlockStarted || textBlockStarted || activeToolIndices.size > 0 || emptyKind) {
             if (thinkingBlockStarted && !thinkingBlockStopped) {
               thinkingBlockStopped = true;
               res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
@@ -562,9 +577,11 @@ export async function handleAnthropicMessages(req, res, rawBody) {
             for (const idx of activeToolIndices) {
               res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: idx })}\n\n`);
             }
+            // 官方把空流归一为 error/length；有实质内容被截断用 max_tokens，空流用 error
+            const stopReason = emptyKind ? 'error' : 'max_tokens';
             res.write(`event: message_delta\ndata: ${JSON.stringify({
               type: 'message_delta',
-              delta: { stop_reason: 'max_tokens', stop_sequence: null },
+              delta: { stop_reason: stopReason, stop_sequence: null },
               usage: { output_tokens: streamUsage?.completion_tokens || 0 }
             })}\n\n`);
             res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
