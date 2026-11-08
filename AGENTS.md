@@ -113,6 +113,7 @@
 - `accounts.json`（含 accessToken / refreshToken）
 - `config.json`（含 apiKey / webPassword）
 - `accounts*.json` 变体
+- `backups/`（备份目录，内部含 accounts/config 镜像，严禁入库）
 
 ### 打包与部署产物
 

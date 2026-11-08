@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT_DIR, SEARCH_URL, USER_AGENT, formatAccountFullDesc } from '../config.mjs';
+import { ROOT_DIR, SEARCH_URL, USER_AGENT, formatAccountFullDesc, loadJsonWithBackup, writeJsonWithBackup } from '../config.mjs';
 import { AccountScheduler } from './scheduler.mjs';
 import { Logger } from './logger.mjs';
 
@@ -58,21 +58,14 @@ let cachedCustomPrices = null;
 
 export function loadModelPrices() {
   if (cachedCustomPrices) return cachedCustomPrices;
-  let custom = {};
-  if (fs.existsSync(PRICING_FILE_PATH)) {
-    try {
-      custom = JSON.parse(fs.readFileSync(PRICING_FILE_PATH, 'utf8'));
-    } catch (_) {}
-  }
+  const custom = loadJsonWithBackup(PRICING_FILE_PATH, {});
   cachedCustomPrices = { ...DEFAULT_OFFICIAL_PRICES, ...custom };
   return cachedCustomPrices;
 }
 
 export function saveModelPrices(newPrices) {
   cachedCustomPrices = { ...loadModelPrices(), ...newPrices };
-  try {
-    fs.writeFileSync(PRICING_FILE_PATH, JSON.stringify(cachedCustomPrices, null, 2), 'utf8');
-  } catch (_) {}
+  writeJsonWithBackup(PRICING_FILE_PATH, cachedCustomPrices);
   return cachedCustomPrices;
 }
 

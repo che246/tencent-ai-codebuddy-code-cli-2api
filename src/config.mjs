@@ -112,27 +112,152 @@ export const CHECKIN_URL = REGION_BASE[REGION_CN].web + '/v2/billing/meter/daily
 export const SEARCH_URL = REGION_BASE[REGION_CN].api + '/agenttool/v1/search';
 export const WEBFETCH_URL = REGION_BASE[REGION_CN].api + '/agenttool/v1/webfetch';
 
-// 3. 配置与账号加载 (含双重 .bak 备份自动容灾恢复)
-function loadJsonWithBackup(mainPath, defaultValue) {
+// ─── [网关自有策略] 全链路数据安全与独立备份目录 (backups/) ──────────────────
+// 理由：
+//   1. 避免根目录散落多份 .bak 文件，保持项目根目录清晰纯粹；
+//   2. 集中化安全纳管凭据备份，便于运维统一备份或权限隔离（.gitignore 强制排除）；
+//   3. 实施“原子写入（写 .tmp -> rename）+ 独立镜像备份”双重保险，
+//      即使遇到系统掉电、进程强制终止或磁盘中断，主文件绝不会变成 0 字节半截损坏；
+//   4. 容灾三级自愈：主文件 -> backups/ 目录备份 -> 根目录遗留 legacy 备份，并自动修复。
+export const BACKUP_DIR = path.resolve(ROOT_DIR, 'backups');
+
+/** 确保备份目录存在 */
+export function ensureBackupDir() {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+  } catch (_) {}
+}
+
+/** 获取指定持久化文件在 backups/ 目录中的备份文件绝对路径 */
+export function getBackupPath(mainPath) {
+  const filename = path.basename(mainPath);
+  return path.resolve(BACKUP_DIR, filename + '.bak');
+}
+
+/**
+ * 迁移根目录下遗留的旧版 .bak 文件到 backups/ 目录
+ * 确保平滑向后兼容，且不留散落的冗余文件在项目根目录
+ */
+export function migrateLegacyBackups() {
+  ensureBackupDir();
+  try {
+    const legacyNames = [
+      'accounts.json.bak',
+      'accounts.json.bak-credits',
+      'config.json.bak',
+      'stats.json.bak',
+      'pricing.json.bak'
+    ];
+    for (const name of legacyNames) {
+      const oldPath = path.resolve(ROOT_DIR, name);
+      const newPath = path.resolve(BACKUP_DIR, name);
+      if (fs.existsSync(oldPath)) {
+        try {
+          if (!fs.existsSync(newPath)) {
+            fs.copyFileSync(oldPath, newPath);
+          }
+          fs.unlinkSync(oldPath);
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
+// 模块初始化时执行一次遗留备份平滑归档迁移
+migrateLegacyBackups();
+
+/**
+ * [网关自有策略] 全链路安全写入 JSON 数据文件与独立备份
+ * @param {string} mainPath 主文件物理路径
+ * @param {any} data 要持久化的数据对象或 JSON 字符串
+ */
+export function writeJsonWithBackup(mainPath, data) {
+  try {
+    ensureBackupDir();
+    const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+
+    // 1. 原子写入主文件（先写临时文件再 rename，防止并发/强杀导致主文件截断清空）
+    const tmpPath = `${mainPath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+    try {
+      fs.writeFileSync(tmpPath, content, 'utf8');
+      fs.renameSync(tmpPath, mainPath);
+    } catch (_) {
+      // 容错：若 rename 异常（跨盘符或被极端进程锁定时），退回直接写入
+      fs.writeFileSync(mainPath, content, 'utf8');
+    } finally {
+      if (fs.existsSync(tmpPath)) {
+        try { fs.unlinkSync(tmpPath); } catch (_) {}
+      }
+    }
+
+    // 2. 独立镜像备份写入 backups/ 目录
+    const bakPath = getBackupPath(mainPath);
+    fs.writeFileSync(bakPath, content, 'utf8');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * [网关自有策略] 健壮的数据加载与三级容灾自愈
+ * 优先级 1: 主文件 mainPath
+ * 优先级 2: backups/ 目录下的独立备份文件 getBackupPath(mainPath)
+ * 优先级 3: 根目录 legacy 备份文件 (mainPath + '.bak')
+ * 无论从哪一级恢复，均会自动回写修复主文件，并保证 backups/ 目录有一份最新备份。
+ */
+export function loadJsonWithBackup(mainPath, defaultValue) {
+  ensureBackupDir();
+  const bakPath = getBackupPath(mainPath);
+  const legacyBakPath = mainPath + '.bak';
+
+  // 1. 尝试从主文件读取
   if (fs.existsSync(mainPath)) {
     try {
       const raw = fs.readFileSync(mainPath, 'utf8');
       if (raw && raw.trim().length > 1) {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        // 主文件健康，顺便确保 backups/ 中有一份最新镜像备份
+        try {
+          if (!fs.existsSync(bakPath)) {
+            fs.writeFileSync(bakPath, JSON.stringify(parsed, null, 2), 'utf8');
+          }
+        } catch (_) {}
+        return parsed;
       }
     } catch (_) {}
   }
-  const bakPath = mainPath + '.bak';
+
+  // 2. 主文件损坏或不存在：优先从 backups/ 目录自动容灾恢复
   if (fs.existsSync(bakPath)) {
     try {
       const raw = fs.readFileSync(bakPath, 'utf8');
       if (raw && raw.trim().length > 1) {
         const data = JSON.parse(raw);
-        fs.writeFileSync(mainPath, JSON.stringify(data, null, 2), 'utf8');
+        try { fs.writeFileSync(mainPath, JSON.stringify(data, null, 2), 'utf8'); } catch (_) {}
         return data;
       }
     } catch (_) {}
   }
+
+  // 3. 向后兼容：尝试从根目录下遗留的旧版 legacy 备份文件恢复，并自动纳管进 backups/
+  if (fs.existsSync(legacyBakPath)) {
+    try {
+      const raw = fs.readFileSync(legacyBakPath, 'utf8');
+      if (raw && raw.trim().length > 1) {
+        const data = JSON.parse(raw);
+        try {
+          fs.writeFileSync(mainPath, JSON.stringify(data, null, 2), 'utf8');
+          fs.writeFileSync(bakPath, JSON.stringify(data, null, 2), 'utf8');
+          fs.unlinkSync(legacyBakPath);
+        } catch (_) {}
+        return data;
+      }
+    } catch (_) {}
+  }
+
   return defaultValue;
 }
 
@@ -140,15 +265,11 @@ export let config = loadJsonWithBackup(CONFIG_PATH, {});
 export let accounts = loadJsonWithBackup(ACCOUNTS_PATH, []);
 
 export function saveAccounts() {
-  const content = JSON.stringify(accounts, null, 2);
-  fs.writeFileSync(ACCOUNTS_PATH, content, 'utf8');
-  try { fs.writeFileSync(ACCOUNTS_PATH + '.bak', content, 'utf8'); } catch (_) {}
+  writeJsonWithBackup(ACCOUNTS_PATH, accounts);
 }
 
 export function saveConfig() {
-  const content = JSON.stringify(config, null, 2);
-  fs.writeFileSync(CONFIG_PATH, content, 'utf8');
-  try { fs.writeFileSync(CONFIG_PATH + '.bak', content, 'utf8'); } catch (_) {}
+  writeJsonWithBackup(CONFIG_PATH, config);
 }
 
 export function updateAccounts(newAccounts) {

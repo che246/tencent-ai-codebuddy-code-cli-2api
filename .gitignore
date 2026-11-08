@@ -14,6 +14,9 @@ stats.json
 .env
 *.log
 
+# 独立备份目录（含 accounts / config 等敏感备份，严禁入库）
+backups/
+
 # 依赖与打包归档
 node_modules/
 *.tgz

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT_DIR, getTodayString } from '../config.mjs';
+import { ROOT_DIR, getTodayString, writeJsonWithBackup, getBackupPath } from '../config.mjs';
 import { rebuildRealStatsFromLog } from './log-parser.mjs';
 import { calculateModelUsageCost, formatCurrency } from './pricing.mjs';
 
@@ -63,11 +63,14 @@ export function loadStats(forceReload = false) {
     } catch (_) {}
   }
 
-  // 2. 尝试从容灾备份 stats.json.bak 自动恢复
-  const bakPath = STATS_PATH + '.bak';
-  if (fs.existsSync(bakPath)) {
+  // 2. 尝试从 backups/ 独立备份目录或 legacy 备份自动容灾恢复
+  const bakPath = getBackupPath(STATS_PATH);
+  const legacyBakPath = STATS_PATH + '.bak';
+  const targetBakPath = fs.existsSync(bakPath) ? bakPath : (fs.existsSync(legacyBakPath) ? legacyBakPath : null);
+
+  if (targetBakPath) {
     try {
-      const rawBak = fs.readFileSync(bakPath, 'utf8');
+      const rawBak = fs.readFileSync(targetBakPath, 'utf8');
       if (rawBak && rawBak.trim().length > 5) {
         const parsedBak = JSON.parse(rawBak);
         if (parsedBak.summary && typeof parsedBak.summary.totalRequests === 'number') {
@@ -76,6 +79,10 @@ export function loadStats(forceReload = false) {
           if (!statsData.accounts) statsData.accounts = {};
           if (!statsData.daily) statsData.daily = {};
           saveStatsSync();
+          // 若是从 legacy 恢复的，顺便清理旧文件
+          if (targetBakPath === legacyBakPath) {
+            try { fs.unlinkSync(legacyBakPath); } catch (_) {}
+          }
           return statsData;
         }
       }
@@ -90,11 +97,7 @@ export function loadStats(forceReload = false) {
 
 export function saveStatsSync() {
   if (!statsData) return;
-  try {
-    const content = JSON.stringify(statsData, null, 2);
-    fs.writeFileSync(STATS_PATH, content, 'utf8');
-    try { fs.writeFileSync(STATS_PATH + '.bak', content, 'utf8'); } catch (_) {}
-  } catch (_) {}
+  writeJsonWithBackup(STATS_PATH, statsData);
 }
 
 export function saveStats() {
