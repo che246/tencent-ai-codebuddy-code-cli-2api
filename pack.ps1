@@ -359,7 +359,30 @@ Write-Host "      语法检查通过" -ForegroundColor Green
 Write-Host "[6/6] 压缩..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path (Split-Path $OutZip) | Out-Null
 if (Test-Path $OutZip) { Remove-Item $OutZip -Force }
-Compress-Archive -Path (Join-Path $Stage '*') -DestinationPath $OutZip -CompressionLevel Optimal
+
+# 用 tools/zip-posix.mjs 而不是 Compress-Archive。
+# 原因：Compress-Archive 与 .NET ZipFile.CreateFromDirectory 在 Windows 上都用
+# 反斜杠作为 zip 内路径分隔符，Linux/macOS 的 unzip 不认，会把
+# "src\config.mjs" 当成单层文件名，导致部署到 Linux 后代码没真正更新。
+# zip-posix.mjs 手工构造 ZIP，条目名统一用正斜杠 /，并带 UTF-8 标志位。
+$zipTool = Join-Path $Root 'tools\zip-posix.mjs'
+if (-not (Test-Path $zipTool)) { throw "缺少打包器: $zipTool" }
+& node $zipTool $Stage $OutZip
+if ($LASTEXITCODE -ne 0) { throw "zip 打包失败 (exit $LASTEXITCODE)" }
+
+# 校验：确保条目使用 POSIX 分隔符（无反斜杠）
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zipCheck = [System.IO.Compression.ZipFile]::OpenRead($OutZip)
+try {
+  $badEntries = @($zipCheck.Entries | Where-Object { $_.FullName -like '*\*' })
+  $entryCount = $zipCheck.Entries.Count
+} finally {
+  $zipCheck.Dispose()
+}
+if ($badEntries.Count -gt 0) {
+  throw "zip 内含 $($badEntries.Count) 个反斜杠路径条目，Linux 解压会失败（首个: $($badEntries[0].FullName)）"
+}
+Write-Host "      POSIX 路径校验通过 ($entryCount 个条目，0 个反斜杠)" -ForegroundColor Green
 
 $sizeKB = [math]::Round((Get-Item $OutZip).Length / 1KB, 1)
 
