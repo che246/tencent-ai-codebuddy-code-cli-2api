@@ -28,6 +28,10 @@ _dist/
 _run.out
 _run.err
 
+# 打包工具：仅在本地使用，不入公开仓库
+pack.ps1
+tools/
+
 # 局域网部署记录：含内网 IP、主机信息与部署细节，不入公开仓库
 DEPLOY.md
 

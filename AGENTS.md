@@ -104,18 +104,34 @@
 
 ---
 
-## 3. 敏感文件不入库
+## 3. 敏感文件与本地工具不入库
 
-以下文件含明文凭据，已在 `.gitignore` 中排除，**任何情况下都不要提交**：
+以下内容已在 `.gitignore` 中排除，**任何情况下都不要提交**：
+
+### 含明文凭据
 
 - `accounts.json`（含 accessToken / refreshToken）
 - `config.json`（含 apiKey / webPassword）
 - `accounts*.json` 变体
+
+### 打包与部署产物
+
 - `_dist/`（打包产物，内部含账号备份）
+- `pack.ps1`（**本地打包工具，不上传 GitHub**）
+- `tools/`（**本地打包辅助脚本，不上传 GitHub**）
+- `DEPLOY.md`（局域网部署记录，含内网 IP 与主机信息）
+
+### 调试与运行期
+
 - `.capture/`（抓包与调试日志）
 - `product.json`（上游模型快照，启动时自动生成）
+- `_run.out` / `_run.err`
 
 提交前用 `git status` 复核暂存清单，确认没有上述文件。
+
+> **打包工具规则**：`pack.ps1` 与 `tools/` 属于本地发布流程的一部分，
+> 只在当前开发机使用，不进入公开仓库。修改它们无需提交；
+> 若已在历史中被跟踪，用 `git rm --cached` 移出但保留本地文件。
 
 ---
 
