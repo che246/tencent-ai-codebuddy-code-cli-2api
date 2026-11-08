@@ -28,6 +28,9 @@ _dist/
 _run.out
 _run.err
 
+# 局域网部署记录：含内网 IP、主机信息与部署细节，不入公开仓库
+DEPLOY.md
+
 # 上游模型矩阵快照：由 /v3/config 自动同步，随上游随时漂移，不入库
 product.json
 

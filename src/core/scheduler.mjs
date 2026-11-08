@@ -1,4 +1,4 @@
-import {
+﻿import {
   config,
   accounts,
   saveAccounts,
@@ -659,6 +659,111 @@ export class AccountScheduler {
     } catch (e) {
       Logger.error('BILLING', `获取账号 [${acc.uid}] 官方积分明细失败: ${e.message}`);
       return { error: e.message };
+    }
+  }
+
+  /**
+   * 拉取某账号的「积分消耗明细」流水。
+   *
+   * 接口来源（实测，从官方 Web 前端 config chunk 中提取）：
+   *   POST {apiBase}/billing/meter/get-user-request-usage
+   *   body: { startTime: 'YYYY-MM-DD HH:mm:ss', endTime: '...', pageNum, pageSize }
+   *   头部: Authorization: Bearer <accessToken>
+   *   若为企业账号，另需 X-Enterprise-Id
+   *
+   * 返回结构（实测 data 内层）：
+   *   { total: number, data: [{ requestId, credit, model, client,
+   *                             requestTime, input, inputTrunc,
+   *                             agentPurpose, appType, subscribeType }] }
+   *
+   * 注意：这是 Web 站点专用接口，CLI 源码里没有（CLI 只上报用量，不查询流水）。
+   * 依据是官方 plans-usage 页面实际发出的请求，与 CLI 无关。
+   *
+   * @param {object} acc   账号
+   * @param {object} opts  { days: 时间跨度天数，默认 7；pageNum；pageSize }
+   */
+  static async getAccountUsageRecords(acc, opts = {}) {
+    const days = Number.isFinite(opts.days) ? Math.max(1, Math.min(90, opts.days)) : 7;
+    const pageNum = Number.isFinite(opts.pageNum) ? Math.max(1, opts.pageNum) : 1;
+    const pageSize = Number.isFinite(opts.pageSize) ? Math.max(1, Math.min(200, opts.pageSize)) : 20;
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    const now = new Date();
+    const from = new Date(now.getTime() - (days - 1) * 86400000);
+
+    const ep = endpointsFor(acc);
+    const headers = {
+      'Authorization': `Bearer ${acc.accessToken}`,
+      'User-Agent': USER_AGENT,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    // 企业账号需要带企业 ID 才能查到完整数据
+    const entId = acc.enterpriseId?.trim && acc.enterpriseId.trim();
+    if (entId) headers['X-Enterprise-Id'] = entId;
+
+    const body = JSON.stringify({
+      startTime: `${fmtDate(from)} 00:00:00`,
+      endTime: `${fmtDate(now)} 23:59:59`,
+      pageNum,
+      pageSize,
+    });
+
+    try {
+      const res = await fetch(`${ep.apiBase}/billing/meter/get-user-request-usage`, {
+        method: 'POST',
+        headers,
+        body,
+        signal: AbortSignal.timeout(20000),
+      });
+
+      const txt = await res.text();
+      let payload = null;
+      try { payload = JSON.parse(txt); } catch (_) {}
+
+      if (!payload) {
+        Logger.warn('BILLING', `账号 [${formatAccountLogName(acc)}] 消耗明细返回非 JSON (HTTP ${res.status})`);
+        return { ok: false, error: `返回非 JSON (HTTP ${res.status})`, records: [], total: 0 };
+      }
+      if (payload.code !== 0) {
+        Logger.warn('BILLING', `账号 [${formatAccountLogName(acc)}] 消耗明细查询失败: code=${payload.code} ${payload.msg || ''}`);
+        return { ok: false, error: payload.msg || `code ${payload.code}`, records: [], total: 0 };
+      }
+
+      const d = payload.data || {};
+      const rows = Array.isArray(d.data) ? d.data : (Array.isArray(d) ? d : []);
+
+      const records = rows.map((r) => ({
+        requestId: r.requestId || '',
+        credit: Number(r.credit) || 0,
+        model: r.model || '',
+        client: r.client || '',
+        // 官方字段名是 requestTime（不是 time/timestamp）
+        time: r.requestTime || '',
+        // input 是全量提示词，inputTrunc 是截断版；两者都可能缺
+        inputFull: r.input || '',
+        inputTrunc: r.inputTrunc || r.input || '',
+        agentPurpose: r.agentPurpose || '',
+        appType: r.appType || '',
+        subscribeType: r.subscribeType || '',
+      }));
+
+      const totalCredit = Math.round(records.reduce((s, x) => s + x.credit, 0) * 100) / 100;
+
+      return {
+        ok: true,
+        range: { from: fmtDate(from), to: fmtDate(now), days },
+        pageNum,
+        pageSize,
+        total: Number(d.total) || records.length,
+        pageCredit: totalCredit,
+        records,
+      };
+    } catch (e) {
+      Logger.error('BILLING', `账号 [${formatAccountLogName(acc)}] 消耗明细请求异常: ${e.message}`);
+      return { ok: false, error: e.message, records: [], total: 0 };
     }
   }
 }

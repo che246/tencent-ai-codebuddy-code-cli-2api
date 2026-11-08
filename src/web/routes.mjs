@@ -448,6 +448,38 @@ export async function handleApiRoutes(req, res, url) {
     }));
   }
 
+  // 6.6. 账号积分消耗明细流水（按账号维度，对应官方 plans-usage 页面「积分消耗明细」）
+  // 上游接口：POST /billing/meter/get-user-request-usage
+  //   参数 { startTime, endTime, pageNum, pageSize }
+  //   返回 { total, data: [{ requestId, credit, model, client, requestTime, input, ... }] }
+  if (url.pathname === '/api/accounts/usage-records' && req.method === 'GET') {
+    const uid = url.searchParams.get('uid');
+    if (!uid) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, error: '缺少 uid 参数' }));
+    }
+    const acc = accounts.find(a => a.uid === uid);
+    if (!acc) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, error: '账号不存在' }));
+    }
+
+    const days = parseInt(url.searchParams.get('days') || '7', 10);
+    const pageNum = parseInt(url.searchParams.get('page') || '1', 10);
+    const pageSize = parseInt(url.searchParams.get('pageSize') || '20', 10);
+
+    const result = await AccountScheduler.getAccountUsageRecords(acc, { days, pageNum, pageSize });
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      ...result,
+      uid: acc.uid,
+      email: acc.email,
+      note: acc.note || '',
+      region: normalizeRegion(acc.region),
+    }));
+  }
+
   // 7. 模型全量看板数据
   if (url.pathname === '/api/models-detail' && req.method === 'GET') {
     const force = url.searchParams.get('refresh') === '1';

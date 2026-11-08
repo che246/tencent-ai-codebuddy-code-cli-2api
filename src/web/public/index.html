@@ -957,6 +957,36 @@
         <button onclick="closeCreditModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
       </div>
       <div id="creditModalBody"></div>
+
+      <!-- 积分消耗明细流水（按账号维度，对应官方 plans-usage「积分消耗明细」） -->
+      <div style="margin-top:18px; border-top:1px solid var(--card-border); padding-top:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size:14px; font-weight:700;">📋 积分消耗明细</span>
+            <span class="badge badge-blue" id="usageRangeBadge">-</span>
+            <span class="badge badge-purple" id="usageTotalBadge">-</span>
+          </div>
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <div class="filter-bar" style="margin-bottom:0;" id="usageRangeTabs">
+              <button class="filter-btn" onclick="setUsageRange(3, this)">3天</button>
+              <button class="filter-btn active" onclick="setUsageRange(7, this)">7天</button>
+              <button class="filter-btn" onclick="setUsageRange(30, this)">30天</button>
+            </div>
+            <button class="btn-outline" style="font-size:11px; padding:3px 9px;" onclick="loadUsageRecords(1)">🔄 刷新</button>
+          </div>
+        </div>
+        <div id="usageRecordsBody" style="max-height:340px; overflow-y:auto;">
+          <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:12px;">点击「明细」后自动加载</div>
+        </div>
+        <div id="usagePager" style="display:none; justify-content:space-between; align-items:center; margin-top:10px; font-size:12px;">
+          <span id="usagePagerInfo" style="color:var(--text-muted);"></span>
+          <div style="display:flex; gap:6px;">
+            <button class="btn-outline" id="usagePrevBtn" style="padding:3px 10px; font-size:11px;" onclick="loadUsageRecords(currentUsagePage - 1)">← 上一页</button>
+            <button class="btn-outline" id="usageNextBtn" style="padding:3px 10px; font-size:11px;" onclick="loadUsageRecords(currentUsagePage + 1)">下一页 →</button>
+          </div>
+        </div>
+      </div>
+
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
         <button class="btn-outline" onclick="closeCreditModal()">关闭</button>
       </div>
@@ -3490,11 +3520,121 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       fetchLogs();
     }
 
+    // ─── 积分消耗明细（按账号维度）───────────────────────────────────────
+    // 数据来源：网关 /api/accounts/usage-records → 上游 /billing/meter/get-user-request-usage
+    let currentUsageUid = null;
+    let currentUsagePage = 1;
+    let currentUsageDays = 7;
+    const USAGE_PAGE_SIZE = 10;
+
+    function setUsageRange(days, el) {
+      currentUsageDays = days;
+      document.querySelectorAll('#usageRangeTabs .filter-btn').forEach(b => b.classList.remove('active'));
+      if (el) el.classList.add('active');
+      if (currentUsageUid) loadUsageRecords(1);
+    }
+
+    function fmtUsageTime(t) {
+      // 官方格式 "2026-11-08 15:14:00"，原样展示即可
+      return t || '-';
+    }
+
+    async function loadUsageRecords(page = 1) {
+      if (!currentUsageUid) return;
+      if (page < 1) page = 1;
+      currentUsagePage = page;
+
+      const box = document.getElementById('usageRecordsBody');
+      const badge = document.getElementById('usageRangeBadge');
+      const totalBadge = document.getElementById('usageTotalBadge');
+      const pager = document.getElementById('usagePager');
+
+      box.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:12px;">⏳ 正在拉取消耗流水...</div>';
+
+      try {
+        const qs = `uid=${encodeURIComponent(currentUsageUid)}&days=${currentUsageDays}&page=${page}&pageSize=${USAGE_PAGE_SIZE}`;
+        const res = await fetch('/api/accounts/usage-records?' + qs);
+        const d = await res.json();
+
+        if (!d.ok) {
+          box.innerHTML = `<div style="text-align:center; padding:20px; color:#f87171; font-size:12px;">加载失败：${escapeHtml(d.error || '未知错误')}</div>`;
+          if (pager) pager.style.display = 'none';
+          return;
+        }
+
+        if (badge) badge.innerText = `${d.range.from} ~ ${d.range.to}`;
+        if (totalBadge) totalBadge.innerText = `共 ${d.total} 条`;
+
+        if (!d.records || d.records.length === 0) {
+          box.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:12px;">该时间范围内无消耗记录</div>';
+          if (pager) pager.style.display = 'none';
+          return;
+        }
+
+        // 表格渲染
+        const rows = d.records.map(r => {
+          const creditColor = r.credit > 0 ? '#f87171' : 'var(--text-muted)';
+          const inputPreview = (r.inputTrunc || '').replace(/\s+/g, ' ').slice(0, 60);
+          const inputTitle = escapeAttr(r.inputFull || r.inputTrunc || '');
+          return `
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+              <td style="padding:8px 6px; font-size:11.5px; color:var(--text-muted); white-space:nowrap; vertical-align:top;">${escapeHtml(fmtUsageTime(r.time))}</td>
+              <td style="padding:8px 6px; font-size:11.5px; max-width:340px;" title="${inputTitle}">
+                <div style="color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(inputPreview) || '<span style="color:var(--text-muted);">(无内容)</span>'}</div>
+                <div style="color:var(--text-muted); font-size:10px; font-family:monospace; margin-top:2px;">${escapeHtml(r.requestId.slice(0, 32))}</div>
+              </td>
+              <td style="padding:8px 6px; font-size:12px; font-family:monospace; font-weight:700; color:${creditColor}; text-align:right; white-space:nowrap;">${r.credit.toFixed(2)}</td>
+              <td style="padding:8px 6px; font-size:11.5px; white-space:nowrap;">${escapeHtml(r.model)}</td>
+              <td style="padding:8px 6px; font-size:11px; color:var(--text-muted); white-space:nowrap;">${escapeHtml(r.client)}</td>
+            </tr>
+          `;
+        }).join('');
+
+        box.innerHTML = `
+          <table style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--card-border); position:sticky; top:0; background:var(--card-bg);">
+                <th style="padding:6px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600;">时间</th>
+                <th style="padding:6px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600;">请求</th>
+                <th style="padding:6px; text-align:right; font-size:11px; color:var(--text-muted); font-weight:600;">积分消耗</th>
+                <th style="padding:6px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600;">模型</th>
+                <th style="padding:6px; text-align:left; font-size:11px; color:var(--text-muted); font-weight:600;">使用端</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+
+        // 分页
+        const totalPages = Math.max(1, Math.ceil(d.total / USAGE_PAGE_SIZE));
+        if (pager) {
+          pager.style.display = 'flex';
+          const info = document.getElementById('usagePagerInfo');
+          if (info) info.innerText = `第 ${page} / ${totalPages} 页 · 本页 ${d.records.length} 条 · 本页积分 ${d.pageCredit}`;
+          const prev = document.getElementById('usagePrevBtn');
+          const next = document.getElementById('usageNextBtn');
+          if (prev) prev.disabled = page <= 1;
+          if (next) next.disabled = page >= totalPages;
+        }
+      } catch (e) {
+        box.innerHTML = `<div style="text-align:center; padding:20px; color:#f87171; font-size:12px;">加载异常：${escapeHtml(e.message)}</div>`;
+      }
+    }
+
     async function showCreditDetails(uid) {
       const modal = document.getElementById('creditModal');
       modal.style.display = 'flex';
       document.getElementById('creditModalTitle').innerText = '正在加载官方账本数据...';
       document.getElementById('creditModalBody').innerHTML = '<div style="text-align:center; padding:30px; color:var(--text-muted);">⏳ 正在向腾讯云上游调取实时积分包快照...</div>';
+
+      // 初始化消耗明细区（按当前账号加载）
+      currentUsageUid = uid;
+      currentUsagePage = 1;
+      const usageBox = document.getElementById('usageRecordsBody');
+      if (usageBox) usageBox.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:12px;">⏳ 正在拉取消耗流水...</div>';
+      const pager = document.getElementById('usagePager');
+      if (pager) pager.style.display = 'none';
+      loadUsageRecords(1);
 
       try {
         const res = await fetch('/api/accounts/credit-details?uid=' + encodeURIComponent(uid));
@@ -3599,6 +3739,11 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
 
     function closeCreditModal() {
       document.getElementById('creditModal').style.display = 'none';
+      // 清空消耗明细状态，避免下次打开残留上一个账号的数据
+      currentUsageUid = null;
+      currentUsagePage = 1;
+      const pager = document.getElementById('usagePager');
+      if (pager) pager.style.display = 'none';
     }
 
     async function openPricingModal() {
