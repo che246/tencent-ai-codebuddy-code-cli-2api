@@ -34,11 +34,31 @@ class LogDatabaseEngine {
         CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date);
         CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level);
         CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(category);
+
+        -- [网关自有策略] 账号积分变动历史留痕表
+        CREATE TABLE IF NOT EXISTS credit_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at INTEGER,
+          time TEXT,
+          date TEXT,
+          account_uid TEXT,
+          account_name TEXT,
+          delta REAL,
+          balance REAL,
+          description TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_credit_history_created_at ON credit_history(created_at);
+        CREATE INDEX IF NOT EXISTS idx_credit_history_uid ON credit_history(account_uid);
       `);
 
       this.insertStmt = this.sqliteDb.prepare(`
         INSERT INTO logs (time, date, level, category, message, meta, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      this.insertCreditStmt = this.sqliteDb.prepare(`
+        INSERT INTO credit_history (created_at, time, date, account_uid, account_name, delta, balance, description)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       // 首次初始化：若数据库为空且本地存在 gateway.log，自动无感迁移预热历史日志
@@ -272,6 +292,79 @@ class LogDatabaseEngine {
       const cutoffDateStr = new Date(cutoffTime).toISOString().slice(0, 10);
       const delStmt = this.sqliteDb.prepare('DELETE FROM logs WHERE date < ?');
       delStmt.run(cutoffDateStr);
+    } catch (_) {}
+  }
+
+  // ─── [网关自有策略] 积分变动历史留痕查询与写入接口 ────────────────────────
+  recordCreditChange({ accountUid, accountName, delta, balance, description, createdAt = Date.now(), time = null, date = null }) {
+    if (!this.useSqlite || !this.insertCreditStmt) return false;
+    try {
+      const d = new Date(createdAt);
+      const pad = (n) => String(n).padStart(2, '0');
+      const timeStr = time || `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      const dateStr = date || `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+      this.insertCreditStmt.run(
+        createdAt,
+        timeStr,
+        dateStr,
+        String(accountUid || ''),
+        String(accountName || ''),
+        Number(delta) || 0,
+        Number(balance) || 0,
+        String(description || '')
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  queryCreditHistory({ accountUid = null, limit = 100, offset = 0 } = {}) {
+    if (!this.useSqlite || !this.sqliteDb) return { total: 0, records: [] };
+    try {
+      const conditions = [];
+      const params = [];
+      if (accountUid && accountUid !== 'ALL') {
+        conditions.push('account_uid = ?');
+        params.push(accountUid);
+      }
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const countSql = `SELECT count(*) as total FROM credit_history ${whereClause}`;
+      const total = this.sqliteDb.prepare(countSql).get(...params)?.total || 0;
+
+      const dataSql = `SELECT * FROM credit_history ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`;
+      const rows = this.sqliteDb.prepare(dataSql).all(...params, limit, offset);
+
+      const records = rows.map(r => {
+        const d = new Date(r.created_at);
+        const pad = (n) => String(n).padStart(2, '0');
+        const fullTime = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        return {
+          id: r.id,
+          createdAt: r.created_at,
+          time: r.time,
+          fullTime,
+          date: r.date,
+          accountUid: r.account_uid,
+          accountName: r.account_name,
+          delta: r.delta,
+          balance: r.balance,
+          description: r.description
+        };
+      });
+
+      return { total, records };
+    } catch (_) {
+      return { total: 0, records: [] };
+    }
+  }
+
+  clearCreditHistory() {
+    if (!this.useSqlite || !this.sqliteDb) return;
+    try {
+      this.sqliteDb.exec('DELETE FROM credit_history');
+      this.sqliteDb.exec('VACUUM');
     } catch (_) {}
   }
 }

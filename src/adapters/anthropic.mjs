@@ -15,7 +15,8 @@ import {
   applyReasoningParams,
   ensureLeadingSystemMessage,
   parseModelRegion,
-  prepareUpstreamBody
+  prepareUpstreamBody,
+  DEFAULT_MAX_TOKENS
 } from '../upstream/payload.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
 import { recordApiCall } from '../core/metrics.mjs';
@@ -140,9 +141,13 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       messages: formatMessagesForUpstream(openAiMessages),
       stream: true,
       temperature: anthropicPayload.temperature ?? 1.0,
-      max_tokens: anthropicPayload.max_tokens,
+      max_tokens: anthropicPayload.max_tokens ?? DEFAULT_MAX_TOKENS,
       stream_options: { include_usage: true },
-      cache_retention: 'long'
+      cache_retention: 'long',
+      extra_vars: {
+        initiator: 'user',
+        interactionType: 'prompt'
+      }
     };
 
     if (openAiTools.length > 0) {

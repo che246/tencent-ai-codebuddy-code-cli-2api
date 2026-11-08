@@ -480,6 +480,31 @@ export async function handleApiRoutes(req, res, url) {
     }));
   }
 
+  // ─── [网关自有策略] 6.7. 积分监控与历史变动留痕接口 ───────────────────────
+  // GET /api/credits/history?limit=100&offset=0&refresh=1&uid=xxx
+  if (url.pathname === '/api/credits/history' && req.method === 'GET') {
+    const shouldRefresh = url.searchParams.get('refresh') === '1';
+    if (shouldRefresh) {
+      try {
+        await AccountScheduler.refreshStaleCredits(0, { force: true });
+      } catch (_) {}
+    }
+    const limit = Math.min(1000, Math.max(1, parseInt(url.searchParams.get('limit') || '100', 10)));
+    const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10));
+    const uid = url.searchParams.get('uid') || null;
+    const historyData = LogDatabase.queryCreditHistory({ accountUid: uid, limit, offset });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ ok: true, total: historyData.total, records: historyData.records }));
+  }
+
+  // POST /api/credits/history/clear 清空变动历史记录
+  if (url.pathname === '/api/credits/history/clear' && req.method === 'POST') {
+    LogDatabase.clearCreditHistory();
+    Logger.info('CREDIT_MONITOR', '管理员已清空积分历史变动记录');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ ok: true }));
+  }
+
   // 7. 模型全量看板数据
   if (url.pathname === '/api/models-detail' && req.method === 'GET') {
     const force = url.searchParams.get('refresh') === '1';

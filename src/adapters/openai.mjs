@@ -17,7 +17,8 @@ import {
   ensureLeadingSystemMessage,
   parseModelRegion,
   REGION_PREFIX,
-  prepareUpstreamBody
+  prepareUpstreamBody,
+  DEFAULT_MAX_TOKENS
 } from '../upstream/payload.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
 import { recordApiCall } from '../core/metrics.mjs';
@@ -125,9 +126,13 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       messages: formatMessagesForUpstream(payload.messages || []),
       stream: true,
       temperature: payload.temperature ?? 1.0,
-      max_tokens: payload.max_tokens,
+      max_tokens: payload.max_tokens ?? DEFAULT_MAX_TOKENS,
       stream_options: { include_usage: true },
-      cache_retention: typeof payload.cache_retention === 'string' ? payload.cache_retention : 'long'
+      cache_retention: typeof payload.cache_retention === 'string' ? payload.cache_retention : 'long',
+      extra_vars: payload.extra_vars || {
+        initiator: 'user',
+        interactionType: 'prompt'
+      }
     };
 
     if (Array.isArray(payload.tools) && payload.tools.length > 0) {

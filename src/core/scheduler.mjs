@@ -1,4 +1,4 @@
-﻿import {
+import {
   config,
   accounts,
   saveAccounts,
@@ -13,6 +13,7 @@
   formatAccountFullDesc
 } from '../config.mjs';
 import { Logger } from './logger.mjs';
+import { LogDatabase } from './database.mjs';
 
 // 会话粘性映射: sessionKey -> { uid, lastActive } (带 1 小时 TTL 自动清理)
 export const sessionStickyMap = new Map();
@@ -307,17 +308,43 @@ export class AccountScheduler {
       if (res.ok) {
         const data = await res.json();
         const payload = data.data || data;
+        let newCredits = null;
         if (payload.TotalCredits) {
-          acc.creditsRemain = Math.round((parseFloat(payload.TotalCredits) || 0) * 100) / 100;
+          newCredits = Math.round((parseFloat(payload.TotalCredits) || 0) * 100) / 100;
         } else if (Array.isArray(payload.Packages)) {
           let total = 0;
           for (const pkg of payload.Packages) {
             total += parseFloat(pkg.CycleRemainCapacity || 0);
           }
-          acc.creditsRemain = Math.round(total * 100) / 100;
+          newCredits = Math.round(total * 100) / 100;
         }
-        // 记录本次成功刷新的时间戳，供前端展示「最后刷新 X 前」并判断是否需要按需重拉
-        acc.creditsUpdatedAt = Date.now();
+
+        if (newCredits !== null) {
+          const prevCredits = typeof acc.creditsRemain === 'number' ? acc.creditsRemain : null;
+          acc.creditsRemain = newCredits;
+          acc.creditsUpdatedAt = Date.now();
+
+          // [网关自有策略] 积分变动监控留痕：真实查到余额与上次比对，变动即留痕
+          if (prevCredits !== null && prevCredits !== newCredits) {
+            const delta = Math.round((newCredits - prevCredits) * 100) / 100;
+            const fmtPrev = prevCredits.toLocaleString('en-US', { maximumFractionDigits: 2 });
+            const fmtNew = newCredits.toLocaleString('en-US', { maximumFractionDigits: 2 });
+            const displayName = (acc.note && typeof acc.note === 'string' && acc.note.trim())
+              ? acc.note.trim()
+              : (acc.email || acc.uid || '未知账号');
+            const desc = `余额 ${fmtPrev} → ${fmtNew}`;
+
+            LogDatabase.recordCreditChange({
+              accountUid: acc.uid,
+              accountName: displayName,
+              delta,
+              balance: newCredits,
+              description: desc
+            });
+
+            Logger.info('CREDIT_MONITOR', `账号 [${displayName}] 积分变动: ${delta > 0 ? '+' : ''}${delta} (${desc})`);
+          }
+        }
 
         // 积分已刷新充盈时，自动提前解除因 402/额度耗尽进入的全局冷却状态
         if (acc.creditsRemain > 0 && acc.cooldownUntil && acc.cooldownUntil > Date.now()) {

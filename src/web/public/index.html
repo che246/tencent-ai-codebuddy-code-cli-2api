@@ -186,7 +186,15 @@
     .log-badge-info { color: #38bdf8; font-weight: bold; width: 44px; text-align: center; }
     .log-badge-warn { color: #facc15; font-weight: bold; width: 44px; text-align: center; }
     .log-badge-error { color: #f87171; font-weight: bold; width: 44px; text-align: center; }
-    .log-cat { color: #a78bfa; font-weight: 600; width: 80px; white-space: nowrap; }
+    .log-cat { color: #a78bfa; font-weight: 600; min-width: 130px; flex-shrink: 0; white-space: nowrap; }
+    .log-cat-credit_monitor { color: #34d399 !important; }
+    .log-cat-billing { color: #38bdf8 !important; }
+    .log-cat-scheduler { color: #f472b6 !important; }
+    .log-cat-chat { color: #a78bfa !important; }
+    .log-cat-anthropic { color: #fb923c !important; }
+    .log-cat-upstream { color: #818cf8 !important; }
+    .log-cat-dispatch { color: #22d3ee !important; }
+    .log-cat-checkin { color: #4ade80 !important; }
     .log-msg { color: #e2e8f0; flex: 1; }
     .log-meta { color: #94a3b8; font-size: 11px; background: rgba(255,255,255,0.05); padding: 1px 4px; border-radius: 3px; margin-left: 6px; }
 
@@ -532,6 +540,50 @@
               </table>
             </div>
           </div>
+
+          <!-- [网关自有策略] 积分历史 变动即留痕 -->
+          <div class="card" style="margin-top:18px;">
+            <div style="margin-bottom:14px;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:15px; font-weight:700; color:var(--text-main);">积分历史</span>
+                <span style="font-size:12px; color:var(--text-muted); font-weight:normal;">每次真实查到余额与上次比对，变动即留痕</span>
+              </div>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <select id="creditHistoryLimit" onchange="loadCreditHistory()" class="select-sm" style="background:var(--card-bg, #1e293b); color:var(--text-main, #f1f5f9); border:1px solid rgba(255,255,255,0.12); border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer;">
+                  <option value="50">最近 50 条</option>
+                  <option value="100" selected>最近 100 条</option>
+                  <option value="200">最近 200 条</option>
+                  <option value="500">最近 500 条</option>
+                </select>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadCreditHistory(true)" title="立即与上游同步并刷新积分历史">🔄 刷新</button>
+                <button class="btn-outline" style="font-size:12px; padding:4px 10px; color:#f87171; border-color:rgba(248,113,113,0.3);" onclick="clearCreditHistory()" title="清空积分历史记录">🗑️ 清空</button>
+              </div>
+            </div>
+
+            <div style="overflow-x:auto; width:100%; border-radius:6px;">
+              <table style="width:100%; min-width:800px; border-collapse:collapse;">
+                <thead>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.08); text-align:left;">
+                    <th style="padding:10px 12px; width:130px; font-size:12px; color:var(--text-muted);">时间</th>
+                    <th style="padding:10px 12px; width:160px; font-size:12px; color:var(--text-muted);">账号</th>
+                    <th style="padding:10px 12px; width:120px; font-size:12px; color:var(--text-muted);">变动</th>
+                    <th style="padding:10px 12px; width:150px; font-size:12px; color:var(--text-muted);">变动后余额</th>
+                    <th style="padding:10px 12px; font-size:12px; color:var(--text-muted);">说明</th>
+                  </tr>
+                </thead>
+                <tbody id="creditHistoryBody">
+                  <tr>
+                    <td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">正在加载积分历史...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </section>
 
         <!-- 页面 3: 模型管理 (MODELS) -->
@@ -659,6 +711,7 @@
               <button class="filter-btn" onclick="setLogCategory('TOOLS', this)">TOOLS 工具</button>
               <button class="filter-btn" onclick="setLogCategory('DISPATCH', this)">DISPATCH 调度</button>
               <button class="filter-btn" onclick="setLogCategory('CHECKIN', this)">CHECKIN 签到</button>
+              <button class="filter-btn" onclick="setLogCategory('CREDIT_MONITOR', this)">CREDIT 监控</button>
               <span style="color:var(--card-border); margin: 0 4px;">|</span>
               <button class="filter-btn" onclick="setLogLevel('ALL', this)">所有级别</button>
               <button class="filter-btn" onclick="setLogLevel('ERROR', this)">仅看错误 🔴</button>
@@ -2480,8 +2533,90 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           }).join('');
         }
 
+        // [网关自有策略] 每次加载账号时同步刷新积分历史记录
+        if (!silent) {
+          loadCreditHistory();
+        }
+
       } catch (err) {
         console.error('loadAccounts render error:', err);
+      }
+    }
+
+    // ─── [网关自有策略] 积分历史变动监控留痕 ──────────────────────────────────
+    async function loadCreditHistory(forceRefresh = false) {
+      const tbody = document.getElementById('creditHistoryBody');
+      if (!tbody) return;
+      const limitEl = document.getElementById('creditHistoryLimit');
+      const limit = limitEl ? limitEl.value : 100;
+      const qs = forceRefresh ? `?limit=${limit}&refresh=1` : `?limit=${limit}`;
+
+      try {
+        const res = await fetch('/api/credits/history' + qs);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const records = data.records || [];
+
+        if (records.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">
+                暂无积分变动记录（每次真实查到余额与上次比对，变动即自动留痕）
+              </td>
+            </tr>
+          `;
+          return;
+        }
+
+        tbody.innerHTML = records.map(r => {
+          const isPositive = r.delta > 0;
+          const deltaColor = isPositive ? '#4ade80' : '#f87171';
+          const deltaSign = isPositive ? '+' : '';
+          const deltaFmt = `${deltaSign}${Number(r.delta).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+          const balanceFmt = Number(r.balance || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+          return `
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+              <td style="padding:10px 12px; font-family:monospace; font-size:12px; color:var(--text-muted);" title="${escapeHtml(r.fullTime || '')}">
+                ${escapeHtml(r.time || '')}
+              </td>
+              <td style="padding:10px 12px; font-size:13px; color:var(--text-main);">
+                ${escapeHtml(r.accountName || r.accountUid || '未知账号')}
+              </td>
+              <td style="padding:10px 12px; font-family:monospace; font-size:13px; font-weight:700; color:${deltaColor};">
+                ${deltaFmt}
+              </td>
+              <td style="padding:10px 12px; font-family:monospace; font-size:13px; font-weight:700; color:var(--text-main);">
+                ${balanceFmt}
+              </td>
+              <td style="padding:10px 12px; font-size:12px; color:var(--text-muted);">
+                ${escapeHtml(r.description || '')}
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (e) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" style="text-align:center; padding:30px; color:#f87171;">
+              加载积分历史失败: ${escapeHtml(e.message)}
+            </td>
+          </tr>
+        `;
+      }
+    }
+
+    async function clearCreditHistory() {
+      if (!confirm('确定要清空全部积分变动历史记录吗？此操作无法撤销。')) return;
+      try {
+        const res = await fetch('/api/credits/history/clear', { method: 'POST' });
+        if (res.ok) {
+          loadCreditHistory();
+        } else {
+          alert('清空失败');
+        }
+      } catch (e) {
+        alert('清空异常: ' + e.message);
       }
     }
 
@@ -2582,13 +2717,19 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         const badgeClass = item.level === 'ERROR' ? 'log-badge-error' : item.level === 'WARN' ? 'log-badge-warn' : 'log-badge-info';
         const metaHtml = item.meta ? `<span class="log-meta">${escapeHtml(JSON.stringify(item.meta))}</span>` : '';
         const timeDisplay = currentLogDate === 'ALL' ? item.time : item.time.slice(11);
+        const catClass = `log-cat log-cat-${(item.category || '').toLowerCase()}`;
+        let msgHtml = escapeHtml(item.message);
+        if (item.category === 'CREDIT_MONITOR') {
+          msgHtml = msgHtml.replace(/积分变动:\s*(\+[0-9.]+)/, '积分变动: <span style="color:#34d399; font-weight:bold;">$1</span>')
+                           .replace(/积分变动:\s*(\-[0-9.]+)/, '积分变动: <span style="color:#f87171; font-weight:bold;">$1</span>');
+        }
 
         return `
           <div class="log-row">
             <span class="log-time" title="${item.time}">${timeDisplay}</span>
             <span class="${badgeClass}">${item.level}</span>
-            <span class="log-cat">[${item.category}]</span>
-            <span class="log-msg">${escapeHtml(item.message)}${metaHtml}</span>
+            <span class="${catClass}">[${item.category}]</span>
+            <span class="log-msg">${msgHtml}${metaHtml}</span>
           </div>
         `;
       }).join('');
@@ -2601,23 +2742,23 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     function setLogCategory(cat, el) {
       logCatFilter = cat;
       el.parentElement.querySelectorAll('.filter-btn').forEach(b => {
-        if (b.innerText.includes('类别') || b.innerText.includes('CHAT') || b.innerText.includes('ANTHROPIC') || b.innerText.includes('UPSTREAM') || b.innerText.includes('TOOLS') || b.innerText.includes('DISPATCH') || b.innerText.includes('CHECKIN')) {
+        if (b.getAttribute('onclick')?.includes('setLogCategory')) {
           b.classList.remove('active');
         }
       });
       el.classList.add('active');
-      renderLogs();
+      fetchLogs();
     }
 
     function setLogLevel(lvl, el) {
       logLevelFilter = lvl;
       el.parentElement.querySelectorAll('.filter-btn').forEach(b => {
-        if (b.innerText.includes('级别') || b.innerText.includes('错误') || b.innerText.includes('警告')) {
+        if (b.getAttribute('onclick')?.includes('setLogLevel')) {
           b.classList.remove('active');
         }
       });
       el.classList.add('active');
-      renderLogs();
+      fetchLogs();
     }
 
     function filterLogs() {

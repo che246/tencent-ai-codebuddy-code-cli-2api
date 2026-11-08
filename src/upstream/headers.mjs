@@ -69,22 +69,21 @@ function assertCriticalHeaders(headers) {
 
 // ─── 构造官方全量会话与安全请求头 ───────────────────────────────────────────
 //
-// 全部依据来自**真实 CLI 抓包**（CLI 2.179.0 → POST /v2/chat/completions），
-// 抓包文件：.capture/hook/logs/chat-headers.log（tag: cli-real / cli-real2）,
-// 连跑两次结果一致。CLI 实际发送 40 个头，其中 25 个是应用层头（其余为
-// undici/axios 传输层：content-length / x-stainless-* / traceparent 等）。
+// 全部依据来自**真实 CLI 2.179.0 抓包**（CLI 2.179.0 → POST /v2/chat/completions），
+// 抓包文件：.capture/cmp/cli_2.179.0.log，完整覆盖 38 个应用层头。
 //
-// 抓包实测的 ID 关系（关键，与源码推断不同）：
-//   X-Request-ID              = 01a1b7243893774cbfe80b9d3c390cb0
-//   X-Conversation-Message-ID = 01a1b7243893774cbfe80b9d3c390cb0   ← 相同
-//   X-Conversation-Request-ID = 01a1b7243893774cbfe80b9d3c390cb0   ← 相同
-//   X-Root-Request-ID         = 01a1b7243893774cbfe80b9d3c390cb0   ← 相同
-//   X-Conversation-ID         = 01a1b724-37f7-7fd4-aaa1-8657e0f866f4  ← UUID 带横线
-//   X-Trace-ID                = <与 X-B3-TraceId 同值>
+// 抓包实测的 ID 关系（CLI 2.179.0 实测规律）：
+//   X-Request-ID              = 01a1c0d2f5ed7f77aba16ff3a55d1f5a (messageId)
+//   X-Conversation-Message-ID = 01a1c0d2f5ed7f77aba16ff3a55d1f5a (同 messageId)
+//   X-Conversation-Request-ID = 01a1c0d2f332756aa0db51966f8f4636 (conversationRequestId)
+//   X-Root-Request-ID         = 01a1c0d2f332756aa0db51966f8f4636 (同 conversationRequestId)
+//   X-Conversation-ID         = 01a1c0d2-f29b-715e-8c54-6824ec76cfe9 (UUID 带横线)
+//   X-Trace-ID                = traceId (与 X-B3-TraceId 同值，32 hex)
+//   traceparent / baggage     = W3C 标准链路追踪
+//   b3 / X-B3-*               = Zipkin B3 标准链路追踪
+//   x-stainless-*             = OpenAI SDK 7.39.0 指纹
 //
-// UUID 版本：CLI 用 uuidv7（见 package/dist/codebuddy-headless.js 模块 34506
-//   nH:()=>uuidv7，toString() 在 byte 3/5/7/9 后插横线）。
-//   前缀 01a1b724 是毫秒时间戳编码，所以同一次请求里生成的几个 ID 前缀相同。
+// UUID 版本：CLI 用 uuidv7（见 package/dist/codebuddy-headless.js 模块 34506）。
 
 /**
  * 生成 UUID v7（带横线，36 字符）——对齐 CLI 的 uuidv7().toString()。
@@ -153,10 +152,15 @@ function resolveDomainHeader(acc) {
  * @param {object} acc         账号对象（用于取 domain / region），可选
  */
 export function buildOfficialUpstreamHeaders(accessToken, targetModel, sessionKey, uid, isGzip = false, acc = null) {
-  // ── 一次请求内共用的时间戳与 ID ──────────────────────────────
-  // 抓包实测：Request-ID / Message-ID / Conversation-Request-ID / Root-Request-ID
-  // 四者**完全同值**，都取 messageId；Conversation-ID 是独立的 UUID v7（带横线）。
+  // ── 一次请求内的时间戳与 ID ──────────────────────────────
+  // 抓包实测（CLI 2.179.0）：
+  //   X-Request-ID              = messageId
+  //   X-Conversation-Message-ID = messageId (与 Request-ID 相同)
+  //   X-Conversation-Request-ID = conversationRequestId
+  //   X-Root-Request-ID         = conversationRequestId (与 Conversation-Request-ID 相同)
+  //   X-Conversation-ID         = conversationId (UUID v7 带横线)
   const messageId = uuidv7Hex();
+  const conversationRequestId = uuidv7Hex();
 
   // Conversation-ID：会话标识。CLI 侧是 session.id（UUID v7 带横线）。
   // 网关的 sessionKey 可能是 md5 或客户端 X-Session-ID：
@@ -170,9 +174,6 @@ export function buildOfficialUpstreamHeaders(accessToken, targetModel, sessionKe
     conversationId = rawSession;
   } else if (/^[0-9a-f]{32}$/i.test(rawSession)) {
     // 任意 32 位 hex（md5 / 去横线 UUID）→ 强制改写为合法 UUID v7：
-    // 保留前 12 位（当作时间戳高位以便同会话稳定），重新打版本位与变体位。
-    // 抓包实测 CLI 的 X-Conversation-ID 是标准 v7（第 3 组首字符为 7，
-    // 第 4 组首字符为 8/9/a/b），不能直接加横线了事。
     const h = rawSession.toLowerCase();
     const g4 = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);   // 变体位 10xx
     conversationId = [
@@ -186,8 +187,16 @@ export function buildOfficialUpstreamHeaders(accessToken, targetModel, sessionKe
     conversationId = uuidv7();                                     // 无法识别 → 新 v7
   }
 
-  // X-Trace-ID 与 B3 同值：32 位 hex
+  // 链路追踪 ID：W3C 与 B3 双链支持（CLI 2.179.0 实测）
   const traceId = uuidv7Hex();
+  const spanId = crypto.randomBytes(8).toString('hex');
+  const parentSpanId = crypto.randomBytes(8).toString('hex');
+
+  // OS 与平台架构（对齐 Stainless SDK）
+  const osName = process.platform === 'win32' ? 'Windows'
+    : (process.platform === 'darwin' ? 'MacOS' : 'Linux');
+  const archName = process.arch === 'x64' ? 'x64'
+    : (process.arch === 'arm64' ? 'arm64' : process.arch);
 
   const headers = {
     'Authorization': `Bearer ${accessToken}`,
@@ -199,12 +208,30 @@ export function buildOfficialUpstreamHeaders(accessToken, targetModel, sessionKe
     'X-Requested-With': 'XMLHttpRequest',
     'X-CodeBuddy-Request': '1',
 
-    // ── 链路 ID（四者同值）──────────────────────────────
+    // ── 链路 ID（CLI 2.179.0 实测两两对齐）────────────────
     'X-Request-ID': messageId,
     'X-Conversation-Message-ID': messageId,
-    'X-Conversation-Request-ID': messageId,
-    'X-Root-Request-ID': messageId,
+    'X-Conversation-Request-ID': conversationRequestId,
+    'X-Root-Request-ID': conversationRequestId,
     'X-Conversation-ID': conversationId,
+
+    // ── Stainless SDK 指纹头（CLI 2.179.0 实测升级为 7.39.0）─
+    'x-stainless-arch': archName,
+    'x-stainless-lang': 'js',
+    'x-stainless-os': osName,
+    'x-stainless-package-version': '7.39.0',
+    'x-stainless-retry-count': '0',
+    'x-stainless-runtime': 'node',
+    'x-stainless-runtime-version': process.version,
+
+    // ── 链路追踪双协议（W3C + B3，CLI 2.179.0 实测）───────
+    'traceparent': `00-${traceId}-${spanId}-01`,
+    'baggage': `codebuddy.session_id=${conversationId},codebuddy.conversation_request_id=${conversationRequestId}`,
+    'b3': `${traceId}-${spanId}-1-${parentSpanId}`,
+    'X-B3-TraceId': traceId,
+    'X-B3-SpanId': spanId,
+    'X-B3-ParentSpanId': parentSpanId,
+    'X-B3-Sampled': '1',
     'X-Trace-ID': traceId,
 
     // ── 身份与产品 ─────────────────────────────────────

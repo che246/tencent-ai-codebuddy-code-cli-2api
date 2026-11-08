@@ -86,7 +86,8 @@ export function ensureLeadingSystemMessage(messages, regionOrAcc) {
 //      ReasoningEffortSupportRule 剥离 reasoning_effort。
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-// 官方默认值（仅在客户端未指定时兜底）
+// 官方默认值（仅在客户端未指定时兜底，依据 CLI 2.179.0 实测）
+export const DEFAULT_MAX_TOKENS = 128000;
 const DEFAULT_EFFORT = 'high';
 const DEFAULT_VERBOSITY = 'high';
 const DEFAULT_SUMMARY = 'auto';
