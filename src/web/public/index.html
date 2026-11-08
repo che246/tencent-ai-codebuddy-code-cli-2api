@@ -275,6 +275,7 @@
         </div>
         <div class="topbar-actions">
           <button id="btnAllCheckin" class="btn-success" onclick="runCheckin()">⚡ 全员打卡签到</button>
+          <button class="btn-outline" onclick="forceRefreshCredits()" title="立即从上游重新拉取所有账号的可用积分（忽略 30 秒最小间隔）">🔄 刷新积分</button>
           <button class="btn-primary" onclick="startOAuth()">➕ 扫码添加账号</button>
           <button id="btnLogoutBtn" class="btn-outline" style="padding:5px 12px; font-size:12px; display:none;" onclick="logoutWebAuth()" title="退出控制台并锁定">🔒 退出</button>
         </div>
@@ -298,13 +299,13 @@
             <div class="card-title" style="flex-wrap:wrap; gap:12px;">
               <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                 <span>📈 业务用量与请求统计概览</span>
-                <span class="badge badge-blue" id="badgeMetricsRange">全部区间</span>
+                <span class="badge badge-blue" id="badgeMetricsRange">今天区间</span>
                 <span id="badgeCurrentAccountPill" class="badge badge-purple" style="font-size:11px; padding:3px 8px;" title="网关当前服务调用账号">👤 当前使用: 加载中</span>
               </div>
               <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                 <div class="filter-bar" style="margin-bottom:0;" id="metricsRangeTabs">
-                  <button class="filter-btn active" onclick="switchMetricsRange('all', this)">全部</button>
-                  <button class="filter-btn" onclick="switchMetricsRange('today', this)">今天</button>
+                  <button class="filter-btn" onclick="switchMetricsRange('all', this)">全部</button>
+                  <button class="filter-btn active" onclick="switchMetricsRange('today', this)">今天</button>
                   <button class="filter-btn" onclick="switchMetricsRange('yesterday', this)">昨天</button>
                   <button class="filter-btn" onclick="switchMetricsRange('7d', this)">7天</button>
                   <button class="filter-btn" onclick="switchMetricsRange('30d', this)">30天</button>
@@ -516,7 +517,9 @@
                     <th>账号昵称</th>
                     <th>备注说明</th>
                     <th>Token有效期 / 换发</th>
-                    <th>可用积分 (Credits)</th>
+                    <th>可用积分 (Credits)
+                      <span id="creditsFreshBadge" style="font-weight:normal; font-size:10px; color:var(--text-muted); display:block; margin-top:2px;" title="积分定时任务每 5 分钟刷新一次；此处显示最近一次成功刷新的时间"></span>
+                    </th>
                     <th>已消耗 Token</th>
                     <th>今日签到</th>
                     <th>实时并发</th>
@@ -932,7 +935,7 @@
         <h3 style="margin:0; font-size:16px; color:var(--accent);">腾讯云官方原始数据 · <span id="rawModalTitle"></span></h3>
         <button onclick="closeRawModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
       </div>
-      <p style="color:var(--text-muted); font-size:12px; margin-bottom:10px;">以下为上游 <code>copilot.tencent.com/v3/config</code> 下发的 100% 原始未裁剪键值对：</p>
+      <p style="color:var(--text-muted); font-size:12px; margin-bottom:10px;">以下为上游 <code>/v3/config</code> 接口下发的 100% 原始未裁剪键值对（国内版 <code>copilot.tencent.com</code> / 国际版 <code>www.codebuddy.ai</code>）：</p>
       <pre id="rawModalCode"></pre>
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px;">
         <button class="btn-primary" onclick="copyRawCode()">📋 复制 JSON</button>
@@ -947,7 +950,9 @@
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <div>
           <h3 style="margin:0; font-size:16px; color:var(--accent);" id="creditModalTitle">💎 官方积分构成明细</h3>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:3px;">对齐 https://www.codebuddy.cn/profile/plans-usage 官方实时套餐与用量账本</div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:3px;">
+            对齐 <a id="creditModalPlansLink" href="https://www.codebuddy.cn/profile/plans-usage" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:underline;">官方实时套餐与用量账本</a>
+          </div>
         </div>
         <button onclick="closeCreditModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
       </div>
@@ -970,7 +975,7 @@
           <label id="regionCnLabel" style="flex:1; cursor:pointer; padding:9px 10px; border-radius:8px; border:2px solid var(--primary); background:rgba(2,132,199,0.12); text-align:center; font-size:12px;">
             <input type="radio" name="oauthRegion" value="cn" checked onchange="onOAuthRegionChange('cn')" style="margin-right:5px; vertical-align:middle;">
             <span style="font-weight:bold;">国内版</span>
-            <div style="font-size:10px; color:var(--text-muted); margin-top:3px;">copilot.tencent.com</div>
+            <div style="font-size:10px; color:var(--text-muted); margin-top:3px;">www.codebuddy.cn</div>
           </label>
           <label id="regionIntlLabel" style="flex:1; cursor:pointer; padding:9px 10px; border-radius:8px; border:2px solid transparent; background:rgba(255,255,255,0.04); text-align:center; font-size:12px;">
             <input type="radio" name="oauthRegion" value="intl" onchange="onOAuthRegionChange('intl')" style="margin-right:5px; vertical-align:middle;">
@@ -983,7 +988,8 @@
         </div>
       </div>
 
-      <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">可直接在当前浏览器打开，或复制授权链接发送至手机/微信扫码：</p>
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px;">选好版本后点击下方按钮生成授权链接，可直接在浏览器打开，或复制发送至手机/微信扫码：</p>
+      <button class="btn-primary" id="btnRequestOAuthLink" style="width:100%; padding:10px 18px; font-size:14px; font-weight:bold; margin-bottom:14px;" onclick="requestOAuthLink()">🔗 获取授权链接</button>
       <div style="margin: 16px 0;">
         <a id="loginLink" href="#" target="_blank" style="display:block; padding:10px 18px; background:var(--primary); color:#fff; border-radius:8px; text-decoration:none; font-weight:bold; box-shadow:0 4px 12px rgba(2, 132, 199, 0.3); margin-bottom:12px;">
           👉 直接在浏览器打开授权页
@@ -993,7 +999,7 @@
           <button class="btn-copy" id="btnCopyLoginUrl" style="padding:8px 14px; font-size:12px; white-space:nowrap;" onclick="copyLoginUrl()">📋 复制链接</button>
         </div>
       </div>
-      <div id="pollStatus" style="color:#facc15; font-size:13px; margin: 12px 0;">等待手机扫码授权中...</div>
+      <div id="pollStatus" style="color:#facc15; font-size:13px; margin: 12px 0;">请先选择账号所属版本，再点击「获取授权链接」</div>
       <button class="btn-outline" onclick="closeModal()">取消</button>
     </div>
   </div>
@@ -1152,7 +1158,7 @@
       </div>
 
       <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px; line-height:1.5;">
-        选择要配置降级链的主模型。<b>cn:</b> 为国内版（copilot.tencent.com），<b>intl:</b> 为国际版（www.codebuddy.ai）。
+        选择要配置降级链的主模型。<b>cn:</b> 为国内版（www.codebuddy.cn），<b>intl:</b> 为国际版（www.codebuddy.ai）。
         同一模型在两区都有时会分别列出，按需选择。
       </p>
 
@@ -1300,7 +1306,7 @@
       loadLogDates().then(() => fetchLogs());
       stopAppPolling();
       pollIntervals.push(setInterval(() => loadMetrics(currentMetricsRange), 5000));
-      pollIntervals.push(setInterval(loadAccounts, 5000));
+      pollIntervals.push(setInterval(() => loadAccounts(true), 5000));
       pollIntervals.push(setInterval(fetchLogs, 2500));
     }
 
@@ -1369,7 +1375,15 @@
       document.getElementById('pageCrumbSub').innerText = crumb.sub;
 
       if (pageKey === 'overview') loadMetrics(currentMetricsRange);
-      if (pageKey === 'accounts') loadAccounts();
+      if (pageKey === 'accounts') {
+        // 切到账号页时：若距上次进入已超过阈值，触发一次按需刷新积分，
+        // 避免看到的是最多 5 分钟前的旧数据。
+        if (Date.now() - lastAccountsEnterAt > CREDITS_STALE_MS) {
+          creditsForceNext = true;
+        }
+        lastAccountsEnterAt = Date.now();
+        loadAccounts();
+      }
       if (pageKey === 'models') loadModels();
       if (pageKey === 'logs') { loadLogDates().then(() => fetchLogs()); }
       if (pageKey === 'settings') loadSettings();
@@ -1941,7 +1955,8 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       fetchLogs();
     }
 
-    let currentMetricsRange = 'all';
+    // 默认区间：只显示今天。用户仍可手动切到 昨天 / 7天 / 30天 / 全部。
+    let currentMetricsRange = 'today';
 
     function switchMetricsRange(range, el) {
       currentMetricsRange = range;
@@ -2122,11 +2137,55 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
     }
 
-    async function loadAccounts() {
+    // ─── 积分刷新状态 ─────────────────────────────────────────────────────
+    // forceNext: 下一次 loadAccounts 是否带 ?refresh=1（用户手动点刷新 / 切页触发）
+    let creditsForceNext = false;
+    // 页面级别的「最后进入时间」，用于切页判断是否值得向上游拉一次
+    let lastAccountsEnterAt = 0;
+    const CREDITS_STALE_MS = 30000;   // 超过 30s 未刷新就按需拉一次上游
+
+    /** 把毫秒差格式化成「刚刚 / 12 秒前 / 3 分钟前」 */
+    function fmtAgo(ts) {
+      if (!ts) return '从未刷新';
+      const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+      if (s < 5) return '刚刚';
+      if (s < 60) return `${s} 秒前`;
+      if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+      if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+      return `${Math.floor(s / 86400)} 天前`;
+    }
+
+    /** 手动强制刷新积分（忽略 30s 最小间隔，直接拉上游） */
+    async function forceRefreshCredits() {
+      const btn = event?.target;
+      const oldText = btn?.innerText;
+      if (btn) { btn.disabled = true; btn.innerText = '⏳ 刷新中...'; }
       try {
-        const res = await fetch('/api/accounts');
+        await fetch('/api/accounts?refresh=1').then(r => r.json());
+        await loadAccounts();
+      } catch (e) {
+        alert('刷新积分失败: ' + e.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerText = oldText || '🔄 刷新积分'; }
+      }
+    }
+
+    async function loadAccounts(silent = false) {
+      try {
+        // 按需刷新策略：
+        //   · creditsForceNext=true  → 带 ?refresh=1 强制拉上游（切页/手动刷新时置位）
+        //   · silent=true（5 秒轮询）→ 带 ?stale=0 只读缓存，避免每 5 秒打一次计费接口
+        //   · 其他情况               → 交给服务端判断 stale（>30s 才拉）
+        let qs = '';
+        if (creditsForceNext) {
+          qs = '?refresh=1';
+          creditsForceNext = false;
+        } else if (silent) {
+          qs = '?stale=0';
+        }
+        const res = await fetch('/api/accounts' + qs);
         const data = await res.json();
-        
+
         let totalCredits = 0;
         let inFlightTotal = 0;
         let activeAccCount = 0;
@@ -2136,6 +2195,24 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           inFlightTotal += (a.inFlight || 0);
           if (a.status === 'healthy' && !a.isCooldown) activeAccCount++;
         });
+
+        // 积分新鲜度徽章：取所有账号里最近一次刷新时间
+        const freshBadge = document.getElementById('creditsFreshBadge');
+        if (freshBadge && data.length > 0) {
+          const newest = data.reduce((mx, a) => Math.max(mx, a.creditsUpdatedAt || 0), 0);
+          const oldest = data.reduce((mn, a) => {
+            const t = a.creditsUpdatedAt || 0;
+            return (mn === 0 || (t > 0 && t < mn)) ? t : mn;
+          }, 0);
+          if (!newest) {
+            freshBadge.innerText = '从未刷新';
+            freshBadge.style.color = '#f87171';
+          } else {
+            const staleSec = Math.floor((Date.now() - oldest) / 1000);
+            freshBadge.innerText = `刷新于 ${fmtAgo(newest)}`;
+            freshBadge.style.color = staleSec > 600 ? '#facc15' : 'var(--text-muted)';
+          }
+        }
 
         document.getElementById('kpiTotalAcc').innerText = data.length;
         document.getElementById('kpiActiveAcc').innerText = activeAccCount;
@@ -2234,7 +2311,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           const accRegion = a.region === 'intl' ? 'intl' : 'cn';
           const regionBadge = accRegion === 'intl'
             ? `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(168,85,247,0.18); color:#c084fc; border:1px solid rgba(168,85,247,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','cn')" title="当前为国际版 (www.codebuddy.ai)。点击切换为国内版">🌐 国际版</span>`
-            : `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(2,132,199,0.18); color:#38bdf8; border:1px solid rgba(2,132,199,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','intl')" title="当前为国内版 (copilot.tencent.com)。点击切换为国际版">🇨🇳 国内版</span>`;
+            : `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(2,132,199,0.18); color:#38bdf8; border:1px solid rgba(2,132,199,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','intl')" title="当前为国内版 (www.codebuddy.cn)。点击切换为国际版">🇨🇳 国内版</span>`;
 
           const isPinned = currentSettings && currentSettings.pinnedAccount === a.uid;
           const pinBtn = isPinned
@@ -2310,6 +2387,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
               <td>
                 <b style="color:#4ade80; font-size:14px; cursor:pointer;" onclick="showCreditDetails('${a.uid}')" title="点击查看官方 plans-usage 积分构成明细">${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b>
                 <button class="btn-copy" style="margin-left:6px; font-size:10px; padding:1px 5px;" onclick="showCreditDetails('${a.uid}')" title="查看官方 plans-usage 积分构成明细">明细</button>
+                <span style="display:block; font-size:10px; color:var(--text-muted); margin-top:2px;" title="该账号积分最后一次从上游成功刷新的时间">${fmtAgo(a.creditsUpdatedAt)}</span>
               </td>
               <td>
                 <b style="color:var(--accent); font-family:monospace; font-size:13px; cursor:help;" title="${tokenTip}">${a.totalTokensDisplay || '0'}</b>
@@ -3220,12 +3298,46 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       if (hint) {
         hint.innerHTML = region === 'intl'
           ? '国际版账号（www.codebuddy.ai）。额外可用 GPT-6 / Grok / Gemini 系列，需用国际版账号扫码。'
-          : '国内版账号（copilot.tencent.com）。包含 DeepSeek / GLM / Kimi 等，需用国内账号扫码。';
+          : '国内版账号（www.codebuddy.cn）。包含 DeepSeek / GLM / Kimi 等，需用国内账号扫码。';
       }
+
+      // 切换区域后，旧的授权链接立即作废（state 与区域是绑定的），
+      // 清空展示避免用户复制到上一个区域的链接。
+      const linkEl = document.getElementById('loginLink');
+      const urlInput = document.getElementById('loginUrlInput');
+      const statusEl = document.getElementById('pollStatus');
+      if (linkEl) {
+        linkEl.removeAttribute('href');
+        linkEl.innerText = '👉 请先点击「获取授权链接」';
+      }
+      if (urlInput) urlInput.value = '';
+      if (statusEl) statusEl.innerText = `已选择${region === 'intl' ? '国际版' : '国内版'}，请点击「获取授权链接」`;
+      if (typeof pollTimer !== 'undefined' && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     }
 
     async function startOAuth() {
-      // 默认沿用上次选择；首次为 cn
+      // ── 时序修正 ──────────────────────────────────────────────
+      // 原实现一进来就读单选框并立即请求后端，但此时弹窗尚未打开，
+      // 用户根本没机会选择区域，因此永远发出默认的 cn
+      // → 国际版账号拿到的总是国内版授权页。
+      // 现在改为：先打开弹窗让用户选，再由点击「获取授权链接」触发请求。
+      const checked = document.querySelector('input[name="oauthRegion"]:checked');
+      if (checked) oauthRegion = checked.value;
+
+      // 同步卡片高亮与提示文案（首次打开时保证 UI 与 oauthRegion 一致）
+      onOAuthRegionChange(oauthRegion);
+
+      document.getElementById('oauthModal').style.display = 'flex';
+      document.getElementById('pollStatus').innerText = '请先选择账号所属版本，再点击「获取授权链接」';
+      document.getElementById('loginLink').removeAttribute('href');
+      document.getElementById('loginLink').innerText = '👉 请先选择版本并获取授权链接';
+      const urlInputEl = document.getElementById('loginUrlInput');
+      if (urlInputEl) urlInputEl.value = '';
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    /** 真正请求后端生成授权链接（用户选好区域后点按钮触发） */
+    async function requestOAuthLink() {
       const checked = document.querySelector('input[name="oauthRegion"]:checked');
       if (checked) oauthRegion = checked.value;
 
@@ -3300,7 +3412,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     // 两版的上游路径完全同构，但 token 按签发域校验：切换后原 token 会 401，
     // 需重新扫码授权。因此这里要明确告知用户，避免误以为切换即生效。
     async function switchAccountRegion(uid, targetRegion) {
-      const label = targetRegion === 'intl' ? '国际版 (www.codebuddy.ai)' : '国内版 (copilot.tencent.com)';
+      const label = targetRegion === 'intl' ? '国际版 (www.codebuddy.ai)' : '国内版 (www.codebuddy.cn)';
       const msg = `确认将该账号切换为「${label}」？\n\n`
         + `注意：账号 token 按签发域校验，切换后原 token 将无法使用，\n`
         + `需要在对应版本重新扫码授权（OAuth 里选择相同版本）。\n\n`
@@ -3390,6 +3502,17 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         if (d.error) throw new Error(d.error);
 
         document.getElementById('creditModalTitle').innerText = `💎 官方积分明细 · 账号 [${d.email || d.uid}]${d.note ? ' (' + d.note + ')' : ''}`;
+
+        // 官方 plans-usage 链接按账号区域切换：
+        //   国内版 → www.codebuddy.cn    国际版 → www.codebuddy.ai
+        const plansLink = document.getElementById('creditModalPlansLink');
+        if (plansLink) {
+          const plansHost = d.region === 'intl' ? 'www.codebuddy.ai' : 'www.codebuddy.cn';
+          const plansUrl = `https://${plansHost}/profile/plans-usage`;
+          plansLink.href = plansUrl;
+          plansLink.innerText = plansUrl;
+          plansLink.title = `${d.region === 'intl' ? '国际版' : '国内版'}官方套餐与用量账本`;
+        }
 
         const inUseHtml = d.inUsagePackage ? `
           <div style="background:rgba(56, 189, 248, 0.08); border:1px solid rgba(56, 189, 248, 0.25); border-radius:8px; padding:14px; margin-bottom:16px;">

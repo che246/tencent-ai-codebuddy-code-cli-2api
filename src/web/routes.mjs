@@ -343,9 +343,19 @@ export async function handleApiRoutes(req, res, url) {
     return;
   }
 
-  // 6. 账号列表查询
   // 6. 账号列表查询 (包含模型锁池状态、锁定剩余时间及原因)
+  //    支持 ?refresh=1 强制刷新积分（忽略最小间隔）；
+  //    默认行为：若某账号积分已超过 30s 未刷新则顺带拉一次上游，
+  //    这样用户切到账号页看到的就是较新数据，不必等 5 分钟定时任务。
   if (url.pathname === '/api/accounts' && req.method === 'GET') {
+    const forceRefresh = url.searchParams.get('refresh') === '1';
+    const staleDisabled = url.searchParams.get('stale') === '0';
+    if (forceRefresh || !staleDisabled) {
+      try {
+        await AccountScheduler.refreshStaleCredits(forceRefresh ? 0 : 30000, { force: forceRefresh });
+      } catch (_) { /* 刷新失败不影响列表返回 */ }
+    }
+
     const stats = loadStats();
     const accStatsMap = stats.accounts || {};
     const advanceDays = (typeof config.tokenRefreshAdvanceDays === 'number' && config.tokenRefreshAdvanceDays > 0) ? config.tokenRefreshAdvanceDays : 7;
@@ -390,6 +400,9 @@ export async function handleApiRoutes(req, res, url) {
         // 所属区域：前后端都用它决定上游 base 域名
         region: normalizeRegion(a.region),
         creditsRemain: a.creditsRemain,
+        // 积分最后一次成功从上游刷新的时间戳（毫秒），前端据此展示「X 前刷新」，
+        // 并在超过阈值时主动带 ?refresh=1 重新拉取。
+        creditsUpdatedAt: a.creditsUpdatedAt || 0,
         totalTokens: tokens,
         totalTokensDisplay: formatTokenNumber(tokens),
         inputTokens: accStats.inputTokens || 0,
@@ -427,6 +440,10 @@ export async function handleApiRoutes(req, res, url) {
       uid: acc.uid,
       email: acc.email,
       note: acc.note || '',
+      // 区域：前端据此生成对应版本的官方 plans-usage 链接
+      //   国内版 → https://www.codebuddy.cn/profile/plans-usage
+      //   国际版 → https://www.codebuddy.ai/profile/plans-usage
+      region: normalizeRegion(acc.region),
       ...details
     }));
   }
@@ -507,7 +524,22 @@ export async function handleApiRoutes(req, res, url) {
       const oauthData = await oauthRes.json();
       const payload = oauthData.data || oauthData;
       const state = payload.state;
-      const loginUrl = payload.authUrl || ep.login(state);
+
+      // 登录页 URL 的取舍（实测依据）：
+      //   服务端下发的 authUrl 形如
+      //     cn:   https://copilot.tencent.com/login?platform=CLI&state=...
+      //     intl: https://www.codebuddy.ai/login?platform=CLI&state=...
+      //   —— 是 **api 域**、无尾斜杠、无 version 参数。
+      //
+      //   而官方 CLI 实际在浏览器里打开的是
+      //     https://www.codebuddy.cn/login/?platform=CLI&state=...&version=v2.179.0
+      //   —— **web 域**、带尾斜杠、带 version。
+      //
+      //   说明 CLI 拿到 authUrl 后会重写一次。用户点「复制链接」是在浏览器打开，
+      //   必须用重写后的形态，否则会落到 api 域（页面不存在）。
+      //   因此这里**优先用 ep.login(state)**（已按官方最终形态拼接），
+      //   仅当本地拼接失败时才回落到服务端下发的 authUrl 兜底。
+      const loginUrl = ep.login(state) || payload.authUrl;
 
       Logger.info('OAUTH', `发起设备码授权 [${REGION_BASE[region].label}], state: ${state}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });

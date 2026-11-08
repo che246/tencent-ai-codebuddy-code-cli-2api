@@ -4,8 +4,6 @@ import {
   saveAccounts,
   getTodayString,
   getLocalTimeString,
-  SUMMARY_URL,
-  CHECKIN_URL,
   endpointsFor,
   resolveAccountRegion,
   normalizeRegion,
@@ -292,7 +290,12 @@ export class AccountScheduler {
       await this.refreshSessionToken(acc);
     }
     try {
-      const res = await fetch(SUMMARY_URL, {
+      // 计费接口按账号所属区域路由：国内版 copilot.tencent.com，
+      // 国际版 www.codebuddy.ai。两者路径完全一致，仅域名不同。
+      // 原来用的是模块级 SUMMARY_URL 常量（写死国内版），
+      // 导致国际版账号的积分请求打错域，一直刷新不到 → 界面显示 0。
+      const ep = endpointsFor(acc);
+      const res = await fetch(ep.summary, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${acc.accessToken}`,
@@ -313,6 +316,8 @@ export class AccountScheduler {
           }
           acc.creditsRemain = Math.round(total * 100) / 100;
         }
+        // 记录本次成功刷新的时间戳，供前端展示「最后刷新 X 前」并判断是否需要按需重拉
+        acc.creditsUpdatedAt = Date.now();
 
         // 积分已刷新充盈时，自动提前解除因 402/额度耗尽进入的全局冷却状态
         if (acc.creditsRemain > 0 && acc.cooldownUntil && acc.cooldownUntil > Date.now()) {
@@ -333,6 +338,43 @@ export class AccountScheduler {
     } catch (e) {
       Logger.error('BILLING', `账号 [${formatAccountFullDesc(acc)}] 刷新积分失败: ${e.message}`);
     }
+  }
+
+  /**
+   * 按需刷新积分（页面切换 / 手动点刷新时调用）。
+   *
+   * 目的：定时任务 5 分钟一轮，用户切到账号页看到的是最多 5 分钟前的缓存。
+   * 若某账号距上次成功刷新已超过 minAgeMs，就主动拉一次上游。
+   *
+   * @param {number} minAgeMs 最小间隔，默认 30 秒。
+   *   设这个门槛是为了避免用户频繁切页时把上游计费接口打爆。
+   * @param {object} opts { force: boolean } force=true 时忽略 minAgeMs 强制刷新
+   * @returns {Promise<{refreshed:number, skipped:number}>}
+   */
+  static async refreshStaleCredits(minAgeMs = 30000, opts = {}) {
+    const now = Date.now();
+    const force = opts.force === true;
+    let refreshed = 0;
+    let skipped = 0;
+    const tasks = [];
+
+    for (const acc of accounts) {
+      if (!acc.accessToken) { skipped++; continue; }
+      const last = acc.creditsUpdatedAt || 0;
+      if (!force && last > 0 && (now - last) < minAgeMs) { skipped++; continue; }
+      tasks.push(
+        this.refreshCredits(acc)
+          .then(() => { refreshed++; })
+          .catch(() => { /* refreshCredits 内部已记录日志 */ })
+      );
+    }
+
+    if (tasks.length > 0) {
+      // 并发拉取（各账号独立，互不影响）
+      await Promise.all(tasks);
+      Logger.info('BILLING', `按需刷新积分：实际刷新 ${refreshed} 个，跳过 ${skipped} 个（间隔未到或无 token）`);
+    }
+    return { refreshed, skipped };
   }
 
   // 官方同款 Token 续期换发 (对齐 package: ExternalLinkAuthenticationProvider.refreshSession)

@@ -1,13 +1,16 @@
 # 凭据与敏感数据（严禁提交）
 accounts.json
+accounts.json.*
 accounts*.json
 !accounts.example.json
 # config.json 含 apiKey / webPassword，只跟踪 config.example.json 模板
 config.json
+config.json.*
 !config.example.json
 stats.json
 *.db
 *.bak
+*.bak-*
 .env
 *.log
 

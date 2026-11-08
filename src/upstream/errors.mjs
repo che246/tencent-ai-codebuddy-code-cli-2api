@@ -12,7 +12,10 @@ export const ServerErrorCode = {
   ConversationLimitExceeded: 10105,
   ModelNotFound: 11102,
   ContextTooLong: 11115,        // 输入 token 超出模型上下文窗口 (PTL)
-  RequestIllegal: 11128,        // 请求非法（国际版：首条消息必须是 system prompt）
+  RequestIllegal: 11128,        // 请求非法。实测两种触发场景：
+                                //   1) 国际版首条消息不是 system prompt
+                                //   2) User-Agent 命中风控（如含 "python-requests"）
+                                //      返回 {"code":11128,"msg":"request illegal"}
   InvalidParams: 11133,
   ModelNotAllowed: 11158,       // 模型不被当前用户类型允许（如个人免费账号访问 GPT/Grok）
   UsageLimitExceeded: 14001,    // 个人额度用尽
@@ -115,6 +118,13 @@ export function formatOpenAIError(status, upstreamText) {
 
     if (bizCode === ServerErrorCode.ModelNotFound) {
       code = "model_not_found";
+      type = "invalid_request_error";
+    } else if (bizCode === ServerErrorCode.RequestIllegal) {
+      // 11128: 上游"请求非法"。实测由两类原因触发——
+      //   a) 国际版首条消息不是 system prompt（网关已自动补齐）
+      //   b) User-Agent 命中风控黑名单（如含 python-requests）
+      // 单独给一个 code，便于排查时一眼分辨是哪个原因。
+      code = "request_illegal";
       type = "invalid_request_error";
     } else if (bizCode === ServerErrorCode.InvalidParams) {
       code = "invalid_request_parameters";

@@ -56,8 +56,7 @@ export function baseForAccount(acc) {
 }
 
 /** 拼出某账号的完整端点 URL */
-export function endpointsFor(acc) {
-  const b = baseForAccount(acc);
+export function endpointsFor(acc) {  const b = baseForAccount(acc);
   return {
     apiBase: b.api,
     webBase: b.web,
@@ -72,7 +71,24 @@ export function endpointsFor(acc) {
     authRefresh: `${b.api}/v2/plugin/auth/token/refresh`,
     accounts: `${b.api}/v2/plugin/accounts`,
     loginAccount: (state) => `${b.api}/v2/plugin/login/account?state=${encodeURIComponent(state)}`,
-    login: (state) => `${b.web}/login?platform=CLI&state=${state}`,
+    /**
+     * 登录页 URL。
+     *
+     * 官方 CLI 实际打开的页面（实测）：
+     *   https://www.codebuddy.cn/login/?platform=CLI&state=<uuid>&version=v2.179.0
+     * 三个要点与网关原实现不同：
+     *   1. 路径带尾斜杠：/login/ 而非 /login
+     *   2. 带 version 参数，值为 v<CURRENT_VERSION>（注意前缀是 "v"）
+     *   3. state 与 version 的顺序不敏感，但都必须在
+     *
+     * 注意：服务端 /v2/plugin/auth/state 下发的 authUrl 是
+     *   cn:   https://copilot.tencent.com/login?platform=CLI&state=...
+     *   intl: https://www.codebuddy.ai/login?platform=CLI&state=...
+     * 即**不带**尾斜杠、**不带** version，且 host 是 api 域。
+     * 这说明 CLI 打开页面前会做一次重写（换成 web 域 + 补 version + 补斜杠），
+     * 网关按官方最终打开的形态拼接，与浏览器实际访问的 URL 一致。
+     */
+    login: (state) => `${b.web}/login/?platform=CLI&state=${encodeURIComponent(state)}&version=v${CURRENT_VERSION}`,
   };
 }
 

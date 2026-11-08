@@ -267,7 +267,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
             // 国际版要求首条消息必须是 system，缺则补一条（国内版不受影响）
             upstreamPayload.messages = ensureLeadingSystemMessage(upstreamPayload.messages, acc.region);
             const { body, isGzip } = prepareUpstreamBody(upstreamPayload);
-            const headers = buildOfficialUpstreamHeaders(acc.accessToken, curModel, sessionKey, acc.uid, isGzip);
+            const headers = buildOfficialUpstreamHeaders(acc.accessToken, curModel, sessionKey, acc.uid, isGzip, acc);
 
             // 按账号所属区域选择上游（国内 / 国际），端点结构完全一致
             const ep = endpointsFor(acc);
