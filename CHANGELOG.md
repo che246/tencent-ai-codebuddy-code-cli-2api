@@ -8,6 +8,37 @@
 
 ---
 
+## [2.179.0-gw.3] - 2026-11-10
+
+### 功能增强与思考档位策略 (Features & Thinking Policy Alignment)
+- **网关思考档位策略配置 (Thinking Policy)**：
+  - 在网关核心配置与内存状态中引入 `thinkingPolicy`（含 `enabled` 开关、`defaultLevel` 默认网关档位、`overrideMode` 覆盖策略模式以及 `modelLevels` 逐模型覆盖矩阵）。
+  - 支持三种档位改写优先级模式：
+    - `client_first`（客户端优先）：客户端没传档位时才补「网关档位」，客户端指定的值优先保留。
+    - `gateway_level_only`（网关优先 · 只覆盖档位）：客户端传的档位一律改写为「网关档位」，但尊重客户端「关闭思考」指令。
+    - `gateway_override_all`（网关优先 · 档位与开关一起覆盖）：连客户端「关闭思考」也改写成开启 + 「网关档位」。
+  - 涉及文件：[`src/config.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/config.mjs)、[`src/upstream/payload.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/payload.mjs)
+- **多模型思考档位平滑自适应 (Clamping & Fallback)**：
+  - 建立官方 EXTENDED_THINKING_LEVELS 档位梯队权重：`minimal (1) < low (2) < medium (3) < high (4) < xhigh (5) < max (6)`。
+  - 实现 `clampThinkingLevel` 规整函数：当指定档位超出模型支持能力时，自动平滑落到不高于它的最高支持档；若低于模型最低支持档，自动使用模型最低支持档兜底。
+  - 遵循模型 `canDisableThinking` 与 `onlyReasoning` 元数据，可关思考的模型支持 `off`（上游映射为 `none`）；强制思考的模型不可关闭，平滑回退至最低档。
+  - 不支持推理的模型严格按官方 `ReasoningEffortSupportRule` 剥离全部推理参数（`reasoning_effort` / `reasoning_summary` / `verbosity`），杜绝上游 400 异常。
+  - 涉及文件：[`src/upstream/payload.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/payload.mjs)
+- **Web 控制台「思考档位」策略卡片与「模型与档位」管理**：
+  - 在「策略设置」页面新增「思考档位」策略卡片，支持开启/关闭总开关、选择默认网关档位以及单选切换 3 种改写优先级模式，UI 样式与说明文字 100% 像素级对齐。
+  - 侧边栏原「模型管理」导航升级为「模型与档位」。
+  - 在模型矩阵表格新增「网关档位」列，根据每个模型在 `product.json` 中声明的 `supportedEfforts` 与可关闭属性动态生成下拉选择框（`默认 (跟随网关)`、`off (关闭思考)` 与具体支持档位），用户切换即时热生效并自动持久化。
+  - 涉及文件：[`src/web/public/index.html`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/public/index.html)、[`src/web/routes.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/routes.mjs)
+- **REST 运维接口扩展**：
+  - `GET /api/settings` 与 `POST /api/settings` 扩展支持 `thinkingPolicy` 的获取与热更新持久化。
+  - 新增 `POST /api/models/thinking-level` 接口，支持轻量级单模型网关档位原子设置。
+  - 涉及文件：[`src/web/routes.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/routes.mjs)
+- **验证与测试 (Verification)**：
+  - 编写并执行自动化测试套件：验证 7 大典型场景（未启用策略默认行为、`client_first`、`gateway_level_only`、`gateway_override_all`、跨档向下 Clamp、强制思考模型兜底、不支持推理模型整体剥离），全部断言 100% 通过。
+  - 回归测试：官方 CLI 2.179.0 流式守卫（Stream Guard）7 种空流及超时场景 100% 保持通过。
+
+---
+
 ## [2.179.0-gw.2] - 2026-11-10
 
 ### 缺陷修复与体验优化 (Fixes & UI Enhancement)

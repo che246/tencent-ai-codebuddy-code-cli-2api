@@ -1,6 +1,6 @@
 import zlib from 'node:zlib';
 import { Logger } from '../core/logger.mjs';
-import { normalizeRegion, resolveAccountRegion, REGION_INTL } from '../config.mjs';
+import { normalizeRegion, resolveAccountRegion, REGION_INTL, getThinkingPolicy } from '../config.mjs';
 
 // ─── 针对腾讯上游 11-128 渠道指纹检测的语义等价清洗 ─────────────────────────
 export function sanitizeChannelFingerprints(text, role) {
@@ -84,7 +84,18 @@ export function ensureLeadingSystemMessage(messages, regionOrAcc) {
 //   2. 客户端显式传入的值必须优先保留，不得被网关默认值覆盖。
 //   3. 模型不支持推理（supportsReasoningEffort === false）时，按官方
 //      ReasoningEffortSupportRule 剥离 reasoning_effort。
+//   4. 网关思考档位策略（thinkingPolicy）：支持 client_first / gateway_level_only / gateway_override_all
+//      以及逐模型覆盖与不高于所选档的最高支持档平滑 clamp。
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+export const EFFORT_RANK = {
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  max: 6
+};
 
 // 官方默认值（仅在客户端未指定时兜底，依据 CLI 2.179.0 实测）
 export const DEFAULT_MAX_TOKENS = 128000;
@@ -115,8 +126,64 @@ function isThinkingDisabled(payload) {
   return payload.thinking?.type === 'disabled' || payload.enable_thinking === false;
 }
 
+function getModelSupportedEfforts(modelMeta) {
+  if (!modelMeta) return null;
+  const r = modelMeta.reasoning;
+  if (Array.isArray(r?.supportedEfforts) && r.supportedEfforts.length > 0) {
+    return r.supportedEfforts;
+  }
+  if (typeof r?.effort === 'string' && r.effort) {
+    return [r.effort];
+  }
+  return null;
+}
+
+function getLowestEffort(supported) {
+  if (!supported || supported.length === 0) return null;
+  const sorted = [...supported].sort((a, b) => (EFFORT_RANK[a] || 99) - (EFFORT_RANK[b] || 99));
+  return sorted[0];
+}
+
 /**
- * 把客户端推理参数规整成官方上游格式（客户端优先，缺省用官方默认值）。
+ * 将目标思考档位规范化并映射到模型支持的档位（不高于目标档位的最高支持档）。
+ * @param {string} targetLevel 目标档位（如 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'）
+ * @param {object|undefined} modelMeta 模型元数据
+ * @returns {string} 适配模型后的 effort：'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+ */
+export function clampThinkingLevel(targetLevel, modelMeta) {
+  const norm = normalizeEffort(targetLevel) || 'high';
+
+  // 1. 关闭思考 (off / none)
+  if (norm === 'none') {
+    const canDisable = modelMeta?.reasoning?.canDisableThinking !== false && !modelMeta?.onlyReasoning;
+    if (canDisable) {
+      return 'none';
+    }
+    // 强制思考的模型无法关闭思考，按规则"落到不高于它的最高支持档" -> 降到最低支持档
+    const supported = getModelSupportedEfforts(modelMeta);
+    return getLowestEffort(supported) || modelMeta?.reasoning?.defaultEffort || 'low';
+  }
+
+  // 2. 具体档位 (minimal ~ max)
+  const supported = getModelSupportedEfforts(modelMeta);
+  if (!supported || supported.length === 0) {
+    return norm;
+  }
+
+  const targetRank = EFFORT_RANK[norm] || 4;
+  // 找出所有 rank <= targetRank 的支持档
+  const candidates = supported.filter(e => EFFORT_RANK[e] && EFFORT_RANK[e] <= targetRank);
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => (EFFORT_RANK[b] || 0) - (EFFORT_RANK[a] || 0));
+    return candidates[0];
+  }
+
+  // 若没有不高于 targetRank 的档位，落到最低支持档
+  return getLowestEffort(supported) || norm;
+}
+
+/**
+ * 把客户端推理参数规整成官方上游格式（客户端优先，缺省用官方默认值；或按网关思考策略改写）。
  * @param {object} upstreamPayload 待发送的上游请求体（会被就地修改）
  * @param {object} payload 客户端原始请求体
  * @param {object|undefined} modelMeta 模型能力元数据
@@ -127,21 +194,7 @@ export function applyReasoningParams(upstreamPayload, payload, modelMeta) {
   delete upstreamPayload.thinking;
   delete upstreamPayload.reasoning;
 
-  const clientEffort = pickClientEffort(payload);
-  const normalized = normalizeEffort(clientEffort);
-  const disabled = isThinkingDisabled(payload) || normalized === 'none';
-
-  // reasoning_effort：客户端 > 模型支持判定 > 默认
   const supportsEffort = modelMeta ? modelMeta.supportsReasoningEffort !== false : true;
-  if (disabled) {
-    upstreamPayload.reasoning_effort = 'none';
-  } else if (normalized) {
-    upstreamPayload.reasoning_effort = normalized;
-  } else if (supportsEffort) {
-    upstreamPayload.reasoning_effort = DEFAULT_EFFORT;
-  } else {
-    delete upstreamPayload.reasoning_effort;
-  }
 
   // 模型明确不支持推理时，官方 ReasoningEffortSupportRule 会整体剥离
   if (!supportsEffort) {
@@ -149,6 +202,63 @@ export function applyReasoningParams(upstreamPayload, payload, modelMeta) {
     delete upstreamPayload.reasoning_summary;
     delete upstreamPayload.verbosity;
     return upstreamPayload;
+  }
+
+  const clientEffort = pickClientEffort(payload);
+  const normalizedClient = normalizeEffort(clientEffort);
+  const clientDisabled = isThinkingDisabled(payload) || normalizedClient === 'none';
+
+  const policy = getThinkingPolicy();
+
+  let finalEffort;
+
+  if (!policy.enabled) {
+    // 未启用策略：保持官方 CLI 默认行为（客户端显式值优先，缺省用官方默认值 high）
+    if (clientDisabled) {
+      finalEffort = 'none';
+    } else if (normalizedClient) {
+      finalEffort = clampThinkingLevel(normalizedClient, modelMeta);
+    } else {
+      finalEffort = clampThinkingLevel(DEFAULT_EFFORT, modelMeta);
+    }
+  } else {
+    // 启用了网关思考档位策略
+    const modelId = modelMeta?.id || payload?.model || upstreamPayload?.model;
+    const modelOverride = modelId && policy.modelLevels?.[modelId];
+    const targetGatewayLevel = (modelOverride && modelOverride !== 'default')
+      ? modelOverride
+      : policy.defaultLevel || 'high';
+
+    const mode = policy.overrideMode || 'client_first';
+
+    if (mode === 'gateway_override_all') {
+      // 模式 3：网关优先 · 档位与开关一起覆盖：连客户端「关闭思考」也改写成开启 + 「网关档位」
+      finalEffort = clampThinkingLevel(targetGatewayLevel, modelMeta);
+    } else if (mode === 'gateway_level_only') {
+      // 模式 2：网关优先 · 只覆盖档位：客户端传的档位一律改写为「网关档位」，但尊重客户端「关闭思考」
+      if (clientDisabled) {
+        finalEffort = 'none';
+      } else {
+        finalEffort = clampThinkingLevel(targetGatewayLevel, modelMeta);
+      }
+    } else {
+      // 模式 1：客户端优先：客户端没传档位时才补「网关档位」 (client_first)
+      if (clientDisabled) {
+        finalEffort = 'none';
+      } else if (normalizedClient) {
+        finalEffort = clampThinkingLevel(normalizedClient, modelMeta);
+      } else {
+        finalEffort = clampThinkingLevel(targetGatewayLevel, modelMeta);
+      }
+    }
+  }
+
+  if (finalEffort === 'none') {
+    upstreamPayload.reasoning_effort = 'none';
+  } else if (finalEffort) {
+    upstreamPayload.reasoning_effort = finalEffort;
+  } else {
+    upstreamPayload.reasoning_effort = DEFAULT_EFFORT;
   }
 
   // verbosity / reasoning_summary：客户端优先，缺省用官方默认值

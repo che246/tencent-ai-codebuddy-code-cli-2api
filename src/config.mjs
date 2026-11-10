@@ -423,3 +423,66 @@ export function isStepUnavailableByBlacklist(bareId, region) {
   const intlBlocked = isModelBlacklisted(`${REGION_INTL}:${bare}`, bare, REGION_INTL);
   return cnBlocked && intlBlocked;
 }
+
+// ─── 思考档位策略 ───────────────────────────────────────────────────────────
+// 网关级思考策略（默认关闭）：
+//   enabled: 是否开启档位策略
+//   defaultLevel: 默认网关档位 (minimal | low | medium | high | xhigh | max)
+//   overrideMode:
+//     - 'client_first': 客户端优先（客户端没传档位时才补「网关档位」）
+//     - 'gateway_level_only': 网关优先 · 只覆盖档位（客户端传的档位一律改写为「网关档位」，但尊重客户端「关闭思考」）
+//     - 'gateway_override_all': 网关优先 · 档位与开关一起覆盖（连客户端「关闭思考」也改写成开启 + 「网关档位」）
+//   modelLevels: 逐模型独立覆盖目标档位（{ [modelId]: 'off' | 'minimal' | ... }）
+export const VALID_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const VALID_OVERRIDE_MODES = ['client_first', 'gateway_level_only', 'gateway_override_all'];
+
+export const DEFAULT_THINKING_POLICY = {
+  enabled: false,
+  defaultLevel: 'high',
+  overrideMode: 'client_first',
+  modelLevels: {}
+};
+
+export function getThinkingPolicy() {
+  const p = config.thinkingPolicy;
+  if (!p || typeof p !== 'object') {
+    return { ...DEFAULT_THINKING_POLICY, modelLevels: {} };
+  }
+  return {
+    enabled: Boolean(p.enabled),
+    defaultLevel: VALID_THINKING_LEVELS.includes(p.defaultLevel) ? p.defaultLevel : 'high',
+    overrideMode: VALID_OVERRIDE_MODES.includes(p.overrideMode) ? p.overrideMode : 'client_first',
+    modelLevels: (p.modelLevels && typeof p.modelLevels === 'object') ? { ...p.modelLevels } : {}
+  };
+}
+
+export function setThinkingPolicy(newPolicy) {
+  if (!newPolicy || typeof newPolicy !== 'object') return getThinkingPolicy();
+  const current = getThinkingPolicy();
+  config.thinkingPolicy = {
+    enabled: typeof newPolicy.enabled === 'boolean' ? newPolicy.enabled : current.enabled,
+    defaultLevel: VALID_THINKING_LEVELS.includes(newPolicy.defaultLevel) ? newPolicy.defaultLevel : current.defaultLevel,
+    overrideMode: VALID_OVERRIDE_MODES.includes(newPolicy.overrideMode) ? newPolicy.overrideMode : current.overrideMode,
+    modelLevels: (newPolicy.modelLevels && typeof newPolicy.modelLevels === 'object') ? { ...newPolicy.modelLevels } : current.modelLevels
+  };
+  saveConfig();
+  return config.thinkingPolicy;
+}
+
+export function setModelThinkingLevel(modelId, level) {
+  if (!modelId || typeof modelId !== 'string') return getThinkingPolicy();
+  const current = getThinkingPolicy();
+  const modelLevels = { ...current.modelLevels };
+  if (!level || level === 'default') {
+    delete modelLevels[modelId];
+  } else {
+    modelLevels[modelId] = level;
+  }
+  config.thinkingPolicy = {
+    ...current,
+    modelLevels
+  };
+  saveConfig();
+  return config.thinkingPolicy;
+}
+

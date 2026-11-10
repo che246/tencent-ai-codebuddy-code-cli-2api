@@ -244,7 +244,7 @@
         </div>
         <div class="nav-item" onclick="switchPage('models', this)">
           <span class="nav-icon">📋</span>
-          <span>模型管理</span>
+          <span>模型与档位</span>
         </div>
 
         <div class="nav-label">客户端配置</div>
@@ -654,6 +654,7 @@
                   <th>上下文窗口</th>
                   <th>最大输出</th>
                   <th>思考档位 (Reasoning)</th>
+                  <th>网关档位</th>
                   <th>特性标签</th>
                   <th>操作</th>
                 </tr>
@@ -893,6 +894,60 @@
                     <span style="font-size:12px; color:var(--text-muted); font-weight:bold;">天</span>
                   </div>
                   <button class="btn-primary" style="padding:6px 12px; font-size:12px; white-space:nowrap;" onclick="saveTokenAdvanceDays()">保存天数</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 思考档位策略卡片 -->
+          <div class="card" style="margin-top: 20px;">
+            <div class="card-title">
+              <span>思考档位</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:16px;">
+              <!-- 启用思考档位策略 -->
+              <div style="display:flex; align-items:center; gap:8px;">
+                <label style="display:inline-flex; align-items:center; gap:8px; cursor:pointer; font-size:13.5px; font-weight:600; color:var(--text-main);">
+                  <input type="checkbox" id="chkThinkingEnabled" onchange="saveThinkingPolicyFromUi()" style="width:16px; height:16px; cursor:pointer;">
+                  <span>启用思考档位策略</span>
+                </label>
+              </div>
+
+              <!-- 默认网关档位 -->
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:13px; font-weight:600; color:var(--text-main);">默认网关档位</label>
+                <select id="selDefaultThinkingLevel" class="search-input" style="width:100%; max-width:420px; padding:7px 10px; font-size:13px;" onchange="saveThinkingPolicyFromUi()">
+                  <option value="minimal">minimal</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high" selected>high</option>
+                  <option value="xhigh">xhigh</option>
+                  <option value="max">max</option>
+                </select>
+                <div style="font-size:12px; color:var(--text-muted); line-height:1.6;">
+                  模型没配单独档位时用这一档（客户端没传档位时网关补充；网关优先模式下也是改写目标）；模型不支持时落到不高于它的最高支持档。单个模型可在「模型与档位」页的「网关档位」列覆盖
+                </div>
+              </div>
+
+              <!-- 网关优先 / 客户端优先 -->
+              <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px;">
+                <div style="font-size:13px; font-weight:600; color:var(--text-main);">网关优先 / 客户端优先</div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                  <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; color:var(--text-main);">
+                    <input type="radio" name="thinkingOverrideMode" value="client_first" checked onchange="saveThinkingPolicyFromUi()">
+                    <span>客户端优先：客户端没传档位时才补「网关档位」</span>
+                  </label>
+                  <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; color:var(--text-main);">
+                    <input type="radio" name="thinkingOverrideMode" value="gateway_level_only" onchange="saveThinkingPolicyFromUi()">
+                    <span>网关优先 · 只覆盖档位：客户端传的档位一律改写为「网关档位」，但尊重客户端「关闭思考」</span>
+                  </label>
+                  <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; color:var(--text-main);">
+                    <input type="radio" name="thinkingOverrideMode" value="gateway_override_all" onchange="saveThinkingPolicyFromUi()">
+                    <span>网关优先 · 档位与开关一起覆盖：连客户端「关闭思考」也改写成开启 + 「网关档位」</span>
+                  </label>
+                </div>
+                <div style="font-size:12px; color:var(--text-muted); line-height:1.6; margin-top:4px;">
+                  逐模型的目标档在「模型与档位」页每行的「网关档位」列（选项即该模型「支持的思考档位」原样，可关思考的模型另有 off）；未单独配置时用上面的「默认网关档位」；模型不支持所选档时落到不高于它的最高支持档
                 </div>
               </div>
             </div>
@@ -1624,6 +1679,19 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           document.getElementById('badgeTokenAdvanceDays').innerText = `提前 ${s.tokenRefreshAdvanceDays || 7} 天自动换发`;
         }
 
+        // 思考档位策略
+        if (s.thinkingPolicy) {
+          currentThinkingPolicy = s.thinkingPolicy;
+          if (document.getElementById('chkThinkingEnabled')) {
+            document.getElementById('chkThinkingEnabled').checked = Boolean(s.thinkingPolicy.enabled);
+          }
+          if (document.getElementById('selDefaultThinkingLevel')) {
+            document.getElementById('selDefaultThinkingLevel').value = s.thinkingPolicy.defaultLevel || 'high';
+          }
+          const radio = document.querySelector(`input[name="thinkingOverrideMode"][value="${s.thinkingPolicy.overrideMode || 'client_first'}"]`);
+          if (radio) radio.checked = true;
+        }
+
         // 规范化多级备用模型降级链配置并渲染
         if (s.modelFallback && typeof s.modelFallback === 'object') {
           const normalized = {};
@@ -2036,6 +2104,49 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
       await loadSettings();
       fetchLogs();
+    }
+
+    // ─── 思考档位策略 ─────────────────────────────────────────────────────────
+    let currentThinkingPolicy = {
+      enabled: false,
+      defaultLevel: 'high',
+      overrideMode: 'client_first',
+      modelLevels: {}
+    };
+
+    async function saveThinkingPolicyFromUi() {
+      const enabled = Boolean(document.getElementById('chkThinkingEnabled')?.checked);
+      const defaultLevel = document.getElementById('selDefaultThinkingLevel')?.value || 'high';
+      const checked = document.querySelector('input[name="thinkingOverrideMode"]:checked');
+      const overrideMode = checked ? checked.value : 'client_first';
+
+      currentThinkingPolicy.enabled = enabled;
+      currentThinkingPolicy.defaultLevel = defaultLevel;
+      currentThinkingPolicy.overrideMode = overrideMode;
+
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ thinkingPolicy: currentThinkingPolicy })
+        });
+      } catch (_) {}
+    }
+
+    async function updateModelThinkingLevel(modelId, level) {
+      if (!currentThinkingPolicy.modelLevels) currentThinkingPolicy.modelLevels = {};
+      if (level === 'default') {
+        delete currentThinkingPolicy.modelLevels[modelId];
+      } else {
+        currentThinkingPolicy.modelLevels[modelId] = level;
+      }
+      try {
+        await fetch('/api/models/thinking-level', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelId, level })
+        });
+      } catch (_) {}
     }
 
     // 默认区间：只显示今天。用户仍可手动切到 昨天 / 7天 / 30天 / 全部。
@@ -2817,8 +2928,15 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     async function loadModels(force = false) {
       try {
         document.getElementById('modelTotalBadge').innerText = '正在同步...';
-        const res = await fetch('/api/models-detail' + (force ? '?refresh=1' : ''));
+        const [res, setRes] = await Promise.all([
+          fetch('/api/models-detail' + (force ? '?refresh=1' : '')),
+          fetch('/api/settings')
+        ]);
         allModels = await res.json();
+        try {
+          const s = await setRes.json();
+          if (s.thinkingPolicy) currentThinkingPolicy = s.thinkingPolicy;
+        } catch (_) {}
         await refreshBlacklistState();
         document.getElementById('modelTotalBadge').innerText = `已同步 ${allModels.length} 款模型`;
         renderModels();
@@ -2945,7 +3063,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
 
       if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
         return;
       }
 
@@ -2974,11 +3092,36 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
         const outFmt = m.maxOutputTokens >= 1000 ? `${(m.maxOutputTokens/1000).toFixed(0)}K` : (m.maxOutputTokens || '-');
 
         let reasoningHtml = '<span style="color:var(--text-muted);">不支持</span>';
+        let gwReasoningHtml = '<span style="color:var(--text-muted);">-</span>';
         if (m.reasoning || m.supportsReasoning || m.onlyReasoning) {
           const r = m.reasoning || {};
           const efforts = Array.isArray(r.supportedEfforts) ? r.supportedEfforts.join('/') : (r.defaultEffort || 'high');
           const disableTag = r.canDisableThinking ? '<span style="color:var(--text-muted);font-size:10px;">(可关)</span>' : '<span style="color:#f59e0b;font-size:10px;">(强制)</span>';
           reasoningHtml = `<span class="badge badge-purple">🧠 ${efforts}</span> ${disableTag}`;
+
+          const canDisable = r.canDisableThinking !== false && !m.onlyReasoning;
+          let supported = [];
+          if (Array.isArray(r.supportedEfforts) && r.supportedEfforts.length > 0) {
+            supported = r.supportedEfforts;
+          } else if (typeof r.effort === 'string' && r.effort) {
+            supported = [r.effort];
+          } else {
+            supported = ['low', 'medium', 'high', 'xhigh', 'max'];
+          }
+
+          const curLevel = (currentThinkingPolicy.modelLevels && currentThinkingPolicy.modelLevels[m.id]) || 'default';
+          let opts = `<option value="default"${curLevel === 'default' ? ' selected' : ''}>默认 (跟随网关)</option>`;
+          if (canDisable) {
+            opts += `<option value="off"${curLevel === 'off' ? ' selected' : ''}>off (关闭思考)</option>`;
+          }
+          for (const eff of supported) {
+            opts += `<option value="${eff}"${curLevel === eff ? ' selected' : ''}>${eff}</option>`;
+          }
+          gwReasoningHtml = `
+            <select class="search-input" style="padding:3px 6px; font-size:11px; min-width:115px; border-radius:6px; background:var(--surface);" onchange="updateModelThinkingLevel('${escapeAttr(m.id)}', this.value)">
+              ${opts}
+            </select>
+          `;
         }
 
         const desc = m.descriptionZh || m.descriptionEn || '-';
@@ -3063,6 +3206,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             <td><span class="badge ${m.maxInputTokens >= 900000 ? 'badge-purple' : ''}">${ctxFmt}</span></td>
             <td>${outFmt}</td>
             <td>${reasoningHtml}</td>
+            <td>${gwReasoningHtml}</td>
             <td>
               ${m.supportsToolCall ? '<span class="badge badge-blue" title="支持工具调用">🛠️ 工具</span> ' : ''}
               ${m.supportsImages ? '<span class="badge badge-ok" title="支持多模态视觉">👁️ 视觉</span> ' : ''}

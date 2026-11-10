@@ -16,7 +16,10 @@ import {
   REGION_BASE,
   getModelBlacklist,
   setModelBlacklist,
-  isModelBlacklisted
+  isModelBlacklisted,
+  getThinkingPolicy,
+  setThinkingPolicy,
+  setModelThinkingLevel
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -162,7 +165,8 @@ export async function handleApiRoutes(req, res, url) {
       maxLogDbSizeMb: config.maxLogDbSizeMb || 30,
       logDbSizeMb: LogDatabase.getSizeMb(),
       autoCheckin: Boolean(config.autoCheckin),
-      modelBlacklist: getModelBlacklist()
+      modelBlacklist: getModelBlacklist(),
+      thinkingPolicy: getThinkingPolicy()
     }));
   }
 
@@ -173,6 +177,9 @@ export async function handleApiRoutes(req, res, url) {
     req.on('end', () => {
       try {
         const body = JSON.parse(b);
+        if (body.thinkingPolicy && typeof body.thinkingPolicy === 'object') {
+          setThinkingPolicy(body.thinkingPolicy);
+        }
         if (typeof body.concurrencyLimitEnabled === 'boolean') {
           config.concurrencyLimitEnabled = body.concurrencyLimitEnabled;
         }
@@ -551,6 +558,31 @@ export async function handleApiRoutes(req, res, url) {
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ success: true, blacklist: clean, count: clean.length }));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+  }
+
+  // 7.3 单个模型网关思考档位配置更新
+  if (url.pathname === '/api/models/thinking-level' && req.method === 'POST') {
+    let b = '';
+    await new Promise((resolve) => {
+      req.on('data', (c) => { b += c; });
+      req.on('end', resolve);
+    });
+    try {
+      const body = JSON.parse(b || '{}');
+      const modelId = typeof body.modelId === 'string' ? body.modelId.trim() : '';
+      if (!modelId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, error: '缺少 modelId' }));
+      }
+      const level = typeof body.level === 'string' ? body.level.trim() : 'default';
+      const updated = setModelThinkingLevel(modelId, level);
+      Logger.info('CONFIG', `已更新模型 [${modelId}] 网关思考档位为: ${level}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: true, modelId, level, thinkingPolicy: updated }));
     } catch (e) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ success: false, error: e.message }));
