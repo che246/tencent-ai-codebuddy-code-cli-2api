@@ -11,6 +11,11 @@
 ## [2.179.0-gw.3] - 2026-11-10
 
 ### 功能增强与思考档位策略 (Features & Thinking Policy Alignment)
+- **严格遵循「客户端 > 上游默认 > 网关默认」档位决议链路**：
+  - 对齐官方 CLI 实测源码（`codebuddy-headless.js`）：`normalizeReasoningEffort(ep) ?? normalizeReasoningEffort(el.reasoning?.defaultEffort) ?? normalizeReasoningEffort(el.reasoning?.effort)`。
+  - 客户端显式指定的档位最优先；客户端未指定档位时，优先采用各模型在 `product.json` 官方声明的 `defaultEffort` / `effort` 上游默认档（如 `glm-5.3` 默认 `max`、`minimax-m2.7` 默认 `medium`、`deepseek-v4.1-flash` 默认 `high`）；仅在上游未标明默认档时才回落到网关配置的全局默认档兜底。
+  - 控制台「模型与档位」表格下拉列表动态标注各模型的上游基准（如 `默认 (上游: max)`），清晰展示决议基准。
+  - 涉及文件：[`src/upstream/payload.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/payload.mjs)、[`src/web/public/index.html`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/public/index.html)
 - **网关思考档位策略配置 (Thinking Policy)**：
   - 在网关核心配置与内存状态中引入 `thinkingPolicy`（含 `enabled` 开关、`defaultLevel` 默认网关档位、`overrideMode` 覆盖策略模式以及 `modelLevels` 逐模型覆盖矩阵）。
   - 支持三种档位改写优先级模式：

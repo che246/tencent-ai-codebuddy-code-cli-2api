@@ -183,7 +183,19 @@ export function clampThinkingLevel(targetLevel, modelMeta) {
 }
 
 /**
+ * 获取模型的官方上游默认档位（对齐 CLI: normalizeReasoningEffort(el.reasoning?.defaultEffort) ?? normalizeReasoningEffort(el.reasoning?.effort)）
+ * @param {object|undefined} modelMeta 模型能力元数据
+ * @returns {string|undefined} 归一化后的上游默认档位（如 'high', 'medium', 'max' 等）
+ */
+export function getUpstreamDefaultEffort(modelMeta) {
+  if (!modelMeta) return undefined;
+  const raw = modelMeta.reasoning?.defaultEffort ?? modelMeta.reasoning?.effort;
+  return normalizeEffort(raw);
+}
+
+/**
  * 把客户端推理参数规整成官方上游格式（客户端优先，缺省用官方默认值；或按网关思考策略改写）。
+ * 档位解析核心优先级：客户端 > 上游默认 > 网关默认。
  * @param {object} upstreamPayload 待发送的上游请求体（会被就地修改）
  * @param {object} payload 客户端原始请求体
  * @param {object|undefined} modelMeta 模型能力元数据
@@ -208,47 +220,58 @@ export function applyReasoningParams(upstreamPayload, payload, modelMeta) {
   const normalizedClient = normalizeEffort(clientEffort);
   const clientDisabled = isThinkingDisabled(payload) || normalizedClient === 'none';
 
+  // 优先级体系：客户端 > 上游默认 > 网关默认（严格对齐 CodeBuddy CLI 源码）
+  const upstreamDefault = getUpstreamDefaultEffort(modelMeta);
   const policy = getThinkingPolicy();
+  const gatewayDefault = policy.defaultLevel || DEFAULT_EFFORT;
 
   let finalEffort;
 
   if (!policy.enabled) {
-    // 未启用策略：保持官方 CLI 默认行为（客户端显式值优先，缺省用官方默认值 high）
+    // 未启用网关策略：遵循「客户端 > 上游默认 > 网关默认」
     if (clientDisabled) {
       finalEffort = 'none';
     } else if (normalizedClient) {
       finalEffort = clampThinkingLevel(normalizedClient, modelMeta);
+    } else if (upstreamDefault) {
+      finalEffort = clampThinkingLevel(upstreamDefault, modelMeta);
     } else {
-      finalEffort = clampThinkingLevel(DEFAULT_EFFORT, modelMeta);
+      finalEffort = clampThinkingLevel(gatewayDefault, modelMeta);
     }
   } else {
     // 启用了网关思考档位策略
     const modelId = modelMeta?.id || payload?.model || upstreamPayload?.model;
     const modelOverride = modelId && policy.modelLevels?.[modelId];
-    const targetGatewayLevel = (modelOverride && modelOverride !== 'default')
+
+    // 该模型的网关基准档位：若逐模型单独指定（非 default），使用单独指定档；
+    // 否则遵循「上游默认 > 网关默认」
+    const hasExplicitModelOverride = modelOverride && modelOverride !== 'default';
+    const effectiveGatewayLevel = hasExplicitModelOverride
       ? modelOverride
-      : policy.defaultLevel || 'high';
+      : (upstreamDefault || gatewayDefault);
 
     const mode = policy.overrideMode || 'client_first';
 
     if (mode === 'gateway_override_all') {
       // 模式 3：网关优先 · 档位与开关一起覆盖：连客户端「关闭思考」也改写成开启 + 「网关档位」
-      finalEffort = clampThinkingLevel(targetGatewayLevel, modelMeta);
+      finalEffort = clampThinkingLevel(effectiveGatewayLevel, modelMeta);
     } else if (mode === 'gateway_level_only') {
       // 模式 2：网关优先 · 只覆盖档位：客户端传的档位一律改写为「网关档位」，但尊重客户端「关闭思考」
       if (clientDisabled) {
         finalEffort = 'none';
       } else {
-        finalEffort = clampThinkingLevel(targetGatewayLevel, modelMeta);
+        finalEffort = clampThinkingLevel(effectiveGatewayLevel, modelMeta);
       }
     } else {
-      // 模式 1：客户端优先：客户端没传档位时才补「网关档位」 (client_first)
+      // 模式 1：客户端优先（客户端 > 上游默认 > 网关默认）
       if (clientDisabled) {
         finalEffort = 'none';
       } else if (normalizedClient) {
+        // 客户端显式指定档位优先
         finalEffort = clampThinkingLevel(normalizedClient, modelMeta);
       } else {
-        finalEffort = clampThinkingLevel(targetGatewayLevel, modelMeta);
+        // 客户端未传档位：单独配置优先，否则「上游默认 > 网关默认」
+        finalEffort = clampThinkingLevel(effectiveGatewayLevel, modelMeta);
       }
     }
   }

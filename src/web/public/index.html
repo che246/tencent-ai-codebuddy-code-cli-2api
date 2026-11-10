@@ -3110,7 +3110,9 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           }
 
           const curLevel = (currentThinkingPolicy.modelLevels && currentThinkingPolicy.modelLevels[m.id]) || 'default';
-          let opts = `<option value="default"${curLevel === 'default' ? ' selected' : ''}>默认 (跟随网关)</option>`;
+          const upstreamDef = m.reasoning?.defaultEffort || m.reasoning?.effort || '';
+          const defaultLabel = upstreamDef ? `默认 (上游: ${upstreamDef})` : '默认 (跟随网关)';
+          let opts = `<option value="default"${curLevel === 'default' ? ' selected' : ''}>${defaultLabel}</option>`;
           if (canDisable) {
             opts += `<option value="off"${curLevel === 'off' ? ' selected' : ''}>off (关闭思考)</option>`;
           }
