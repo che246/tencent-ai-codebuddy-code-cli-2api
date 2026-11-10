@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CONFIG_URL, endpointsFor, resolveAccountRegion, REGION_CN, REGION_BASE, USER_AGENT, accounts, ROOT_DIR } from '../config.mjs';
+import { CONFIG_URL, endpointsFor, resolveAccountRegion, REGION_CN, REGION_INTL, REGION_BASE, USER_AGENT, accounts, ROOT_DIR } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 
 // ─── 动态获取可用模型矩阵 ───────────────────────────────────────────────────
@@ -41,15 +41,23 @@ function persistModelsToProductJson(models) {
   }
 }
 
-/** 从 product.json 读取模型矩阵（唯一离线数据源） */
+/** 从 product.json 读取模型矩阵（优先根目录快照，缺失时回落至 package/ 官方内置快照） */
 function loadModelsFromProductJson() {
-  if (!fs.existsSync(PRODUCT_JSON_PATH)) return [];
-  try {
-    const p = JSON.parse(fs.readFileSync(PRODUCT_JSON_PATH, 'utf8'));
-    return Array.isArray(p.models) ? p.models : [];
-  } catch (_) {
-    return [];
+  if (fs.existsSync(PRODUCT_JSON_PATH)) {
+    try {
+      const p = JSON.parse(fs.readFileSync(PRODUCT_JSON_PATH, 'utf8'));
+      if (Array.isArray(p.models) && p.models.length > 0) return p.models;
+    } catch (_) {}
   }
+  // 官方 CLI 内置 product.json 兜底
+  const builtinPath = path.resolve(ROOT_DIR, 'package', 'product.json');
+  if (fs.existsSync(builtinPath)) {
+    try {
+      const p = JSON.parse(fs.readFileSync(builtinPath, 'utf8'));
+      if (Array.isArray(p.models) && p.models.length > 0) return p.models;
+    } catch (_) {}
+  }
+  return [];
 }
 
 export async function fetchDetailedModels(forceRefresh = false) {
@@ -73,7 +81,8 @@ export async function fetchDetailedModels(forceRefresh = false) {
         headers: {
           'Authorization': `Bearer ${acc.accessToken}`,
           'User-Agent': USER_AGENT
-        }
+        },
+        signal: AbortSignal.timeout(5000)
       });
       if (res.ok) {
         const data = await res.json();
@@ -95,22 +104,43 @@ export async function fetchDetailedModels(forceRefresh = false) {
     } catch (_) {}
   }
 
+  // 2) 跨区域容灾保持：若某区域在此次拉取中未响应，保留本地快照中该区域已有模型，杜绝单区超时抹除全量数据
+  const existingSnapshot = loadModelsFromProductJson();
+  if (existingSnapshot.length > 0) {
+    const knownRegions = [REGION_CN, REGION_INTL];
+    for (const r of knownRegions) {
+      if (!regionStat[r]) {
+        // 当前区域拉取失败或无可用账号，从既有快照补充该区域的模型
+        for (const m of existingSnapshot) {
+          if (!m || !m.id) continue;
+          const mRegions = Array.isArray(m.regions) ? m.regions : (m.region ? [m.region] : [REGION_CN]);
+          if (mRegions.includes(r)) {
+            const exist = merged.get(m.id);
+            if (exist) {
+              if (!exist.regions.includes(r)) exist.regions.push(r);
+            } else {
+              merged.set(m.id, { ...m, regions: [r] });
+            }
+          }
+        }
+      }
+    }
+  }
+
   if (merged.size > 0) {
     const models = [...merged.values()];
     cachedRawUpstreamModels = models;
     lastModelFetchTimestamp = now;
     const regionDesc = Object.entries(regionStat)
       .map(([r, n]) => `${REGION_BASE[r]?.label || r}:${n}`)
-      .join(' ');
+      .join(' ') || '本地快照兜底';
     Logger.info('CONFIG', `成功从上游拉取模型矩阵 (合并去重后共 ${models.length} 款；${regionDesc})`);
     persistModelsToProductJson(models);
     return attachProbeStatus(models);
   }
 
-  // 2) 离线兜底：只读 product.json
-  //    product.json 里的模型快照已含 regions 标记（在线同步时写入）；
-  //    若为旧版快照缺该字段，统一按国内版展示，不阻断渲染。
-  const fallbackModels = loadModelsFromProductJson().map(m => (
+  // 3) 离线兜底：只读 product.json 或内置快照
+  const fallbackModels = existingSnapshot.map(m => (
     Array.isArray(m?.regions) && m.regions.length ? m : { ...m, regions: [REGION_CN] }
   ));
   if (fallbackModels.length > 0) {

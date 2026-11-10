@@ -8,6 +8,18 @@
 
 ---
 
+## [2.179.0-gw.5] - 2026-11-11
+
+### 缺陷修复与跨区域容灾保持 (Fixes & Multi-Region Resilience)
+- **修复跨区域模型同步导致国际版模型丢失与同步超时卡死问题**：
+  - **跨区域快照按需增量保留**：在 `fetchDetailedModels()` 中增加区域级模型快照合并机制。当单区域因网络/DNS/凭据原因未能成功拉取时，自动保留本地已有快照或官方内置（`package/product.json`）中该区域的模型，杜绝以往「只要一个区域未返回，全量 `product.json` 覆盖即丢失国际版模型」的逻辑漏洞。
+  - **官方内置快照多级兜底**：`loadModelsFromProductJson()` 增加多级回退，根目录无模型时自动读取 `package/product.json` 官方模型基准（含 22 款国际模型），保证冷启动零配置即具备完整模型列表。
+  - **网络请求超时保护**：上游端点 `/v3/config` 拉取增加 `AbortSignal.timeout(5000)`，防止异常网络环境下长时间挂起导致前端控制台「正在同步...」卡死。
+  - **局域网 DNS / 域名解析加固**：排查并解决局域网内因 DNS 阻断导致的 `www.codebuddy.ai` 解析异常，确保双区域全池账号秒级并发通信。
+  - 涉及文件：[`src/upstream/models.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/models.mjs)
+
+---
+
 ## [2.179.0-gw.4] - 2026-11-11
 
 ### 模型能力与档位界面全面重构与视觉规范对齐 (UI Redesign & Visual Standards)
