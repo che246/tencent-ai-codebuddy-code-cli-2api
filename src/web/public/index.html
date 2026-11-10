@@ -586,77 +586,89 @@
           </div>
         </section>
 
-        <!-- 页面 3: 模型管理 (MODELS) -->
+        <!-- 页面 3: 模型能力 / 模型与档位 (MODELS) -->
         <section id="page-models" class="page-section">
           <div class="card">
-            <div class="card-title">
-              <div style="display:flex; align-items:center; gap:10px;">
-                <span>📋 腾讯云上游模型矩阵</span>
-                <span class="badge badge-purple" id="modelTotalBadge">加载中...</span>
+            <!-- 顶部标题与重新获取按钮 -->
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:10px;">
+                <span style="font-size:16px; font-weight:700; color:#fff;">模型能力</span>
+                <span style="font-size:12px; color:var(--text-muted);">max_tokens bug已修复 目前可以正常透传最大输出，但官方返回的最大输出仅为参考，不保证完全正确</span>
               </div>
-              <div style="display:flex; gap:10px;">
-                <input id="modelSearch" class="search-input" placeholder="🔍 搜索模型 ID 或名称..." oninput="filterModels()">
-                <button class="btn-primary" onclick="loadModels(true)">🔄 刷新上游</button>
-                <button class="btn-outline" onclick="openBlacklistModal()">🚫 黑名单 <span id="blacklistCountBadge"></span></button>
-                <button class="btn-outline" onclick="exportAllRawJson()">📥 导出全量 JSON</button>
-              </div>
-            </div>
-
-            <!-- 黑名单生效提示条：有屏蔽时高亮，无屏蔽时提示可加入 -->
-            <div id="blacklistNotice" style="display:none; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; margin-bottom:12px; border-radius:8px; background:rgba(239,68,68,0.10); border:1px solid rgba(239,68,68,0.35);">
-              <span style="font-size:12.5px; color:#f87171; font-weight:600;">🚫 黑名单生效中</span>
-              <span id="blacklistNoticeText" style="font-size:12px; color:var(--text-muted);"></span>
-              <button class="btn-copy" style="font-size:11px; padding:2px 8px; margin-left:auto;" onclick="openBlacklistModal()">管理黑名单</button>
-            </div>
-            
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
-              <!-- 区域分区：国内版 / 国际版模型分开展示 -->
-              <div class="filter-bar" style="margin-bottom:0;" id="modelRegionTabs">
-                <button class="filter-btn active" data-region="all" onclick="setRegionFilter('all', this)">🌏 全部区域</button>
-                <button class="filter-btn" data-region="cn" onclick="setRegionFilter('cn', this)">🇨🇳 国内版 <span id="cnCount" style="opacity:.7;"></span></button>
-                <button class="filter-btn" data-region="intl" onclick="setRegionFilter('intl', this)">🌐 国际版 <span id="intlCount" style="opacity:.7;"></span></button>
-                <button class="filter-btn" data-region="both" onclick="setRegionFilter('both', this)">🔀 两区皆有 <span id="bothCount" style="opacity:.7;"></span></button>
+              <div style="display:flex; align-items:center; gap:12px;">
+                <span id="modelFilteredCount" style="font-size:12px; color:var(--text-muted);">加载中...</span>
+                <button class="btn-primary" style="padding:5px 14px; font-size:12px;" onclick="loadModels(true)">🔄 重新获取</button>
               </div>
             </div>
 
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
-              <div class="filter-bar" style="margin-bottom:0;" id="modelCategoryTabs">
-                <button class="filter-btn active" onclick="setFilter('all', this)">全部</button>
-                <button class="filter-btn" onclick="setFilter('1m', this)">1M 上下文</button>
-                <button class="filter-btn" onclick="setFilter('free', this)">免费 / 低倍率</button>
-                <button class="filter-btn" onclick="setFilter('tool', this)">支持工具 🛠️</button>
-                <button class="filter-btn" onclick="setFilter('vision', this)">支持视觉 👁️</button>
-                <button class="filter-btn" onclick="setFilter('reasoning', this)">支持思考 🧠</button>
-                <button class="filter-btn" onclick="setFilter('idle', this)">🟢 畅通可用</button>
-              </div>
+            <!-- 紧凑型综合筛选工具栏 -->
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px; padding:10px 14px; background:var(--code-bg); border:1px solid var(--card-border); border-radius:8px;">
+              <!-- 1. 搜索框 -->
+              <input id="modelSearch" class="search-input" placeholder="搜索模型 ID / 名称 / 描述 / 厂商" style="flex:1; min-width:200px; padding:6px 12px; font-size:12px;" oninput="renderModels()">
 
-              <!-- 排序控制区域：默认 / 倍率升序 / 倍率降序 -->
-              <div style="display:flex; align-items:center; gap:8px;">
-                <span style="font-size:12px; color:var(--text-muted); font-weight:600;">排序:</span>
-                <div class="filter-bar" style="margin-bottom:0;" id="modelSortTabs">
-                  <button class="filter-btn active" data-sort="default" onclick="setModelSort('default', this)">默认</button>
-                  <button class="filter-btn" data-sort="asc" onclick="setModelSort('asc', this)">倍率升序 ↑</button>
-                  <button class="filter-btn" data-sort="desc" onclick="setModelSort('desc', this)">倍率降序 ↓</button>
-                </div>
+              <!-- 2. 全区域 -->
+              <select id="filterRegion" class="search-input" style="width:125px; padding:6px 10px; font-size:12px;" onchange="renderModels()">
+                <option value="all">全区域</option>
+                <option value="cn">国内版 CN</option>
+                <option value="intl">国际版 Global</option>
+              </select>
+
+              <!-- 3. 全能力 -->
+              <select id="filterCapability" class="search-input" style="width:130px; padding:6px 10px; font-size:12px;" onchange="renderModels()">
+                <option value="all">全能力</option>
+                <option value="tool">支持工具调用</option>
+                <option value="vision">支持视觉</option>
+                <option value="reasoning">支持思考</option>
+                <option value="default">默认模型</option>
+              </select>
+
+              <!-- 4. 全部档位 -->
+              <select id="filterEffort" class="search-input" style="width:125px; padding:6px 10px; font-size:12px;" onchange="renderModels()">
+                <option value="all">全部档位</option>
+                <option value="can_disable">可关闭思考</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
+                <option value="max">max</option>
+              </select>
+
+              <!-- 5. 全部价格 -->
+              <select id="filterPrice" class="search-input" style="width:145px; padding:6px 10px; font-size:12px;" onchange="renderModels()">
+                <option value="all">全部价格</option>
+                <option value="discount_or_free">有折扣 / 限时免费</option>
+                <option value="free">限时免费</option>
+                <option value="discount">打折 (非免费)</option>
+              </select>
+
+              <!-- 6. 排序方案 -->
+              <select id="filterSort" class="search-input" style="width:150px; padding:6px 10px; font-size:12px;" onchange="renderModels()">
+                <option value="default">上游默认顺序</option>
+                <option value="price_asc">积分倍率 低 → 高</option>
+                <option value="context_desc">上下文长度 大 → 小</option>
+                <option value="output_desc">最大输出 大 → 小</option>
+                <option value="id_asc">模型 ID A → Z</option>
+              </select>
+
+              <!-- 计数指示与重置 -->
+              <div style="display:flex; align-items:center; gap:8px; margin-left:auto;">
+                <span id="modelTableCount" style="font-size:12px; color:var(--text-muted); white-space:nowrap;">- 个模型</span>
+                <button class="btn-outline" style="padding:3px 8px; font-size:11px; border-radius:4px; border-color:rgba(255,255,255,0.15); color:var(--text-muted); cursor:pointer;" onclick="resetModelFilters()">重置</button>
               </div>
             </div>
 
+            <!-- 数据表格 (8 列) -->
             <table>
               <thead>
                 <tr>
-                  <th>模型 ID</th>
-                  <th>所属区域</th>
-                  <th>显示名称</th>
-                  <th>上游繁忙度</th>
-                  <th>实时探针 (本地账号)</th>
-                  <th>官方修订说明</th>
-                  <th>计费倍率 <span id="thRateSortIcon" style="cursor:pointer; font-size:11px; margin-left:4px;" onclick="cycleModelSort()" title="点击切换：默认 / 倍率升序 / 倍率降序">↕️</span></th>
-                  <th>上下文窗口</th>
-                  <th>最大输出</th>
-                  <th>思考档位 (Reasoning)</th>
-                  <th>网关档位</th>
-                  <th>特性标签</th>
-                  <th>操作</th>
+                  <th style="min-width:210px;">模型</th>
+                  <th style="min-width:110px;">积分倍率</th>
+                  <th style="min-width:120px;">网关档位</th>
+                  <th style="min-width:100px;">上游默认</th>
+                  <th style="min-width:180px;">支持的思考档位</th>
+                  <th style="min-width:90px;">上下文长度</th>
+                  <th style="min-width:80px;">最大输出</th>
+                  <th style="min-width:85px; text-align:center;">下游可见</th>
                 </tr>
               </thead>
               <tbody id="modelBody"></tbody>
@@ -2927,7 +2939,8 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
 
     async function loadModels(force = false) {
       try {
-        document.getElementById('modelTotalBadge').innerText = '正在同步...';
+        const countEl = document.getElementById('modelFilteredCount');
+        if (countEl) countEl.innerText = '正在同步...';
         const [res, setRes] = await Promise.all([
           fetch('/api/models-detail' + (force ? '?refresh=1' : '')),
           fetch('/api/settings')
@@ -2938,44 +2951,10 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           if (s.thinkingPolicy) currentThinkingPolicy = s.thinkingPolicy;
         } catch (_) {}
         await refreshBlacklistState();
-        document.getElementById('modelTotalBadge').innerText = `已同步 ${allModels.length} 款模型`;
         renderModels();
       } catch (e) {
-        document.getElementById('modelTotalBadge').innerText = '加载失败';
-      }
-    }
-
-    let currentModelSort = 'default'; // 'default' | 'asc' | 'desc'
-
-    function setFilter(filter, el) {
-      currentFilter = filter;
-      document.querySelectorAll('#modelCategoryTabs .filter-btn').forEach(b => b.classList.remove('active'));
-      if (el) el.classList.add('active');
-      renderModels();
-    }
-
-    function setModelSort(sortKey, el) {
-      currentModelSort = sortKey;
-      document.querySelectorAll('#modelSortTabs .filter-btn').forEach(b => b.classList.remove('active'));
-      if (el) el.classList.add('active');
-      updateRateSortHeader();
-      renderModels();
-    }
-
-    function cycleModelSort() {
-      const order = ['default', 'asc', 'desc'];
-      const nextIdx = (order.indexOf(currentModelSort) + 1) % order.length;
-      const nextSort = order[nextIdx];
-      const targetBtn = document.querySelector(`#modelSortTabs button[data-sort="${nextSort}"]`);
-      setModelSort(nextSort, targetBtn);
-    }
-
-    function updateRateSortHeader() {
-      const icon = document.getElementById('thRateSortIcon');
-      if (icon) {
-        if (currentModelSort === 'asc') icon.innerText = '↑ (升序)';
-        else if (currentModelSort === 'desc') icon.innerText = '↓ (降序)';
-        else icon.innerText = '↕️';
+        const countEl = document.getElementById('modelFilteredCount');
+        if (countEl) countEl.innerText = '加载失败';
       }
     }
 
@@ -2990,116 +2969,194 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       return 1.0;
     }
 
-    function filterModels() {
-      renderModels();
-    }
-
-    // 区域筛选：'all' | 'cn' | 'intl' | 'both'
-    let currentRegionFilter = 'all';
-
-    function setRegionFilter(region, el) {
-      currentRegionFilter = region;
-      document.querySelectorAll('#modelRegionTabs .filter-btn').forEach(b => b.classList.remove('active'));
-      if (el) el.classList.add('active');
-      renderModels();
-    }
-
     /** 取模型的区域标记（兼容旧数据：无 regions 字段时按国内版处理） */
     function modelRegions(m) {
       if (Array.isArray(m.regions) && m.regions.length) return m.regions;
       return ['cn'];
     }
 
-    /** 更新区域标签页上的计数 */
-    function updateRegionCounts() {
-      let cn = 0, intl = 0, both = 0;
-      for (const m of allModels) {
-        const rs = modelRegions(m);
-        const hasCn = rs.includes('cn');
-        const hasIntl = rs.includes('intl');
-        if (hasCn) cn++;
-        if (hasIntl) intl++;
-        if (hasCn && hasIntl) both++;
+    async function toggleModelVisibility(fullId, isVisible) {
+      const bare = fullId.replace(/^(cn|intl):/, '');
+      let next = [...currentBlacklist];
+      if (isVisible) {
+        // 设为可见：从黑名单中移除
+        next = next.filter(x => x !== fullId && x !== bare);
+      } else {
+        // 设为不可见：加入黑名单
+        if (!next.includes(fullId)) next.push(fullId);
       }
-      const set = (id, n) => { const e = document.getElementById(id); if (e) e.innerText = `(${n})`; };
-      set('cnCount', cn);
-      set('intlCount', intl);
-      set('bothCount', both);
+      currentBlacklist = next;
+      try {
+        await fetch('/api/models/blacklist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ blacklist: next })
+        });
+      } catch (e) {
+        console.error('更新模型可见状态失败:', e);
+      }
+      renderModels();
     }
 
     function renderModels() {
-      const query = document.getElementById('modelSearch').value.toLowerCase().trim();
+      const query = (document.getElementById('modelSearch')?.value || '').toLowerCase().trim();
+      const regionFilter = document.getElementById('filterRegion')?.value || 'all';
+      const capabilityFilter = document.getElementById('filterCapability')?.value || 'all';
+      const effortFilter = document.getElementById('filterEffort')?.value || 'all';
+      const priceFilter = document.getElementById('filterPrice')?.value || 'all';
+      const sortFilter = document.getElementById('filterSort')?.value || 'default';
       const tbody = document.getElementById('modelBody');
+      if (!tbody) return;
 
-      updateRegionCounts();
+      // 1. 把模型矩阵按其可用的区域展开（cn:... / intl:...）
+      const regionalItems = [];
+      for (const m of allModels) {
+        const rs = modelRegions(m);
+        for (const r of rs) {
+          regionalItems.push({
+            ...m,
+            fullId: `${r}:${m.id}`,
+            region: r
+          });
+        }
+      }
 
-      let filtered = allModels.filter(m => {
-        if (query && !m.id.toLowerCase().includes(query) && !(m.name||'').toLowerCase().includes(query)) {
-          return false;
+      // 2. 综合多维度筛选
+      let filtered = regionalItems.filter(item => {
+        // 搜索过滤：全ID、裸ID、名称、描述、厂商
+        if (query) {
+          const matchQuery = item.fullId.toLowerCase().includes(query)
+            || item.id.toLowerCase().includes(query)
+            || (item.name || '').toLowerCase().includes(query)
+            || (item.descriptionZh || '').toLowerCase().includes(query)
+            || (item.descriptionEn || '').toLowerCase().includes(query)
+            || (item.vendor || '').toLowerCase().includes(query);
+          if (!matchQuery) return false;
         }
-        // 区域筛选
-        if (currentRegionFilter !== 'all') {
-          const rs = modelRegions(m);
-          const hasCn = rs.includes('cn');
-          const hasIntl = rs.includes('intl');
-          if (currentRegionFilter === 'cn' && !hasCn) return false;
-          if (currentRegionFilter === 'intl' && !hasIntl) return false;
-          if (currentRegionFilter === 'both' && !(hasCn && hasIntl)) return false;
+
+        // 区域过滤：全部区域 / 国内版 CN / 国际版 Global
+        if (regionFilter === 'cn' && item.region !== 'cn') return false;
+        if (regionFilter === 'intl' && item.region !== 'intl') return false;
+
+        // 能力过滤：全部能力 / 支持工具调用 / 支持视觉 / 支持思考 / 默认模型
+        if (capabilityFilter === 'tool' && !item.supportsToolCall) return false;
+        if (capabilityFilter === 'vision' && !item.supportsImages) return false;
+        if (capabilityFilter === 'reasoning' && !(item.supportsReasoning || item.onlyReasoning || item.reasoning)) return false;
+        if (capabilityFilter === 'default') {
+          const isDef = item.id === 'default' || item.id === 'fast-model' || item.id === 'balanced-model' || item.isDefault;
+          if (!isDef) return false;
         }
-        if (currentFilter === '1m') return m.maxInputTokens >= 900000;
-        if (currentFilter === 'free') return (m.credits || '').includes('0.00') || (m.credits || '').includes('0.08') || (m.credits || '').includes('0.11');
-        if (currentFilter === 'tool') return m.supportsToolCall;
-        if (currentFilter === 'vision') return m.supportsImages;
-        if (currentFilter === 'reasoning') return m.supportsReasoning || m.onlyReasoning || m.reasoning;
-        if (currentFilter === 'idle') return m.probeStatus === 'idle';
+
+        // 档位过滤：全部档位 / 可关闭思考 / low / medium / high / xhigh / max
+        if (effortFilter !== 'all') {
+          if (effortFilter === 'can_disable') {
+            const canDis = item.reasoning?.canDisableThinking !== false && !item.onlyReasoning;
+            if (!canDis) return false;
+          } else {
+            const effList = Array.isArray(item.reasoning?.supportedEfforts)
+              ? item.reasoning.supportedEfforts
+              : (item.reasoning?.effort ? [item.reasoning.effort] : []);
+            if (!effList.includes(effortFilter)) return false;
+          }
+        }
+
+        // 价格过滤：全部价格 / 有折扣/限时免费 / 限时免费 / 打折(非免费)
+        if (priceFilter !== 'all') {
+          const mult = getModelMultiplier(item);
+          const isFree = mult === 0 || (item.credits || '').includes('0.00') || (item.credits || '').includes('0x');
+          const isDiscount = (item.credits || '').includes('0.11') || (item.credits || '').includes('0.50') || (item.credits || '').includes('0.79') || item.discount || item.nightDiscount || (mult > 0 && mult < 1);
+          if (priceFilter === 'discount_or_free' && !isFree && !isDiscount) return false;
+          if (priceFilter === 'free' && !isFree) return false;
+          if (priceFilter === 'discount' && (!isDiscount || isFree)) return false;
+        }
+
         return true;
       });
 
-      // 排序方案：默认 / 倍率升序 / 倍率降序
-      if (currentModelSort === 'asc') {
+      // 3. 排序方案：上游默认 / 倍率低->高 / 上下文大->小 / 最大输出大->小 / ID A->Z
+      if (sortFilter === 'price_asc') {
         filtered = [...filtered].sort((a, b) => getModelMultiplier(a) - getModelMultiplier(b));
-      } else if (currentModelSort === 'desc') {
-        filtered = [...filtered].sort((a, b) => getModelMultiplier(b) - getModelMultiplier(a));
+      } else if (sortFilter === 'context_desc') {
+        filtered = [...filtered].sort((a, b) => (b.maxInputTokens || 0) - (a.maxInputTokens || 0));
+      } else if (sortFilter === 'output_desc') {
+        filtered = [...filtered].sort((a, b) => (b.maxOutputTokens || 0) - (a.maxOutputTokens || 0));
+      } else if (sortFilter === 'id_asc') {
+        filtered = [...filtered].sort((a, b) => a.fullId.localeCompare(b.fullId));
       }
 
+      // 4. 更新顶部与工具栏计数
+      const filteredCountEl = document.getElementById('modelFilteredCount');
+      if (filteredCountEl) filteredCountEl.innerText = `${filtered.length} 个模型 · 已剔除降级缓存`;
+      const tableCountEl = document.getElementById('modelTableCount');
+      if (tableCountEl) tableCountEl.innerText = `${filtered.length} 个模型`;
+
       if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配的模型</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:40px;">未找到匹配的模型</td></tr>';
         return;
       }
 
-      tbody.innerHTML = filtered.map((m) => {
-        const mult = getModelMultiplier(m);
-        const isFree = mult === 0 || (m.credits || '').includes('0.00');
-        const badgeCredit = isFree 
-          ? '<span class="badge badge-ok">免费 x0.00</span>' 
-          : `<span class="badge badge-cool">${m.credits || 'x' + mult.toFixed(2)}</span>`;
+      tbody.innerHTML = filtered.map(item => {
+        // 下游可见性判定（黑名单）
+        const isBlocked = currentBlacklist.includes(item.fullId) || currentBlacklist.includes(item.id);
+        const isVisible = !isBlocked;
 
-        // 区域徽章：国内 / 国际 / 两区皆有
-        const rs = modelRegions(m);
-        const hasCn = rs.includes('cn');
-        const hasIntl = rs.includes('intl');
-        let regionHtml;
-        if (hasCn && hasIntl) {
-          regionHtml = '<span class="badge" style="font-size:9px;padding:1px 5px;background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);">🔀 两区</span>';
-        } else if (hasIntl) {
-          regionHtml = '<span class="badge" style="font-size:9px;padding:1px 5px;background:rgba(168,85,247,0.18);color:#c084fc;border:1px solid rgba(168,85,247,0.45);">🌐 国际</span>';
+        // 1. 模型列 (ID, 名称, 特性徽章)
+        const isDefault = item.id === 'default' || item.id === 'fast-model';
+        const hasTool = item.supportsToolCall;
+        const hasVision = item.supportsImages;
+        const hasReasoning = Boolean(item.supportsReasoning || item.onlyReasoning || item.reasoning);
+        const reasoningAlwaysOn = hasReasoning && (item.reasoning?.canDisableThinking === false || item.onlyReasoning);
+        const subPriority = item.id.includes('glm-5.3');
+
+        let badgesHtml = '';
+        if (isDefault) badgesHtml += '<span class="badge" style="background:rgba(74,222,128,0.15); color:#4ade80; border:1px solid rgba(74,222,128,0.35); font-size:10px; padding:1px 6px; border-radius:4px;">默认</span>';
+        if (subPriority) badgesHtml += '<span class="badge" style="background:rgba(234,179,8,0.15); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:10px; padding:1px 6px; border-radius:4px;">订阅优先</span>';
+        if (hasTool) badgesHtml += '<span class="badge" style="background:rgba(255,255,255,0.06); color:#cbd5e1; border:1px solid rgba(255,255,255,0.12); font-size:10px; padding:1px 6px; border-radius:4px;">工具</span>';
+        if (hasVision) badgesHtml += '<span class="badge" style="background:rgba(255,255,255,0.06); color:#cbd5e1; border:1px solid rgba(255,255,255,0.12); font-size:10px; padding:1px 6px; border-radius:4px;">视觉</span>';
+        if (reasoningAlwaysOn) badgesHtml += '<span class="badge" style="background:rgba(234,179,8,0.15); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:10px; padding:1px 6px; border-radius:4px;">思考常开</span>';
+
+        const nameZh = item.name || item.id;
+
+        // 2. 积分倍率
+        const mult = getModelMultiplier(item);
+        const isFree = mult === 0 || (item.credits || '').includes('0.00') || (item.credits || '').includes('0x');
+        const isNightDiscount = item.id.includes('v4.1-flash') || item.id.includes('glm-5.2');
+
+        let priceHtml = '';
+        if (isFree) {
+          priceHtml = `
+            <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+              <span style="font-weight:700; color:#fff; font-size:12.5px;">0x</span>
+              <span class="badge" style="background:rgba(74,222,128,0.15); color:#4ade80; border:1px solid rgba(74,222,128,0.3); font-size:10px; padding:1px 5px; border-radius:4px;">限时免费</span>
+              <span style="color:var(--text-muted); font-size:11px;">x0.00</span>
+            </div>
+          `;
+        } else if (isNightDiscount) {
+          if (item.id.includes('glm-5.2')) {
+            priceHtml = `
+              <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                <span style="font-weight:700; color:#fff; font-size:12.5px;">0.50x</span>
+                <span class="badge" style="background:rgba(74,222,128,0.15); color:#4ade80; border:1px solid rgba(74,222,128,0.3); font-size:10px; padding:1px 5px; border-radius:4px;">夜间折扣</span>
+                <span style="color:var(--text-muted); font-size:11px;">x0.99</span>
+              </div>
+            `;
+          } else {
+            priceHtml = `
+              <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                <span style="font-weight:700; color:#fff; font-size:12.5px;">x${mult.toFixed(2)}</span>
+                <span class="badge" style="background:rgba(74,222,128,0.15); color:#4ade80; border:1px solid rgba(74,222,128,0.3); font-size:10px; padding:1px 5px; border-radius:4px;">夜间折扣</span>
+              </div>
+            `;
+          }
         } else {
-          regionHtml = '<span class="badge" style="font-size:9px;padding:1px 5px;background:rgba(2,132,199,0.18);color:#38bdf8;border:1px solid rgba(2,132,199,0.45);">🇨🇳 国内</span>';
+          priceHtml = `<span style="font-weight:700; color:#fff; font-size:12.5px;">x${mult.toFixed(2)}</span>`;
         }
 
-        const ctxFmt = m.maxInputTokens >= 1000000 ? '1,000,000 (1M)' : 
-          m.maxInputTokens >= 1000 ? `${(m.maxInputTokens/1000).toFixed(0)}K` : (m.maxInputTokens || '-');
-        const outFmt = m.maxOutputTokens >= 1000 ? `${(m.maxOutputTokens/1000).toFixed(0)}K` : (m.maxOutputTokens || '-');
-
-        let reasoningHtml = '<span style="color:var(--text-muted);">不支持</span>';
-        let gwReasoningHtml = '<span style="color:var(--text-muted);">-</span>';
-        if (m.reasoning || m.supportsReasoning || m.onlyReasoning) {
-          const r = m.reasoning || {};
-          const efforts = Array.isArray(r.supportedEfforts) ? r.supportedEfforts.join('/') : (r.defaultEffort || 'high');
-          const disableTag = r.canDisableThinking ? '<span style="color:var(--text-muted);font-size:10px;">(可关)</span>' : '<span style="color:#f59e0b;font-size:10px;">(强制)</span>';
-          reasoningHtml = `<span class="badge badge-purple">🧠 ${efforts}</span> ${disableTag}`;
-
-          const canDisable = r.canDisableThinking !== false && !m.onlyReasoning;
+        // 3. 网关档位 (下拉框：选项即该模型所支持的思考档位原样，支持关闭则带 off)
+        let gwEffortHtml = '<span style="color:var(--text-muted); font-size:12px;">-</span>';
+        if (hasReasoning) {
+          const r = item.reasoning || {};
+          const canDisable = r.canDisableThinking !== false && !item.onlyReasoning;
           let supported = [];
           if (Array.isArray(r.supportedEfforts) && r.supportedEfforts.length > 0) {
             supported = r.supportedEfforts;
@@ -3109,118 +3166,96 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
             supported = ['low', 'medium', 'high', 'xhigh', 'max'];
           }
 
-          const curLevel = (currentThinkingPolicy.modelLevels && currentThinkingPolicy.modelLevels[m.id]) || 'default';
-          const upstreamDef = m.reasoning?.defaultEffort || m.reasoning?.effort || '';
-          const defaultLabel = upstreamDef ? `默认 (上游: ${upstreamDef})` : '默认 (跟随网关)';
-          let opts = `<option value="default"${curLevel === 'default' ? ' selected' : ''}>${defaultLabel}</option>`;
-          if (canDisable) {
-            opts += `<option value="off"${curLevel === 'off' ? ' selected' : ''}>off (关闭思考)</option>`;
-          }
+          const curOverride = (currentThinkingPolicy.modelLevels && (currentThinkingPolicy.modelLevels[item.id] || currentThinkingPolicy.modelLevels[item.fullId])) || '';
+          const upstreamDef = r.defaultEffort || r.effort || 'high';
+          const effectiveLevel = curOverride && curOverride !== 'default' ? curOverride : upstreamDef;
+
+          let opts = '';
           for (const eff of supported) {
-            opts += `<option value="${eff}"${curLevel === eff ? ' selected' : ''}>${eff}</option>`;
+            opts += `<option value="${eff}"${effectiveLevel === eff ? ' selected' : ''}>${eff}</option>`;
           }
-          gwReasoningHtml = `
-            <select class="search-input" style="padding:3px 6px; font-size:11px; min-width:115px; border-radius:6px; background:var(--surface);" onchange="updateModelThinkingLevel('${escapeAttr(m.id)}', this.value)">
+          if (canDisable) {
+            opts += `<option value="off"${effectiveLevel === 'off' || effectiveLevel === 'none' ? ' selected' : ''}>off</option>`;
+          }
+
+          gwEffortHtml = `
+            <select class="search-input" style="padding:4px 8px; font-size:12px; width:105px; border-radius:6px; background:var(--surface);" onchange="updateModelThinkingLevel('${escapeAttr(item.id)}', this.value)">
               ${opts}
             </select>
           `;
         }
 
-        const desc = m.descriptionZh || m.descriptionEn || '-';
-
-        // 该模型在当前展示区域下是否被黑名单屏蔽（两区都屏蔽才整体灰显）
-        const blockedRegions = rs.filter(r => currentBlacklist.includes(`${r === 'intl' ? 'intl:' : 'cn:'}${m.id}`));
-        const isBlocked = blockedRegions.length === rs.length;
-        const isPartBlocked = blockedRegions.length > 0 && !isBlocked;
-
-        // 1. 上游繁忙度展示列 (从上游获取到的模型繁忙度)
-        const busyBadgeClass = m.upstreamBusyLevel === 'overload' 
-          ? 'badge-err' 
-          : (m.upstreamBusyLevel === 'busy' ? 'badge-cool' : 'badge-ok');
-        const upstreamHtml = `
-          <div class="probe-tip-wrap" title="上游标定: ${escapeAttr(m.upstreamBusyLabel || '')}&#10;说明: ${escapeAttr(m.upstreamBusyDesc || '')}">
-            <span class="badge ${busyBadgeClass}">${escapeHtml(m.upstreamBusyLabel || '🟢 空闲 (畅通)')}</span>
-            <div class="probe-tip-popover" style="border-color: rgba(56, 189, 248, 0.4);">
-              <div style="font-weight:bold; color:var(--accent); font-size:12px; margin-bottom:4px;">☁️ 官方上游模型繁忙度</div>
-              <div style="font-size:11px; color:var(--text-main); margin-bottom:2px;">状态: <b>${escapeHtml(m.upstreamBusyLabel || '🟢 畅通')}</b></div>
-              <div style="font-size:11px; color:var(--text-muted);">${escapeHtml(m.upstreamBusyDesc || '上游官方节点正常在线，负载充裕')}</div>
-            </div>
-          </div>
-        `;
-
-        // 2. 实时探针 (本地账号状态，局部限流浮动显示具体限流账号)
-        let probeHtml = '';
-        if (m.probeStatus === 'busy' || (m.coolingCount > 0 && m.coolingCount < (m.totalAccounts || 1))) {
-          const tipAccounts = (m.coolingAccounts || []).map(a => `
-            <div style="font-size:12px; margin:4px 0; color:#fff; display:flex; justify-content:space-between; gap:10px;">
-              <span>• <b>${escapeHtml(a.name)}</b></span>
-              <span style="color:#f87171; font-weight:bold; font-size:11px; white-space:nowrap;">(剩 ${a.remainingSec}s)</span>
-            </div>
-          `).join('');
-
-          const nativeTip = `⚠️ 局部限流 (${m.coolingCount}/${m.totalAccounts || 1}):\n` + (m.coolingAccounts || []).map(a => `• ${a.name} (剩 ${a.remainingSec}s)`).join('\n') + '\n网关已自动调度池中其他健康账号接力此模型';
-
-          probeHtml = `
-            <div class="probe-tip-wrap" title="${escapeAttr(nativeTip)}">
-              <span class="badge badge-cool">🟡 局部限流 (${m.coolingCount}/${m.totalAccounts || 1})</span>
-              <div class="probe-tip-popover">
-                <div style="font-weight:bold; margin-bottom:6px; color:#facc15; font-size:12px;">⚠️ 局部限流账号明细 (${m.coolingCount} 个账号受限):</div>
-                ${tipAccounts || '<div style="color:var(--text-muted); font-size:11px;">账号冷却中...</div>'}
-                <div style="margin-top:6px; font-size:11px; color:var(--text-muted); border-top:1px solid rgba(255,255,255,0.1); padding-top:4px;">网关将自动调度池中其他健康账号接力此模型</div>
-              </div>
-            </div>
-          `;
-        } else if (m.probeStatus === 'cooldown') {
-          const tipAccounts = (m.coolingAccounts || []).map(a => `
-            <div style="font-size:12px; margin:4px 0; color:#fff; display:flex; justify-content:space-between; gap:10px;">
-              <span>• <b>${escapeHtml(a.name)}</b></span>
-              <span style="color:#f87171; font-weight:bold; font-size:11px; white-space:nowrap;">(剩 ${a.remainingSec}s)</span>
-            </div>
-          `).join('');
-
-          probeHtml = `
-            <div class="probe-tip-wrap" title="全池所有账号均限流冷却中">
-              <span class="badge badge-err">🔴 全池冷却 (${m.coolingCount}/${m.totalAccounts || 1})</span>
-              <div class="probe-tip-popover" style="border-color: rgba(239, 68, 68, 0.4);">
-                <div style="font-weight:bold; margin-bottom:6px; color:#f87171; font-size:12px;">🔴 全池账号限流冷却中:</div>
-                ${tipAccounts}
-                <div style="margin-top:6px; font-size:11px; color:var(--text-muted); border-top:1px solid rgba(255,255,255,0.1); padding-top:4px;">网关将自动降级改道至备用模型</div>
-              </div>
-            </div>
-          `;
-        } else {
-          probeHtml = `
-            <div class="probe-tip-wrap" title="全池所有账号均畅通就绪，随时可调用">
-              <span class="badge badge-ok">🟢 畅通 (${m.totalAccounts || 1}/${m.totalAccounts || 1})</span>
-            </div>
-          `;
+        // 4. 上游默认
+        let upstreamDefHtml = '<span style="color:var(--text-muted); font-size:12px;">-</span>';
+        if (hasReasoning) {
+          const upstreamDef = item.reasoning?.defaultEffort || item.reasoning?.effort || '';
+          if (upstreamDef) {
+            upstreamDefHtml = `<span class="badge" style="background:rgba(34,197,94,0.18); color:#4ade80; border:1px solid rgba(34,197,94,0.35); padding:2px 10px; border-radius:12px; font-weight:600; font-size:11.5px;">${escapeHtml(upstreamDef)}</span>`;
+          }
         }
 
+        // 5. 支持的思考档位
+        let supportedHtml = '<span style="color:var(--text-muted); font-size:12px;">-</span>';
+        if (hasReasoning) {
+          const r = item.reasoning || {};
+          const isFixed = item.id.includes('fast-model') || item.id.includes('balanced-model') || item.id.includes('deep-model');
+          if (isFixed) {
+            supportedHtml = `<span style="color:var(--text-muted); font-size:12px;">固定档 · 默认 ${r.effort || 'medium'}</span>`;
+          } else if (Array.isArray(r.supportedEfforts) && r.supportedEfforts.length > 0) {
+            const badges = r.supportedEfforts.map(e => `<span class="badge" style="background:rgba(234,179,8,0.12); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:11px; padding:2px 7px; border-radius:4px; margin-right:4px;">${e}</span>`).join('');
+            const canDisableText = (r.canDisableThinking !== false && !item.onlyReasoning) ? '<span style="color:var(--text-muted); font-size:11px; margin-left:3px;">off (可关)</span>' : '';
+            supportedHtml = `<div style="display:flex; align-items:center; flex-wrap:wrap; gap:3px;">${badges}${canDisableText}</div>`;
+          } else if (r.effort) {
+            supportedHtml = `<span class="badge" style="background:rgba(234,179,8,0.12); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:11px; padding:2px 7px; border-radius:4px;">${r.effort}</span>`;
+          }
+        }
+
+        // 6. 上下文长度
+        const inTokens = item.maxInputTokens || 0;
+        const ctxStr = inTokens >= 1000 ? `${Math.round(inTokens / 1000)}K` : (inTokens || '-');
+
+        // 7. 最大输出
+        const outTokens = item.maxOutputTokens || 0;
+        const outStr = outTokens >= 1000 ? `${Math.round(outTokens / 1000)}K` : (outTokens || '-');
+
         return `
-          <tr style="${isBlocked ? 'opacity:0.45;' : ''}">
-            <td><code>${m.id}</code>${isBlocked ? ' <span class="badge badge-err" style="font-size:9px; padding:1px 5px;">🚫 已屏蔽</span>' : (isPartBlocked ? ' <span class="badge badge-cool" style="font-size:9px; padding:1px 5px;" title="部分区域被屏蔽">🚫 部分屏蔽</span>' : '')}</td>
-            <td>${regionHtml}</td>
-            <td><b>${m.name || m.id}</b></td>
-            <td>${upstreamHtml}</td>
-            <td>${probeHtml}</td>
-            <td style="color:var(--text-muted); font-size:12px; max-width:240px;">${desc}</td>
-            <td>${badgeCredit}</td>
-            <td><span class="badge ${m.maxInputTokens >= 900000 ? 'badge-purple' : ''}">${ctxFmt}</span></td>
-            <td>${outFmt}</td>
-            <td>${reasoningHtml}</td>
-            <td>${gwReasoningHtml}</td>
-            <td>
-              ${m.supportsToolCall ? '<span class="badge badge-blue" title="支持工具调用">🛠️ 工具</span> ' : ''}
-              ${m.supportsImages ? '<span class="badge badge-ok" title="支持多模态视觉">👁️ 视觉</span> ' : ''}
+          <tr style="${!isVisible ? 'opacity:0.45;' : ''} border-bottom:1px solid rgba(255,255,255,0.05);">
+            <td style="padding:10px 12px;">
+              <div style="font-weight:700; color:#fff; font-size:13.5px; line-height:1.4;">${escapeHtml(item.fullId)}</div>
+              <div style="color:var(--text-muted); font-size:12px; margin-top:2px; margin-bottom:4px;">${escapeHtml(nameZh)}</div>
+              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">${badgesHtml}</div>
             </td>
-            <td style="white-space:nowrap;">
-              <button class="btn-copy" onclick="copyText('${m.id}')">📋 复制</button>
-              <button class="btn-json" onclick="showRawJson('${m.id}')">🔍 原始JSON</button>
-              <button class="btn-copy" style="color:${isBlocked ? '#4ade80' : '#f87171'}; border-color:${isBlocked ? 'rgba(74,222,128,0.4)' : 'rgba(239,68,68,0.4)'};" onclick="toggleModelBlacklistByModel('${m.id}')" title="${isBlocked ? '解除屏蔽，重新出现在 /v1/models' : '加入黑名单，从 /v1/models 中移除'}">${isBlocked ? '✅ 恢复' : '🚫 屏蔽'}</button>
+            <td style="padding:10px 12px;">${priceHtml}</td>
+            <td style="padding:10px 12px;">${gwEffortHtml}</td>
+            <td style="padding:10px 12px;">${upstreamDefHtml}</td>
+            <td style="padding:10px 12px;">${supportedHtml}</td>
+            <td style="padding:10px 12px; font-weight:600; color:#fff; font-size:12.5px;">${ctxStr}</td>
+            <td style="padding:10px 12px; font-weight:600; color:#fff; font-size:12.5px;">${outStr}</td>
+            <td style="padding:10px 12px; text-align:center;">
+              <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; color:var(--text-main); user-select:none;">
+                <input type="checkbox" ${isVisible ? 'checked' : ''} onchange="toggleModelVisibility('${escapeAttr(item.fullId)}', this.checked)" style="width:15px; height:15px; cursor:pointer;">
+                <span>可见</span>
+              </label>
             </td>
           </tr>
         `;
       }).join('');
+    }
+
+    function resetModelFilters() {
+      const search = document.getElementById('modelSearch');
+      if (search) search.value = '';
+      const reg = document.getElementById('filterRegion');
+      if (reg) reg.value = 'all';
+      const cap = document.getElementById('filterCapability');
+      if (cap) cap.value = 'all';
+      const eff = document.getElementById('filterEffort');
+      if (eff) eff.value = 'all';
+      const pri = document.getElementById('filterPrice');
+      if (pri) pri.value = 'all';
+      const srt = document.getElementById('filterSort');
+      if (srt) srt.value = 'default';
+      renderModels();
     }
 
     function showRawJson(modelId) {
