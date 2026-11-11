@@ -131,10 +131,12 @@ export async function fetchDetailedModels(forceRefresh = false) {
     const models = [...merged.values()];
     cachedRawUpstreamModels = models;
     lastModelFetchTimestamp = now;
-    const regionDesc = Object.entries(regionStat)
-      .map(([r, n]) => `${REGION_BASE[r]?.label || r}:${n}`)
-      .join(' ') || '本地快照兜底';
-    Logger.info('CONFIG', `成功从上游拉取模型矩阵 (合并去重后共 ${models.length} 款；${regionDesc})`);
+    const cnCount = models.filter(m => m.regions && m.regions.includes(REGION_CN)).length;
+    const intlCount = models.filter(m => m.regions && m.regions.includes(REGION_INTL)).length;
+    const bothCount = models.filter(m => m.regions && m.regions.includes(REGION_CN) && m.regions.includes(REGION_INTL)).length;
+    const cnAccCount = accounts.filter(a => a.status === 'healthy' && resolveAccountRegion(a) === REGION_CN).length;
+    const intlAccCount = accounts.filter(a => a.status === 'healthy' && resolveAccountRegion(a) === REGION_INTL).length;
+    Logger.info('CONFIG', `成功从上游拉取模型矩阵 (全局去重共 ${models.length} 款；国内版: ${cnCount} 款 [${cnAccCount} 账号]，国际版: ${intlCount} 款 [${intlAccCount} 账号]，两区通用: ${bothCount} 款)`);
     persistModelsToProductJson(models);
     return attachProbeStatus(models);
   }
