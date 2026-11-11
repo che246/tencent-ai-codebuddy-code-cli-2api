@@ -12,6 +12,8 @@
   "concurrencyLimitEnabled": true,
   "maxInFlightPerAccount": 3,
   "modelFallbackEnabled": true,
+  "promptMode": "custom",
+  "promptFile": "v1.1.40_prompt.txt",
   "modelFallback": {
     "cn:deepseek-v4.1-flash": [
       "intl:deepseek-v4.1-flash-sg",

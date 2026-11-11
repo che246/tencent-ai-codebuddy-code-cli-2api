@@ -486,3 +486,63 @@ export function setModelThinkingLevel(modelId, level) {
   return config.thinkingPolicy;
 }
 
+// ─── 系统提示词策略 (System Prompt Policy) ────────────────────────────────────
+// [网关自有策略] 系统提示词重写引擎：
+//   promptMode:
+//     - 'passthrough': 透传客户端原始 system（默认）
+//     - 'custom': 网关自有提示词（全量替换客户端 system/developer，规避上游指纹与定制人设）
+//     - 'append': 客户端 system 后插网关提示词（并用）
+//   promptFile: 提示词文件物理路径（如 D:\AI\dsh-purge\v1.1.40_prompt.txt）
+//               留空则使用内置默认中性提示词
+export const VALID_PROMPT_MODES = ['passthrough', 'custom', 'append'];
+export const DEFAULT_PROMPT_TEXT = 'You are a helpful AI assistant.';
+
+/**
+ * 安全解析并读取系统提示词文件文本：
+ * 1. 优先尝试直接读取 promptFile 指定路径
+ * 2. 若跨系统部署（如 Windows 物理路径部署至 Linux 服务器），自动按文件名回落至项目根目录同名文件
+ * 3. 文件不存在或读取异常时回落至内置默认中性提示词
+ */
+export function loadSystemPromptContent(filePath) {
+  if (!filePath || typeof filePath !== 'string' || !filePath.trim()) {
+    return DEFAULT_PROMPT_TEXT;
+  }
+  const target = filePath.trim();
+  if (fs.existsSync(target)) {
+    try {
+      const content = fs.readFileSync(target, 'utf8');
+      if (content && content.trim()) return content;
+    } catch (_) {}
+  }
+  // 跨操作系统路径容灾回落：提取 basename 到项目根目录查找
+  const fallback = path.resolve(ROOT_DIR, path.basename(target));
+  if (fs.existsSync(fallback)) {
+    try {
+      const content = fs.readFileSync(fallback, 'utf8');
+      if (content && content.trim()) return content;
+    } catch (_) {}
+  }
+  return DEFAULT_PROMPT_TEXT;
+}
+
+export function getPromptPolicy() {
+  const mode = config.promptMode;
+  const file = config.promptFile;
+  return {
+    mode: VALID_PROMPT_MODES.includes(mode) ? mode : 'passthrough',
+    file: typeof file === 'string' ? file.trim() : ''
+  };
+}
+
+export function setPromptPolicy({ mode, file } = {}) {
+  if (mode !== undefined && VALID_PROMPT_MODES.includes(mode)) {
+    config.promptMode = mode;
+  }
+  if (file !== undefined && typeof file === 'string') {
+    config.promptFile = file.trim();
+  }
+  saveConfig();
+  return getPromptPolicy();
+}
+
+

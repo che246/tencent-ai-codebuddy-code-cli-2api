@@ -19,7 +19,9 @@ import {
   isModelBlacklisted,
   getThinkingPolicy,
   setThinkingPolicy,
-  setModelThinkingLevel
+  setModelThinkingLevel,
+  getPromptPolicy,
+  setPromptPolicy
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -166,7 +168,8 @@ export async function handleApiRoutes(req, res, url) {
       logDbSizeMb: LogDatabase.getSizeMb(),
       autoCheckin: Boolean(config.autoCheckin),
       modelBlacklist: getModelBlacklist(),
-      thinkingPolicy: getThinkingPolicy()
+      thinkingPolicy: getThinkingPolicy(),
+      promptPolicy: getPromptPolicy()
     }));
   }
 
@@ -179,6 +182,11 @@ export async function handleApiRoutes(req, res, url) {
         const body = JSON.parse(b);
         if (body.thinkingPolicy && typeof body.thinkingPolicy === 'object') {
           setThinkingPolicy(body.thinkingPolicy);
+        }
+        if (body.promptPolicy && typeof body.promptPolicy === 'object') {
+          setPromptPolicy(body.promptPolicy);
+        } else if (body.promptMode !== undefined || body.promptFile !== undefined) {
+          setPromptPolicy({ mode: body.promptMode, file: body.promptFile });
         }
         if (typeof body.concurrencyLimitEnabled === 'boolean') {
           config.concurrencyLimitEnabled = body.concurrencyLimitEnabled;
@@ -216,6 +224,7 @@ export async function handleApiRoutes(req, res, url) {
         }
         saveConfig();
         Logger.info('CONFIG', `网关运行策略已更新 (热生效)`, {
+          promptPolicy: getPromptPolicy(),
           webAuthEnabled: config.webAuthEnabled,
           concurrencyLimitEnabled: config.concurrencyLimitEnabled,
           accountFailoverEnabled: config.accountFailoverEnabled,
@@ -228,7 +237,7 @@ export async function handleApiRoutes(req, res, url) {
           maxInFlightPerAccount: config.maxInFlightPerAccount
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true, config, logDbSizeMb: LogDatabase.getSizeMb() }));
+        return res.end(JSON.stringify({ ok: true, config, promptPolicy: getPromptPolicy(), logDbSizeMb: LogDatabase.getSizeMb() }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));

@@ -8,6 +8,23 @@
 
 ---
 
+## [2.179.0-gw.8] - 2026-11-12
+
+### 系统提示词模式重写引擎与自定义提示词挂载 (System Prompt Policy & Custom Persona)
+- **网关系统提示词重写策略引擎 (passthrough / custom / append)**：
+  - **custom 模式 (网关自有提示词，避免指纹误报)**：网关剔除客户端原始上下文中的所有 `system` / `developer` 提示词，将网关自有配置的提示词作为首条 `system` 消息注入头部，防止官方端点对客户端指纹产生误报。
+  - **append 模式 (客户端与网关并用)**：保留客户端前置的 `system` / `developer` 消息，并在紧随其后追加网关提示词。
+  - **passthrough 模式 (透传)**：严格透传客户端传入的原始上下文消息列表，不做重写。
+  - 核心逻辑实现在 [`src/upstream/payload.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/payload.mjs) 的 `applySystemPromptPolicy()`，并在 OpenAI（[`src/adapters/openai.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/openai.mjs)）与 Claude（[`src/adapters/anthropic.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/anthropic.mjs)）适配器中统一生效。
+- **自定义提示词文件挂载与跨平台路径兜底**：
+  - 在 [`src/config.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/config.mjs) 实现 `loadSystemPromptContent(filePath)`，支持挂载指定外部提示词文件（如 `D:\AI\dsh-purge\v1.1.40_prompt.txt`）。
+  - 支持跨平台部署自适应回退：在 Linux 宿主机上无法访问 Windows 绝对路径盘符时，自动以文件名（`path.basename`）回退检测项目根目录同名文件（`./v1.1.40_prompt.txt`）；文件不存在时优雅回退至官方默认小码酱内置设定。
+- **Web 控制台配置卡片与 REST API 支持**：
+  - 在 [`src/web/public/index.html`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/public/index.html) 新增「系统提示词策略」卡片，提供模式下拉框（`custom` / `append` / `passthrough`）与提示词文件路径输入框，支持一键保存热更新并在前端徽章联动展示。
+  - 在 [`src/web/routes.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/routes.mjs) 的 `GET /api/settings` 与 `POST /api/settings` 增加 `promptPolicy` 读写接口并即时持久化到 `config.json`。
+
+---
+
 ## [2.179.0-gw.7] - 2026-11-12
 
 ### 架构健壮性与高并发全方位优化 (Robustness, Concurrency & Performance Hardening)

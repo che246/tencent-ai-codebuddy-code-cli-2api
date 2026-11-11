@@ -1,6 +1,6 @@
 import zlib from 'node:zlib';
 import { Logger } from '../core/logger.mjs';
-import { normalizeRegion, resolveAccountRegion, REGION_INTL, getThinkingPolicy } from '../config.mjs';
+import { normalizeRegion, resolveAccountRegion, REGION_INTL, getThinkingPolicy, getPromptPolicy, loadSystemPromptContent } from '../config.mjs';
 
 // ─── 针对腾讯上游 11-128 渠道指纹检测的语义等价清洗 ─────────────────────────
 export function sanitizeChannelFingerprints(text, role) {
@@ -75,6 +75,55 @@ export function ensureLeadingSystemMessage(messages, regionOrAcc) {
   if (first && first.role === 'system') return messages;
   // 首条已是非 system：国际版会拒绝，补一条占位 system 在最前
   return [{ role: 'system', content: DEFAULT_INTL_SYSTEM }, ...messages];
+}
+
+// ─── 系统提示词策略重写 ─────────────────────────────────────────────────────
+/**
+ * [网关自有策略] 应用系统提示词策略 (passthrough / custom / append)
+ * @param {Array} messages 已 formatMessagesForUpstream 处理过的消息数组
+ * @returns {Array} 重写后的消息数组
+ */
+export function applySystemPromptPolicy(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+  const { mode, file } = getPromptPolicy();
+  if (mode === 'passthrough') {
+    return messages;
+  }
+
+  const promptText = loadSystemPromptContent(file);
+  if (!promptText || !promptText.trim()) {
+    return messages;
+  }
+
+  if (mode === 'custom') {
+    // 过滤掉原消息中所有的 system / developer 消息
+    const nonSystem = messages.filter(m => m && m.role !== 'system' && m.role !== 'developer');
+    // 在开头插入网关定制的系统提示词
+    return [
+      { role: 'system', content: promptText },
+      ...nonSystem
+    ];
+  }
+
+  if (mode === 'append') {
+    // 扫描开头连续的 system / developer 消息块
+    let insertAt = 0;
+    for (const m of messages) {
+      if (!m || (m.role !== 'system' && m.role !== 'developer')) {
+        break;
+      }
+      insertAt++;
+    }
+    const customMsg = { role: 'system', content: promptText };
+    return [
+      ...messages.slice(0, insertAt),
+      customMsg,
+      ...messages.slice(insertAt)
+    ];
+  }
+
+  return messages;
 }
 
 // ─── 推理参数规整 ───────────────────────────────────────────────────────────

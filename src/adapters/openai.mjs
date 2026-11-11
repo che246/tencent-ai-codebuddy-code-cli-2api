@@ -12,6 +12,7 @@ import {
 } from '../upstream/errors.mjs';
 import {
   formatMessagesForUpstream,
+  applySystemPromptPolicy,
   applyModelCapabilityGuards,
   applyReasoningParams,
   ensureLeadingSystemMessage,
@@ -231,6 +232,8 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
 
           try {
             upstreamPayload.model = curModel;
+            // 应用系统提示词策略 (passthrough / custom / append)
+            upstreamPayload.messages = applySystemPromptPolicy(upstreamPayload.messages);
             // 国际版要求首条消息必须是 system，缺则补一条（国内版不受影响）
             upstreamPayload.messages = ensureLeadingSystemMessage(upstreamPayload.messages, acc.region);
             const { body, isGzip } = prepareUpstreamBody(upstreamPayload);
