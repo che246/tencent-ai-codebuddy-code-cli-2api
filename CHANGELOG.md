@@ -12,6 +12,7 @@
 
 ### 系统提示词模式重写引擎与自定义提示词挂载 (System Prompt Policy & Custom Persona)
 - **网关系统提示词重写策略引擎 (passthrough / custom / append)**：
+  - **默认策略对齐**：系统提示词模式默认设为 `passthrough`（完全透传客户端原始 system），保证冷启动开箱即用时不干涉客户端自定义行为；用户可随时在 Web 控制台切换为 `custom` 或 `append`。
   - **custom 模式 (网关自有提示词，避免指纹误报)**：网关剔除客户端原始上下文中的所有 `system` / `developer` 提示词，将网关自有配置的提示词作为首条 `system` 消息注入头部，防止官方端点对客户端指纹产生误报。
   - **append 模式 (客户端与网关并用)**：保留客户端前置的 `system` / `developer` 消息，并在紧随其后追加网关提示词。
   - **passthrough 模式 (透传)**：严格透传客户端传入的原始上下文消息列表，不做重写。
