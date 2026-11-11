@@ -650,112 +650,120 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       return;
 
     } else {
-      const reader = upstreamRes.body.getReader();
-      const decoder = new TextDecoder();
-      let fullContent = '';
-      let fullReasoning = '';
-      let toolCallsMap = new Map();
-      let streamUsage = null;
-      let buffer = '';
+      let nonStreamInFlightDecremented = false;
+      try {
+        const reader = upstreamRes.body.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = '';
+        let fullReasoning = '';
+        let toolCallsMap = new Map();
+        let streamUsage = null;
+        let buffer = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-          const dataStr = trimmed.slice(5).trim();
-          if (dataStr === '[DONE]') continue;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]') continue;
 
-          try {
-            const chunk = JSON.parse(dataStr);
-            if (chunk.usage) streamUsage = chunk.usage;
-            const delta = chunk.choices?.[0]?.delta;
-            if (delta?.content) fullContent += delta.content;
-            if (delta?.reasoning_content || delta?.reasoning) {
-              fullReasoning += (delta.reasoning_content || delta.reasoning);
-            }
-            if (Array.isArray(delta?.tool_calls)) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index ?? 0;
-                if (!toolCallsMap.has(idx)) {
-                  toolCallsMap.set(idx, {
-                    id: tc.id || 'call_' + crypto.randomUUID().replace(/-/g, ''),
-                    name: tc.function?.name || '',
-                    arguments: ''
-                  });
-                }
-                const item = toolCallsMap.get(idx);
-                if (tc.id) item.id = tc.id;
-                if (tc.function?.name) item.name = tc.function.name;
-                if (tc.function?.arguments) item.arguments += tc.function.arguments;
+            try {
+              const chunk = JSON.parse(dataStr);
+              if (chunk.usage) streamUsage = chunk.usage;
+              const delta = chunk.choices?.[0]?.delta;
+              if (delta?.content) fullContent += delta.content;
+              if (delta?.reasoning_content || delta?.reasoning) {
+                fullReasoning += (delta.reasoning_content || delta.reasoning);
               }
-            }
-          } catch (_) {}
+              if (Array.isArray(delta?.tool_calls)) {
+                for (const tc of delta.tool_calls) {
+                  const idx = tc.index ?? 0;
+                  if (!toolCallsMap.has(idx)) {
+                    toolCallsMap.set(idx, {
+                      id: tc.id || 'call_' + crypto.randomUUID().replace(/-/g, ''),
+                      name: tc.function?.name || '',
+                      arguments: ''
+                    });
+                  }
+                  const item = toolCallsMap.get(idx);
+                  if (tc.id) item.id = tc.id;
+                  if (tc.function?.name) item.name = tc.function.name;
+                  if (tc.function?.arguments) item.arguments += tc.function.arguments;
+                }
+              }
+            } catch (_) {}
+          }
         }
-      }
 
-      activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
+        activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
+        nonStreamInFlightDecremented = true;
 
-      const contentBlocks = [];
-      if (fullReasoning) {
-        contentBlocks.push({ type: 'thinking', thinking: fullReasoning });
-      }
-      if (fullContent) {
-        contentBlocks.push({ type: 'text', text: fullContent });
-      }
-      for (const tc of toolCallsMap.values()) {
-        let inputArgs = {};
-        try { inputArgs = JSON.parse(tc.arguments || '{}'); } catch (_) {}
-        contentBlocks.push({
-          type: 'tool_use',
-          id: tc.id,
-          name: tc.name,
-          input: inputArgs
+        const contentBlocks = [];
+        if (fullReasoning) {
+          contentBlocks.push({ type: 'thinking', thinking: fullReasoning });
+        }
+        if (fullContent) {
+          contentBlocks.push({ type: 'text', text: fullContent });
+        }
+        for (const tc of toolCallsMap.values()) {
+          let inputArgs = {};
+          try { inputArgs = JSON.parse(tc.arguments || '{}'); } catch (_) {}
+          contentBlocks.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.name,
+            input: inputArgs
+          });
+        }
+
+        const latency = Date.now() - startTime;
+        const stopReason = toolCallsMap.size > 0 ? 'tool_use' : 'end_turn';
+        const inTokens = streamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
+        const outTokens = streamUsage?.completion_tokens || Math.max(1, Math.round((fullContent.length + fullReasoning.length) / 4));
+        const cachedTok = streamUsage?.cache_read_input_tokens ||
+                          streamUsage?.prompt_cache_hit_tokens ||
+                          streamUsage?.prompt_tokens_details?.cached_tokens ||
+                          streamUsage?.cached_tokens || 0;
+
+        recordApiCall({
+          accountUid: activeAcc?.uid,
+          accountName: formatAccountLogName(activeAcc),
+          model: actualModel,
+          isSuccess: true,
+          inputTokens: inTokens,
+          outputTokens: outTokens,
+          cachedTokens: cachedTok
         });
-      }
+        Logger.info('ANTHROPIC', `非流式完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${stopReason})`);
 
-      const latency = Date.now() - startTime;
-      const stopReason = toolCallsMap.size > 0 ? 'tool_use' : 'end_turn';
-      const inTokens = streamUsage?.prompt_tokens || Math.max(10, Math.round(rawBody.length / 4));
-      const outTokens = streamUsage?.completion_tokens || Math.max(1, Math.round((fullContent.length + fullReasoning.length) / 4));
-      const cachedTok = streamUsage?.cache_read_input_tokens ||
-                        streamUsage?.prompt_cache_hit_tokens ||
-                        streamUsage?.prompt_tokens_details?.cached_tokens ||
-                        streamUsage?.cached_tokens || 0;
-
-      recordApiCall({
-        accountUid: activeAcc?.uid,
-        accountName: formatAccountLogName(activeAcc),
-        model: actualModel,
-        isSuccess: true,
-        inputTokens: inTokens,
-        outputTokens: outTokens,
-        cachedTokens: cachedTok
-      });
-      Logger.info('ANTHROPIC', `非流式完成 [${actualModel}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${stopReason})`);
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      lifecycle.markFinished();
-      lifecycle.dispose();
-      return res.end(JSON.stringify({
-        id: msgId,
-        type: 'message',
-        role: 'assistant',
-        content: contentBlocks,
-        model: actualModel,
-        stop_reason: stopReason,
-        stop_sequence: null,
-        usage: {
-          input_tokens: inTokens,
-          output_tokens: outTokens,
-          cache_read_input_tokens: cachedTok
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        lifecycle.markFinished();
+        return res.end(JSON.stringify({
+          id: msgId,
+          type: 'message',
+          role: 'assistant',
+          content: contentBlocks,
+          model: actualModel,
+          stop_reason: stopReason,
+          stop_sequence: null,
+          usage: {
+            input_tokens: inTokens,
+            output_tokens: outTokens,
+            cache_read_input_tokens: cachedTok
+          }
+        }));
+      } finally {
+        if (!nonStreamInFlightDecremented && activeAcc) {
+          activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
         }
-      }));
+        lifecycle.dispose();
+      }
     }
 
   } catch (err) {

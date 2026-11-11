@@ -492,125 +492,133 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       return;
 
     } else {
-      const reader = upstreamRes.body.getReader();
-      const decoder = new TextDecoder();
+      let nonStreamInFlightDecremented = false;
+      try {
+        const reader = upstreamRes.body.getReader();
+        const decoder = new TextDecoder();
 
-      let fullContent = '';
-      let fullReasoning = '';
-      let toolCallsMap = new Map();
-      let finishReason = 'stop';
-      let responseId = 'chatcmpl-' + crypto.randomUUID();
-      let nonStreamUsage = null;
-      let buffer = '';
+        let fullContent = '';
+        let fullReasoning = '';
+        let toolCallsMap = new Map();
+        let finishReason = 'stop';
+        let responseId = 'chatcmpl-' + crypto.randomUUID();
+        let nonStreamUsage = null;
+        let buffer = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-          const dataStr = trimmed.slice(5).trim();
-          if (dataStr === '[DONE]') continue;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]') continue;
 
-          try {
-            const chunk = JSON.parse(dataStr);
-            if (chunk.usage) nonStreamUsage = chunk.usage;
-            responseId = chunk.id || responseId;
-            const choice = chunk.choices?.[0];
-            if (!choice) continue;
+            try {
+              const chunk = JSON.parse(dataStr);
+              if (chunk.usage) nonStreamUsage = chunk.usage;
+              responseId = chunk.id || responseId;
+              const choice = chunk.choices?.[0];
+              if (!choice) continue;
 
-            const delta = choice.delta;
-            if (delta?.content) fullContent += delta.content;
-            if (delta?.reasoning_content || delta?.reasoning) fullReasoning += (delta.reasoning_content || delta.reasoning);
+              const delta = choice.delta;
+              if (delta?.content) fullContent += delta.content;
+              if (delta?.reasoning_content || delta?.reasoning) fullReasoning += (delta.reasoning_content || delta.reasoning);
 
-            if (Array.isArray(delta?.tool_calls)) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index ?? 0;
-                if (!toolCallsMap.has(idx)) {
-                  toolCallsMap.set(idx, {
-                    id: tc.id || 'call_' + crypto.randomUUID(),
-                    type: 'function',
-                    function: { name: tc.function?.name || '', arguments: '' }
-                  });
+              if (Array.isArray(delta?.tool_calls)) {
+                for (const tc of delta.tool_calls) {
+                  const idx = tc.index ?? 0;
+                  if (!toolCallsMap.has(idx)) {
+                    toolCallsMap.set(idx, {
+                      id: tc.id || 'call_' + crypto.randomUUID(),
+                      type: 'function',
+                      function: { name: tc.function?.name || '', arguments: '' }
+                    });
+                  }
+                  const existing = toolCallsMap.get(idx);
+                  if (tc.id) existing.id = tc.id;
+                  if (tc.function?.name) existing.function.name = tc.function.name;
+                  if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
                 }
-                const existing = toolCallsMap.get(idx);
-                if (tc.id) existing.id = tc.id;
-                if (tc.function?.name) existing.function.name = tc.function.name;
-                if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
               }
-            }
 
-            if (choice.finish_reason) {
-              finishReason = choice.finish_reason;
-            }
-          } catch (_) {}
+              if (choice.finish_reason) {
+                finishReason = choice.finish_reason;
+              }
+            } catch (_) {}
+          }
         }
-      }
 
-      activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
+        activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
+        nonStreamInFlightDecremented = true;
 
-      const assembledMessage = {
-        role: 'assistant',
-        content: fullContent || null
-      };
+        const assembledMessage = {
+          role: 'assistant',
+          content: fullContent || null
+        };
 
-      if (fullReasoning) {
-        assembledMessage.reasoning_content = fullReasoning;
-      }
+        if (fullReasoning) {
+          assembledMessage.reasoning_content = fullReasoning;
+        }
 
-      if (toolCallsMap.size > 0) {
-        assembledMessage.tool_calls = Array.from(toolCallsMap.values());
-        finishReason = 'tool_calls';
-        Logger.info('TOOLS', `模型决定下发工具调用 (共 ${toolCallsMap.size} 个)`, {
-          tools: Array.from(toolCallsMap.values()).map(t => t.function.name)
+        if (toolCallsMap.size > 0) {
+          assembledMessage.tool_calls = Array.from(toolCallsMap.values());
+          finishReason = 'tool_calls';
+          Logger.info('TOOLS', `模型决定下发工具调用 (共 ${toolCallsMap.size} 个)`, {
+            tools: Array.from(toolCallsMap.values()).map(t => t.function.name)
+          });
+        }
+
+        const latency = Date.now() - startTime;
+        const inTokens = nonStreamUsage?.prompt_tokens ?? Math.max(10, Math.round(rawBody.length / 4));
+        const outTokens = nonStreamUsage?.completion_tokens ?? Math.max(1, Math.round(fullContent.length / 4));
+        const cachedTok = nonStreamUsage?.prompt_cache_hit_tokens ??
+                          nonStreamUsage?.prompt_tokens_details?.cached_tokens ??
+                          nonStreamUsage?.cache_read_input_tokens ?? 0;
+
+        recordApiCall({
+          accountUid: activeAcc?.uid,
+          accountName: formatAccountLogName(activeAcc),
+          model: callResult.model,
+          isSuccess: true,
+          inputTokens: inTokens,
+          outputTokens: outTokens,
+          cachedTokens: cachedTok
         });
-      }
+        Logger.info('CHAT', `非流式回复完成 [${callResult.model}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${finishReason})`);
 
-      const latency = Date.now() - startTime;
-      const inTokens = nonStreamUsage?.prompt_tokens ?? Math.max(10, Math.round(rawBody.length / 4));
-      const outTokens = nonStreamUsage?.completion_tokens ?? Math.max(1, Math.round(fullContent.length / 4));
-      const cachedTok = nonStreamUsage?.prompt_cache_hit_tokens ??
-                        nonStreamUsage?.prompt_tokens_details?.cached_tokens ??
-                        nonStreamUsage?.cache_read_input_tokens ?? 0;
-
-      recordApiCall({
-        accountUid: activeAcc?.uid,
-        accountName: formatAccountLogName(activeAcc),
-        model: callResult.model,
-        isSuccess: true,
-        inputTokens: inTokens,
-        outputTokens: outTokens,
-        cachedTokens: cachedTok
-      });
-      Logger.info('CHAT', `非流式回复完成 [${callResult.model}] 耗时 ${latency}ms (账号: [${formatAccountLogName(activeAcc)}], 缓存命中: ${cachedTok} tok, 结束原因: ${finishReason})`);
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      lifecycle.markFinished();
-      lifecycle.dispose();
-      return res.end(JSON.stringify({
-        id: responseId,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: upstreamPayload.model,
-        choices: [{
-          index: 0,
-          message: assembledMessage,
-          finish_reason: finishReason
-        }],
-        usage: {
-          prompt_tokens: inTokens,
-          completion_tokens: outTokens,
-          total_tokens: inTokens + outTokens,
-          prompt_tokens_details: {
-            cached_tokens: cachedTok
-          },
-          prompt_cache_hit_tokens: cachedTok
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        lifecycle.markFinished();
+        return res.end(JSON.stringify({
+          id: responseId,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: upstreamPayload.model,
+          choices: [{
+            index: 0,
+            message: assembledMessage,
+            finish_reason: finishReason
+          }],
+          usage: {
+            prompt_tokens: inTokens,
+            completion_tokens: outTokens,
+            total_tokens: inTokens + outTokens,
+            prompt_tokens_details: {
+              cached_tokens: cachedTok
+            },
+            prompt_cache_hit_tokens: cachedTok
+          }
+        }));
+      } finally {
+        if (!nonStreamInFlightDecremented && activeAcc) {
+          activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
         }
-      }));
+        lifecycle.dispose();
+      }
     }
   } catch (err) {
     Logger.error('CHAT', `处理对话请求异常: ${err.message}`);

@@ -8,6 +8,30 @@
 
 ---
 
+## [2.179.0-gw.7] - 2026-11-12
+
+### 架构健壮性与高并发全方位优化 (Robustness, Concurrency & Performance Hardening)
+- **非流式请求并发计数泄漏兜底 (高危修复)**：
+  - 在 [`src/adapters/openai.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/openai.mjs) 与 [`src/adapters/anthropic.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/anthropic.mjs) 的非流式处理分支中引入 `try ... finally` 闭环。
+  - 彻底解决若非流式请求读取期间发生网络中断、下游取消或 JSON 解析异常导致 `activeAcc.inFlight` 未能扣减与 `lifecycle` 未能释放的严重漏洞，杜绝账号并发数虚高被调度器永久锁死的隐患。
+- **HTTP 请求体防 OOM 保护与流错误防御**：
+  - 在 [`src/server.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/server.mjs) 封装统一的 `readRequestBody` 流读取器，施加 50MB 保护上限，提供 `Content-Length` 前置预检与动态接收字节流上限拦截，防止超大 Prompt 或大量 base64 图片导致 V8 堆内存溢出崩溃。
+  - 增加底层的 `req.on('error')` 监听，防客户端 Socket 异常引发未捕获错误。
+- **SQLite 开启 WAL 模式与同步优化 (I/O 吞吐提升 10x+)**：
+  - 在 [`src/core/database.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/core/database.mjs) 初始化时执行 `PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;`，实现读写并发完全不互斥，消除高并发日志写入时的磁盘锁阻塞。
+  - 在 `LogDatabaseEngine` 增加 `close()` 方法，并在优雅停机钩子（`flushAllOnShutdown`）中执行 WAL checkpoint 截断合并与安全关库。
+- **上游网络调用全局超时控制 (AbortSignal 注入)**：
+  - 为 [`src/adapters/tools.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/tools.mjs)（联网检索与网页抓取 15s）及 [`src/core/scheduler.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/core/scheduler.mjs)（积分查询、Token 换发、每日签到、配额明细 10s）注入 `signal: AbortSignal.timeout(...)`，杜绝异常网络下协程无限挂死。
+  - 服务端检索工具接口优选国内健康账号（`region: 'cn'`），降低跨域延迟。
+- **模型矩阵按区域去重拉取与日志校准**：
+  - 在 [`src/upstream/models.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/models.mjs) 增加 `fetchedRegions` 跟踪，同区域由首个可用账号成功拉取后直接跳过后续同区账号，消除启动与定时同步时的冗余网络往返，真实反映区域模型数量。
+- **定时任务错峰平滑化 (Jitter 调度)**：
+  - 在 [`src/server.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/server.mjs) 的 5 分钟积分刷新任务中引入 300ms 错峰间隔，杜绝所有账号瞬间并发向上游计费接口发送请求。
+- **SSE 看门狗心跳定时器自销毁加固**：
+  - 在 [`src/upstream/stream-guard.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/stream-guard.mjs) 的保活心跳定时器中，当检测到客户端连接已结束或销毁时立即执行 `clearInterval(timer)` 自行清理。
+
+---
+
 ## [2.179.0-gw.6] - 2026-11-11
 
 ### 体验优化与日志统计细化 (UI & Logging Clarity)

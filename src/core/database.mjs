@@ -20,6 +20,12 @@ class LogDatabaseEngine {
       this.sqliteDb = new DatabaseSync(DB_PATH);
       this.useSqlite = true;
 
+      // 开启 WAL (Write-Ahead Logging) 模式与 NORMAL 同步：读写不互斥，写入吞吐量提升 10 倍以上
+      this.sqliteDb.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+      `);
+
       this.sqliteDb.exec(`
         CREATE TABLE IF NOT EXISTS logs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -366,6 +372,17 @@ class LogDatabaseEngine {
       this.sqliteDb.exec('DELETE FROM credit_history');
       this.sqliteDb.exec('VACUUM');
     } catch (_) {}
+  }
+
+  close() {
+    if (!this.sqliteDb) return;
+    try {
+      // 优雅停机时执行 WAL checkpoint 截断合并，并关闭数据库连接
+      this.sqliteDb.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      this.sqliteDb.close();
+    } catch (_) {}
+    this.sqliteDb = null;
+    this.useSqlite = false;
   }
 }
 

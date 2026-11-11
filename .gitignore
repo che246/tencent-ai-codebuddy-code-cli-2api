@@ -9,6 +9,9 @@ config.json.*
 !config.example.json
 stats.json
 *.db
+*.db-*
+*.db-shm
+*.db-wal
 *.bak
 *.bak-*
 .env

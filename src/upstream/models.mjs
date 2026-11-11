@@ -69,13 +69,17 @@ export async function fetchDetailedModels(forceRefresh = false) {
   // 1) 在线优先：按账号所属区域分别拉取，合并去重
   //    国内版与国际版的模型集合不同（国际版有 gpt-6-astra/grok-4.7 等），
   //    两个区域都拉到才能让客户端看到完整可用列表。
-  //    每个模型额外打上 regions 标记（可能同时存在于两区），供前端分区展示。
+  //    优化：同区域由首个可用账号成功拉取后即标记完成，无需对同区全池重复请求
   const merged = new Map();
   const regionStat = {};
+  const fetchedRegions = new Set();
+
   for (const acc of accounts) {
     if (acc.status !== 'healthy' || !acc.accessToken) continue;
-    const ep = endpointsFor(acc);
     const region = resolveAccountRegion(acc);
+    if (fetchedRegions.has(region)) continue;
+
+    const ep = endpointsFor(acc);
     try {
       const res = await fetch(ep.config, {
         headers: {
@@ -88,7 +92,8 @@ export async function fetchDetailedModels(forceRefresh = false) {
         const data = await res.json();
         const models = data.data?.models || [];
         if (models.length > 0) {
-          regionStat[region] = (regionStat[region] || 0) + models.length;
+          fetchedRegions.add(region);
+          regionStat[region] = models.length;
           for (const m of models) {
             if (!m || !m.id) continue;
             const exist = merged.get(m.id);

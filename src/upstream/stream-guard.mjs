@@ -286,7 +286,10 @@ export function startHeartbeat(res, label = '', opts = {}) {
   };
 
   const timer = setInterval(() => {
-    if (res.writableEnded || res.destroyed) return;
+    if (res.writableEnded || res.destroyed) {
+      clearInterval(timer);
+      return;
+    }
     // 距上次真实写入不足间隔就不补，避免与数据帧叠加
     if (Date.now() - lastWrite < HEARTBEAT_INTERVAL_MS) return;
     try {

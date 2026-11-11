@@ -7,7 +7,8 @@ export async function handleSearch(req, res, rawBody) {
   const startTime = Date.now();
   try {
     const bodyObj = JSON.parse(rawBody || '{}');
-    const acc = AccountScheduler.selectAccount();
+    // 优先选择国内健康账号（因 agenttool/v1/search 部署于国内）
+    const acc = AccountScheduler.selectAccount(null, null, { region: 'cn' }) || AccountScheduler.selectAccount();
     if (!acc) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'No available account for search' }));
@@ -26,7 +27,8 @@ export async function handleSearch(req, res, rawBody) {
       body: JSON.stringify({
         query: queryStr,
         max_results: bodyObj.max_results || bodyObj.count || 5
-      })
+      }),
+      signal: AbortSignal.timeout(15000)
     });
 
     const searchData = await searchRes.text();
@@ -46,7 +48,8 @@ export async function handleWebFetch(req, res, rawBody) {
   const startTime = Date.now();
   try {
     const bodyObj = JSON.parse(rawBody || '{}');
-    const acc = AccountScheduler.selectAccount();
+    // 优先选择国内健康账号（因 agenttool/v1/webfetch 部署于国内）
+    const acc = AccountScheduler.selectAccount(null, null, { region: 'cn' }) || AccountScheduler.selectAccount();
     if (!acc) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'No available account for webfetch' }));
@@ -62,7 +65,8 @@ export async function handleWebFetch(req, res, rawBody) {
         'User-Agent': USER_AGENT,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ url: targetUrl })
+      body: JSON.stringify({ url: targetUrl }),
+      signal: AbortSignal.timeout(15000)
     });
 
     const fetchData = await fetchRes.text();

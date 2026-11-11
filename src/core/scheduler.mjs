@@ -303,7 +303,8 @@ export class AccountScheduler {
           'User-Agent': USER_AGENT,
           'Content-Type': 'application/json'
         },
-        body: '{}'
+        body: '{}',
+        signal: AbortSignal.timeout(10000)
       });
       if (res.ok) {
         const data = await res.json();
@@ -418,7 +419,8 @@ export class AccountScheduler {
           'User-Agent': USER_AGENT,
           'Content-Type': 'application/json'
         },
-        body: '{}'
+        body: '{}',
+        signal: AbortSignal.timeout(10000)
       });
       if (res.ok) {
         const data = await res.json();
@@ -482,7 +484,8 @@ export class AccountScheduler {
           'User-Agent': USER_AGENT,
           'Content-Type': 'application/json'
         },
-        body: '{}'
+        body: '{}',
+        signal: AbortSignal.timeout(10000)
       });
       const data = await res.json();
       const rawMsg = data.msg || '';
@@ -595,7 +598,8 @@ export class AccountScheduler {
       const resSummary = await fetch(ep.summary, {
         method: 'POST',
         headers,
-        body: '{}'
+        body: '{}',
+        signal: AbortSignal.timeout(10000)
       });
       const summaryData = (await resSummary.json()).data || {};
 
@@ -608,7 +612,8 @@ export class AccountScheduler {
           PageSize: 200,
           Status: [0, 2, 3],
           PackageCodes: allPackageCodes
-        })
+        }),
+        signal: AbortSignal.timeout(10000)
       });
       const freeData = (await resFree.json()).data || {};
       const allPackages = freeData.Accounts || [];
@@ -624,7 +629,8 @@ export class AccountScheduler {
             PageSize: 200,
             Status: [0, 2, 3],
             PackageCodes: allPackageCodes
-          })
+          }),
+          signal: AbortSignal.timeout(10000)
         });
         const paidData = (await resPaid.json()).data || {};
         paidPackages = paidData.Accounts || [];

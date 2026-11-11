@@ -8,13 +8,15 @@ import { handleAnthropicMessages } from './adapters/anthropic.mjs';
 import { handleSearch, handleWebFetch } from './adapters/tools.mjs';
 import { handleDashboard, handleApiRoutes } from './web/routes.mjs';
 import { saveStatsSync } from './core/metrics.mjs';
+import { LogDatabase } from './core/database.mjs';
 
-// 0. 优雅停机与进程退出数据保护钩子 (杜绝重启/强制终止时丢失统计与配置数据)
+// 0. 优雅停机与进程退出数据保护钩子 (杜绝重启/强制终止时丢失统计、配置与数据库 WAL 缓存)
 function flushAllOnShutdown() {
   try {
     saveStatsSync();
     saveAccounts();
     saveConfig();
+    LogDatabase.close();
   } catch (_) {}
 }
 process.on('SIGINT', () => {
@@ -31,6 +33,54 @@ process.on('beforeExit', () => {
 
 // 1. 初始化官方同款 TLS 证书栈
 TlsCertificateStack.init();
+
+// 请求体 50MB 保护上限，防止超大 Prompt 或大量 base64 图片引发 V8 OOM 崩溃
+const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024;
+
+/**
+ * 安全读取请求体并分发给处理器，带 Content-Length 预检、实时字节流限额以及底层 Socket 错误保护
+ */
+function readRequestBody(req, res, handler, maxBytes = MAX_REQUEST_BODY_BYTES) {
+  const contentLength = parseInt(req.headers['content-length'] || '0', 10);
+  if (contentLength > maxBytes) {
+    res.writeHead(413, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: { message: `Payload too large (max ${maxBytes / 1024 / 1024}MB)`, type: 'payload_too_large' } }));
+  }
+
+  let rawBody = '';
+  let receivedBytes = 0;
+  let aborted = false;
+
+  req.on('data', chunk => {
+    if (aborted) return;
+    receivedBytes += chunk.length;
+    if (receivedBytes > maxBytes) {
+      aborted = true;
+      req.destroy();
+      if (!res.writableEnded) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `Payload too large (exceeded ${maxBytes / 1024 / 1024}MB limit)`, type: 'payload_too_large' } }));
+      }
+      return;
+    }
+    rawBody += chunk;
+  });
+
+  req.on('end', () => {
+    if (aborted) return;
+    handler(req, res, rawBody);
+  });
+
+  req.on('error', (err) => {
+    if (aborted) return;
+    aborted = true;
+    Logger.error('SERVER', `读取客户端请求流异常: ${err.message}`);
+    if (!res.writableEnded) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Failed to read request stream', type: 'bad_request' } }));
+    }
+  });
+}
 
 // 2. HTTP 服务与路由总线
 const server = http.createServer(async (req, res) => {
@@ -76,34 +126,22 @@ const server = http.createServer(async (req, res) => {
 
   // 5. 官方免费服务端联网检索: POST /v1/search & POST /search
   if (req.method === 'POST' && (url.pathname === '/v1/search' || url.pathname === '/search')) {
-    let rawBody = '';
-    req.on('data', c => rawBody += c);
-    req.on('end', () => handleSearch(req, res, rawBody));
-    return;
+    return readRequestBody(req, res, handleSearch);
   }
 
   // 6. 官方免费服务端网页抓取: POST /v1/fetch & POST /fetch
   if (req.method === 'POST' && (url.pathname === '/v1/fetch' || url.pathname === '/fetch')) {
-    let rawBody = '';
-    req.on('data', c => rawBody += c);
-    req.on('end', () => handleWebFetch(req, res, rawBody));
-    return;
+    return readRequestBody(req, res, handleWebFetch);
   }
 
   // 7. Anthropic 协议适配: POST /v1/messages & POST /messages
   if (req.method === 'POST' && (url.pathname === '/v1/messages' || url.pathname === '/messages')) {
-    let rawBody = '';
-    req.on('data', c => rawBody += c);
-    req.on('end', () => handleAnthropicMessages(req, res, rawBody));
-    return;
+    return readRequestBody(req, res, handleAnthropicMessages);
   }
 
   // 8. OpenAI 协议适配: POST /v1/chat/completions
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
-    let rawBody = '';
-    req.on('data', c => rawBody += c);
-    req.on('end', () => handleOpenAiChatCompletions(req, res, rawBody));
-    return;
+    return readRequestBody(req, res, handleOpenAiChatCompletions);
   }
 
   // 9. /api/* 运维与管理 REST API
@@ -115,11 +153,13 @@ const server = http.createServer(async (req, res) => {
   return res.end(JSON.stringify({ error: 'Endpoint not found' }));
 });
 
-// 3. 后台定时任务
+// 3. 后台定时任务 (每 5 分钟轮询，错峰 300ms 避免向腾讯云上游产生并发风暴)
 setInterval(() => {
-  for (const acc of accounts) {
-    AccountScheduler.refreshCredits(acc);
-  }
+  accounts.forEach((acc, idx) => {
+    setTimeout(() => {
+      AccountScheduler.refreshCredits(acc);
+    }, idx * 300);
+  });
 }, 5 * 60 * 1000);
 
 // 每小时自动执行日志轮转：严格仅保留最近 3 天的日志
