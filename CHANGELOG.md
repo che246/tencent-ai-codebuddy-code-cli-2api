@@ -22,7 +22,7 @@
   - 支持跨平台部署自适应回退：在 Linux 宿主机上无法访问 Windows 绝对路径盘符时，自动以文件名（`path.basename`）回退检测项目根目录同名文件（`./v1.1.40_prompt.txt`）；文件不存在时优雅回退至官方默认小码酱内置设定。
 - **Web 控制台配置卡片与 REST API 支持**：
   - 在 [`src/web/public/index.html`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/public/index.html) 新增「系统提示词策略」卡片，提供模式下拉框（`custom` / `append` / `passthrough`）与提示词文件路径输入框，支持一键保存热更新并在前端徽章联动展示。
-  - **提示词文件路径联动显示体验优化**：仅在选择 `custom`（网关自有提示词）或 `append`（并用）模式时才动态展开显示「提示词文件路径」选项；在 `passthrough`（透传原始）模式下自动隐藏，界面精炼直观。
+  - **提示词文件路径联动显示与多端路径提示优化**：仅在选择 `custom`（网关自有提示词）或 `append`（并用）模式时才动态展开显示「提示词文件路径」选项；说明文案明确展示 Windows 路径示例（如 `D:\AI\dsh-purge\v1.1.40_prompt.txt`）、Linux 部署路径示例（如 `/home/node_code/codebuddy-code/v1.1.40_prompt.txt`，同时前端结合 `rootDir` 动态自适应）及相对路径写法（`v1.1.40_prompt.txt`），指引清晰明了。
   - 在 [`src/web/routes.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/routes.mjs) 的 `GET /api/settings` 与 `POST /api/settings` 增加 `promptPolicy` 读写接口并即时持久化到 `config.json`。
 
 ---

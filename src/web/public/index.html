@@ -936,7 +936,7 @@
                 <label style="font-size:13px; font-weight:600; color:var(--text-main);">提示词文件路径</label>
                 <input type="text" id="inputPromptFile" class="search-input" style="width:100%; padding:8px 12px; font-size:13px;" placeholder="留空 = 内置默认提示词">
                 <div style="font-size:12px; color:var(--text-muted); line-height:1.5;">
-                  指定提示词文件绝对路径或相对路径（如 <code>D:\AI\dsh-purge\v1.1.40_prompt.txt</code>），Linux 部署自动同名兼容项目根目录。
+                  指定提示词文件绝对路径或相对路径（Windows 如 <code>D:\AI\dsh-purge\v1.1.40_prompt.txt</code>；Linux 部署路径如 <code id="txtLinuxPromptExample">/home/node_code/codebuddy-code/v1.1.40_prompt.txt</code>，或直接填写相对路径 <code>v1.1.40_prompt.txt</code>）。跨系统部署时，输入 Windows 路径亦会自动按文件名同名兼容项目根目录。
                 </div>
               </div>
             </div>
@@ -1729,6 +1729,11 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           }
           if (document.getElementById('inputPromptFile')) {
             document.getElementById('inputPromptFile').value = s.promptPolicy.file || '';
+          }
+          if (s.rootDir && document.getElementById('txtLinuxPromptExample')) {
+            const sep = s.rootDir.includes('\\') ? '\\' : '/';
+            const normalizedRoot = s.rootDir.replace(/[/\\]+$/, '');
+            document.getElementById('txtLinuxPromptExample').innerText = `${normalizedRoot}${sep}v1.1.40_prompt.txt`;
           }
           updatePromptUiState();
         }

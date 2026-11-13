@@ -169,7 +169,8 @@ export async function handleApiRoutes(req, res, url) {
       autoCheckin: Boolean(config.autoCheckin),
       modelBlacklist: getModelBlacklist(),
       thinkingPolicy: getThinkingPolicy(),
-      promptPolicy: getPromptPolicy()
+      promptPolicy: getPromptPolicy(),
+      rootDir: ROOT_DIR
     }));
   }
 
