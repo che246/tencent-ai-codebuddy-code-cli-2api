@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { CURRENT_VERSION, USER_AGENT, resolveAccountRegion, REGION_BASE, REGION_CN, REGION_INTL } from '../config.mjs';
+import { CURRENT_VERSION, USER_AGENT, resolveAccountRegion, REGION_BASE, REGION_CN, REGION_INTL, getPrivateDataPolicy } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 
 // ─── 上游风控防护（实测得出，非猜测）────────────────────────────────────────
@@ -142,6 +142,41 @@ function resolveDomainHeader(acc) {
 }
 
 /**
+ * 解析出站 X-Private-Data 请求头取值。
+ *
+ * 依据官方 CLI（package/dist/codebuddy-headless.js 源码）：
+ *   isEnterpriseEditionAccount(acc) = !!acc?.enterpriseId || acc?.type === 'ultimate' || acc?.type === 'exclusive'
+ *   resolveModelOptimizationEnabled({ explicitEnabled, productDefaultEnabled, isEnterpriseEdition })
+ *   ep[PRIVATE_DATA_HEADER] = resolveModelOptimizationEnabled(...) ? "false" : "true"
+ *
+ * 三套出站身份各自的官方默认（auto）：
+ *   1. 国内个人号：发行版默认允许优化 (productDefaultEnabled=true) -> 发送 "false"
+ *   2. 国际版账号：国际发行版默认关闭优化 (DefaultModelOptimizationOff=true) -> 发送 "true"
+ *   3. 企业版账号：企业数据默认私有隔离保护 (isEnterprise=true) -> 发送 "true"
+ *
+ * 若网关配置为 'true' 或 'false' 则无条件覆盖。
+ */
+export function resolvePrivateDataHeader(acc) {
+  const policy = getPrivateDataPolicy();
+  if (policy === 'true') return 'true';
+  if (policy === 'false') return 'false';
+
+  // auto: 保持三套出站身份各自的官方默认
+  if (!acc) return 'false';
+
+  // 1. 企业版账号
+  const isEnterprise = Boolean(acc.enterpriseId || acc.type === 'ultimate' || acc.type === 'exclusive');
+  if (isEnterprise) return 'true';
+
+  // 2. 国际版账号
+  const region = resolveAccountRegion(acc);
+  if (region === REGION_INTL) return 'true';
+
+  // 3. 国内个人号
+  return 'false';
+}
+
+/**
  * 构造发往上游 /v2/chat/completions 的请求头。
  *
  * @param {string} accessToken 账号 accessToken
@@ -237,7 +272,7 @@ export function buildOfficialUpstreamHeaders(accessToken, targetModel, sessionKe
     // ── 身份与产品 ─────────────────────────────────────
     'X-Domain': resolveDomainHeader(acc),
     'X-Product': 'SaaS',
-    'X-Private-Data': 'false',
+    'X-Private-Data': resolvePrivateDataHeader(acc),
     'X-IDE-Type': 'CLI',
     'X-IDE-Name': 'CLI',
     'X-IDE-Version': CURRENT_VERSION,

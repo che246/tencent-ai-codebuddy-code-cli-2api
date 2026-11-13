@@ -566,5 +566,23 @@ export function setLoggingPolicy({ requestClientInfo, requestArchiveContext } = 
   return getLoggingPolicy();
 }
 
+// ─── 数据用途声明策略 (Private Data Policy: X-Private-Data) ───────────────────
+//   privateDataPolicy: 'auto' | 'true' | 'false'，默认 'auto'
+export function getPrivateDataPolicy() {
+  const p = config.privateDataPolicy;
+  if (p === 'true' || p === 'false') return p;
+  return 'auto';
+}
+
+export function setPrivateDataPolicy(val) {
+  const normalized = (val === 'true' || val === true) ? 'true'
+    : (val === 'false' || val === false) ? 'false'
+    : 'auto';
+  config.privateDataPolicy = normalized;
+  saveConfig();
+  return getPrivateDataPolicy();
+}
+
+
 
 

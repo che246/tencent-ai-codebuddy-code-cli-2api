@@ -16,6 +16,7 @@
   "promptFile": "v1.1.40_prompt.txt",
   "requestClientInfo": true,
   "requestArchiveContext": false,
+  "privateDataPolicy": "auto",
   "modelFallback": {
     "cn:deepseek-v4.1-flash": [
       "intl:deepseek-v4.1-flash-sg",

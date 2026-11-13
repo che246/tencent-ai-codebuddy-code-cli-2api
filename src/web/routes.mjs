@@ -23,7 +23,9 @@ import {
   getPromptPolicy,
   setPromptPolicy,
   getLoggingPolicy,
-  setLoggingPolicy
+  setLoggingPolicy,
+  getPrivateDataPolicy,
+  setPrivateDataPolicy
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -175,6 +177,7 @@ export async function handleApiRoutes(req, res, url) {
       loggingPolicy: getLoggingPolicy(),
       requestClientInfo: config.requestClientInfo !== false,
       requestArchiveContext: Boolean(config.requestArchiveContext),
+      privateDataPolicy: getPrivateDataPolicy(),
       rootDir: ROOT_DIR
     }));
   }
@@ -203,6 +206,9 @@ export async function handleApiRoutes(req, res, url) {
           if (typeof body.requestArchiveContext === 'boolean') {
             config.requestArchiveContext = body.requestArchiveContext;
           }
+        }
+        if (body.privateDataPolicy !== undefined) {
+          setPrivateDataPolicy(body.privateDataPolicy);
         }
         if (typeof body.concurrencyLimitEnabled === 'boolean') {
           config.concurrencyLimitEnabled = body.concurrencyLimitEnabled;

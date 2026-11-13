@@ -1026,6 +1026,32 @@
             </div>
           </div>
 
+          <!-- 数据用途声明卡片 -->
+          <div class="card" style="margin-top: 20px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+              <div style="flex:1; min-width:280px;">
+                <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                  <span>数据用途声明</span>
+                  <span id="lblPrivateDataSubtitle" style="font-weight:normal; font-size:13px; color:var(--text-muted);">(跟随身份默认)</span>
+                </div>
+                <div style="font-size:12px; color:var(--text-muted); margin-top:6px; line-height:1.6;">
+                  <code>X-Private-Data</code> 会随每次模型请求发送，声明这趟对话是否允许参与模型优化。<code>auto</code> 保持三套出站身份各自的官方默认；<code>true</code> / <code>false</code> 无条件覆盖。
+                </div>
+                <div style="font-size:12px; color:#f59e0b; margin-top:4px; line-height:1.5;">
+                  这是对上游的数据用途声明，只影响 X-Private-Data 头，不改变请求内容。
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; flex-shrink:0; margin-top:4px;">
+                <select id="selPrivateDataPolicy" class="search-input" style="padding:6px 12px; font-size:13px; min-width:180px;" onchange="updatePrivateDataUiSubtitle()">
+                  <option value="auto" selected>跟随官方默认 (auto)</option>
+                  <option value="true">true — 声明为私有数据 (不参与模型优化)</option>
+                  <option value="false">false — 允许参与模型优化</option>
+                </select>
+                <button class="btn-primary" style="padding:6px 14px; font-size:12px; white-space:nowrap;" onclick="savePrivateDataPolicy()">保存</button>
+              </div>
+            </div>
+          </div>
+
           <!-- 备用模型多级降级链编排与顺序调整 -->
           <div class="card" style="margin-top: 20px;">
             <div class="card-title" style="flex-wrap:wrap; gap:12px;">
@@ -1789,6 +1815,12 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           document.getElementById('chkRequestArchiveContext').checked = Boolean(s.requestArchiveContext);
         }
 
+        // 数据用途声明策略 (X-Private-Data)
+        if (s.privateDataPolicy && document.getElementById('selPrivateDataPolicy')) {
+          document.getElementById('selPrivateDataPolicy').value = s.privateDataPolicy;
+          updatePrivateDataUiSubtitle();
+        }
+
         // 规范化多级备用模型降级链配置并渲染
         if (s.modelFallback && typeof s.modelFallback === 'object') {
           const normalized = {};
@@ -2274,6 +2306,36 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           body: JSON.stringify({ requestClientInfo, requestArchiveContext })
         });
       } catch (_) {}
+    }
+
+    function updatePrivateDataUiSubtitle() {
+      const val = document.getElementById('selPrivateDataPolicy')?.value || 'auto';
+      const sub = document.getElementById('lblPrivateDataSubtitle');
+      if (sub) {
+        sub.innerText = val === 'true' ? '(强制为私有数据)'
+          : val === 'false' ? '(强制允许模型优化)'
+          : '(跟随身份默认)';
+      }
+    }
+
+    async function savePrivateDataPolicy() {
+      const val = document.getElementById('selPrivateDataPolicy')?.value || 'auto';
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ privateDataPolicy: val })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          alert('✅ 数据用途声明策略已保存并即时生效！');
+        } else {
+          alert('❌ 保存失败：' + (data.error || '未知错误'));
+        }
+        await loadSettings();
+      } catch (err) {
+        alert('保存数据用途声明失败：' + err.message);
+      }
     }
 
     async function updateModelThinkingLevel(modelId, level) {

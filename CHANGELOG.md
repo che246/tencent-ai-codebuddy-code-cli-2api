@@ -8,6 +8,24 @@
 
 ---
 
+## [2.179.0-gw.10] - 2026-11-14
+
+### 数据用途声明与出站 X-Private-Data 动态策略 (Private Data Declaration)
+- **三套出站身份官方默认自动判定 (`auto`)**：
+  - 基于官方 CLI `package/dist/codebuddy-headless.js`（`resolveModelOptimizationEnabled` 与 `isEnterpriseEditionAccount`）源码逻辑全面对齐：
+    1. **国内个人号**：发行版默认允许参与模型优化 (`productDefaultEnabled=true`)，发送 `'X-Private-Data': 'false'`；
+    2. **国际版账号**：国际发行版默认关闭模型优化 (`DefaultModelOptimizationOff=true`)，发送 `'X-Private-Data': 'true'`；
+    3. **企业版账号**：企业数据默认私有隔离 (`isEnterprise=true`)，发送 `'X-Private-Data': 'true'`。
+- **无条件覆盖支持 (`true` / `false`)**：
+  - 允许管理员在 Web 控制台或 API 无条件覆盖：设置为 `true` 时恒定声明私有数据；设置为 `false` 时声明允许参与模型优化。
+  - 明确仅影响出站 `X-Private-Data` 请求头，不影响请求体上下文与对话内容。
+- **Web 控制台卡片与 API 闭环支持**：
+  - 在 [`src/web/public/index.html`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/public/index.html) 设置页增加「数据用途声明」配置卡片，完美还原复刻控制台布局、黄色警示文案与副标题动态联动；
+  - 在 [`src/upstream/headers.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/headers.mjs) 实现 `resolvePrivateDataHeader(acc)` 动态注入；
+  - 在 [`src/web/routes.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/routes.mjs) 的 `GET /api/settings` 与 `POST /api/settings` 补充 `privateDataPolicy` 读写与落盘。
+
+---
+
 ## [2.179.0-gw.9] - 2026-11-14
 
 ### 日志采集策略与请求上下文排查归档 (Logging Policy & Context Tracing)
