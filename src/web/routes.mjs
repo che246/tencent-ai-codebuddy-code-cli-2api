@@ -21,7 +21,9 @@ import {
   setThinkingPolicy,
   setModelThinkingLevel,
   getPromptPolicy,
-  setPromptPolicy
+  setPromptPolicy,
+  getLoggingPolicy,
+  setLoggingPolicy
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -170,6 +172,9 @@ export async function handleApiRoutes(req, res, url) {
       modelBlacklist: getModelBlacklist(),
       thinkingPolicy: getThinkingPolicy(),
       promptPolicy: getPromptPolicy(),
+      loggingPolicy: getLoggingPolicy(),
+      requestClientInfo: config.requestClientInfo !== false,
+      requestArchiveContext: Boolean(config.requestArchiveContext),
       rootDir: ROOT_DIR
     }));
   }
@@ -188,6 +193,16 @@ export async function handleApiRoutes(req, res, url) {
           setPromptPolicy(body.promptPolicy);
         } else if (body.promptMode !== undefined || body.promptFile !== undefined) {
           setPromptPolicy({ mode: body.promptMode, file: body.promptFile });
+        }
+        if (body.loggingPolicy && typeof body.loggingPolicy === 'object') {
+          setLoggingPolicy(body.loggingPolicy);
+        } else {
+          if (typeof body.requestClientInfo === 'boolean') {
+            config.requestClientInfo = body.requestClientInfo;
+          }
+          if (typeof body.requestArchiveContext === 'boolean') {
+            config.requestArchiveContext = body.requestArchiveContext;
+          }
         }
         if (typeof body.concurrencyLimitEnabled === 'boolean') {
           config.concurrencyLimitEnabled = body.concurrencyLimitEnabled;

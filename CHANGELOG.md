@@ -8,6 +8,22 @@
 
 ---
 
+## [2.179.0-gw.9] - 2026-11-14
+
+### 日志采集策略与请求上下文排查归档 (Logging Policy & Context Tracing)
+- **调用来源采集开关 (`requestClientInfo`)**：
+  - 支持配置是否在运行日志中采集并记录客户端 IP (`x-forwarded-for` / `remoteAddress`) 与 `User-Agent`，默认开启。
+  - 关闭时，日志元数据与看板完全剔除客户端来源信息，保护调用方隐私；改动即时生效，无需重启。
+- **请求上下文明文归档开关 (`requestArchiveContext`)**：
+  - 支持临时开启请求上下文（`system` / `messages` 原文）归档，默认关闭（保护用户提示词与敏感数据）。
+  - 在 [`src/upstream/payload.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/upstream/payload.mjs) 实现 `extractArchiveContext()`，自动针对大图 Base64 进行安全摘要，防止日志与数据库体积膨胀。
+  - 开启后，在「运行日志」页面可点击任意带有上下文的请求行（或通过「🔍 查看请求上下文」徽章）一键展开/收起查看本轮请求的完整提示词与多轮消息，并支持一键复制 JSON 原文，便于排查上游拒绝与报错原因。
+- **Web 控制台与 API 闭环支持**：
+  - 在 [`src/web/public/index.html`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/public/index.html) 设置页增加「日志」配置卡片，对齐官方控制台布局与交互体验。
+  - 在 [`src/web/routes.mjs`](file:///d:/AI/tencent-ai-codebuddy-code/src/web/routes.mjs) 的 `GET /api/settings` 与 `POST /api/settings` 补充 `loggingPolicy`（`requestClientInfo` / `requestArchiveContext`）读写与落盘。
+
+---
+
 ## [2.179.0-gw.8] - 2026-11-12
 
 ### 系统提示词模式重写引擎与自定义提示词挂载 (System Prompt Policy & Custom Persona)

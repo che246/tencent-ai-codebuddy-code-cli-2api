@@ -545,4 +545,26 @@ export function setPromptPolicy({ mode, file } = {}) {
   return getPromptPolicy();
 }
 
+// ─── 日志采集策略配置 (Logging Policy) ──────────────────────────────────────────
+//   requestClientInfo: 是否记录调用来源 (客户端 IP / User-Agent)，默认 true
+//   requestArchiveContext: 是否记录请求上下文 (system / messages 原文)，默认 false
+export function getLoggingPolicy() {
+  return {
+    requestClientInfo: config.requestClientInfo !== false,
+    requestArchiveContext: Boolean(config.requestArchiveContext)
+  };
+}
+
+export function setLoggingPolicy({ requestClientInfo, requestArchiveContext } = {}) {
+  if (typeof requestClientInfo === 'boolean') {
+    config.requestClientInfo = requestClientInfo;
+  }
+  if (typeof requestArchiveContext === 'boolean') {
+    config.requestArchiveContext = requestArchiveContext;
+  }
+  saveConfig();
+  return getLoggingPolicy();
+}
+
+
 

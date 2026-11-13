@@ -996,6 +996,36 @@
             </div>
           </div>
 
+          <!-- 日志配置卡片 -->
+          <div class="card" style="margin-top: 20px;">
+            <div class="card-title">
+              <span>日志</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:16px;">
+              <!-- 记录调用来源 (客户端 IP / User-Agent) -->
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span style="font-size:13.5px; font-weight:600; color:var(--text-main);">记录调用来源 (客户端 IP / User-Agent)</span>
+                  <input type="checkbox" id="chkRequestClientInfo" checked onchange="saveLoggingPolicyFromUi()" style="width:16px; height:16px; cursor:pointer; accent-color:#3b82f6;">
+                </div>
+                <div style="font-size:12px; color:var(--text-muted); line-height:1.6;">
+                  开启后，「运行日志」页的请求记录会显示每次调用来自哪个 IP、用什么客户端；关闭则归档与面板都不再出现来源信息。改动即时生效，无需重启。
+                </div>
+              </div>
+
+              <!-- 记录请求上下文 (system / messages 原文) -->
+              <div style="display:flex; flex-direction:column; gap:6px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.05);">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span style="font-size:13.5px; font-weight:600; color:var(--text-main);">记录请求上下文 (system / messages 原文)</span>
+                  <input type="checkbox" id="chkRequestArchiveContext" onchange="saveLoggingPolicyFromUi()" style="width:16px; height:16px; cursor:pointer; accent-color:#3b82f6;">
+                </div>
+                <div style="font-size:12px; color:var(--text-muted); line-height:1.6;">
+                  开启后，「请求事件日志」点任意一行可展开当轮发出去的提示词与消息。这是<strong>用户数据</strong>：会以明文写进归档文件（保留 7 天），仅在排查「上游为什么拒这条请求」时临时打开。
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- 备用模型多级降级链编排与顺序调整 -->
           <div class="card" style="margin-top: 20px;">
             <div class="card-title" style="flex-wrap:wrap; gap:12px;">
@@ -1751,6 +1781,14 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           if (radio) radio.checked = true;
         }
 
+        // 日志采集策略
+        if (document.getElementById('chkRequestClientInfo')) {
+          document.getElementById('chkRequestClientInfo').checked = s.requestClientInfo !== false;
+        }
+        if (document.getElementById('chkRequestArchiveContext')) {
+          document.getElementById('chkRequestArchiveContext').checked = Boolean(s.requestArchiveContext);
+        }
+
         // 规范化多级备用模型降级链配置并渲染
         if (s.modelFallback && typeof s.modelFallback === 'object') {
           const normalized = {};
@@ -2222,6 +2260,18 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ thinkingPolicy: currentThinkingPolicy })
+        });
+      } catch (_) {}
+    }
+
+    async function saveLoggingPolicyFromUi() {
+      const requestClientInfo = Boolean(document.getElementById('chkRequestClientInfo')?.checked);
+      const requestArchiveContext = Boolean(document.getElementById('chkRequestArchiveContext')?.checked);
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestClientInfo, requestArchiveContext })
         });
       } catch (_) {}
     }
@@ -2919,7 +2969,22 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
 
       logBox.innerHTML = filtered.map(item => {
         const badgeClass = item.level === 'ERROR' ? 'log-badge-error' : item.level === 'WARN' ? 'log-badge-warn' : 'log-badge-info';
-        const metaHtml = item.meta ? `<span class="log-meta">${escapeHtml(JSON.stringify(item.meta))}</span>` : '';
+        
+        let hasContext = false;
+        let displayMeta = item.meta;
+        let contextData = null;
+        if (item.meta && typeof item.meta === 'object') {
+          if (item.meta.context) {
+            hasContext = true;
+            contextData = item.meta.context;
+            displayMeta = { ...item.meta };
+            delete displayMeta.context;
+          }
+        }
+
+        const metaHtml = (displayMeta && Object.keys(displayMeta).length > 0)
+          ? `<span class="log-meta">${escapeHtml(JSON.stringify(displayMeta))}</span>`
+          : '';
         const timeDisplay = currentLogDate === 'ALL' ? item.time : item.time.slice(11);
         const catClass = `log-cat log-cat-${(item.category || '').toLowerCase()}`;
         let msgHtml = escapeHtml(item.message);
@@ -2928,18 +2993,52 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
                            .replace(/积分变动:\s*(\-[0-9.]+)/, '积分变动: <span style="color:#f87171; font-weight:bold;">$1</span>');
         }
 
+        const contextBadge = hasContext
+          ? `<span class="badge badge-purple" style="font-size:10px; padding:1px 6px; margin-left:6px; cursor:pointer;" onclick="event.stopPropagation(); toggleLogContext('${item.id}')">🔍 查看请求上下文</span>`
+          : '';
+
+        const contextBox = hasContext ? `
+          <div id="ctx-box-${item.id}" class="log-context-box" style="display:none; width:100%; margin:4px 0 8px 0; padding:10px 14px; background:rgba(0,0,0,0.5); border-radius:6px; border:1px solid rgba(168,85,247,0.35); font-family:monospace; font-size:11.5px; white-space:pre-wrap; max-height:360px; overflow-y:auto; color:var(--text-main);">
+            <div style="font-weight:bold; color:#c084fc; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+              <span>📝 本轮请求上下文 (system / messages 原文)</span>
+              <button class="btn-outline" style="padding:2px 8px; font-size:11px;" onclick="event.stopPropagation(); copyLogContext('${item.id}')">📋 复制原文</button>
+            </div>
+            <pre style="margin:0; font-family:inherit; white-space:pre-wrap; word-break:break-all;">${escapeHtml(JSON.stringify(contextData, null, 2))}</pre>
+          </div>
+        ` : '';
+
+        const rowClick = hasContext ? `onclick="toggleLogContext('${item.id}')" style="cursor:pointer;" title="点击展开/收起请求上下文"` : '';
+
         return `
-          <div class="log-row">
-            <span class="log-time" title="${item.time}">${timeDisplay}</span>
-            <span class="${badgeClass}">${item.level}</span>
-            <span class="${catClass}">[${item.category}]</span>
-            <span class="log-msg">${msgHtml}${metaHtml}</span>
+          <div style="display:flex; flex-direction:column; border-bottom:1px solid rgba(255,255,255,0.03);">
+            <div class="log-row" style="border-bottom:none;" ${rowClick}>
+              <span class="log-time" title="${item.time}">${timeDisplay}</span>
+              <span class="${badgeClass}">${item.level}</span>
+              <span class="${catClass}">[${item.category}]</span>
+              <span class="log-msg">${msgHtml}${metaHtml}${contextBadge}</span>
+            </div>
+            ${contextBox}
           </div>
         `;
       }).join('');
 
       if (autoScrollEnabled) {
         logBox.scrollTop = 0;
+      }
+    }
+
+    function toggleLogContext(id) {
+      const el = document.getElementById('ctx-box-' + id);
+      if (el) {
+        el.style.display = el.style.display === 'none' ? 'block' : 'none';
+      }
+    }
+
+    function copyLogContext(id) {
+      const item = allLogs.find(l => String(l.id) === String(id));
+      if (item && item.meta && item.meta.context) {
+        navigator.clipboard.writeText(JSON.stringify(item.meta.context, null, 2));
+        alert('已复制请求上下文 JSON 到剪贴板！');
       }
     }
 

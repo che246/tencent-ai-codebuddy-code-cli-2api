@@ -14,6 +14,8 @@
   "modelFallbackEnabled": true,
   "promptMode": "passthrough",
   "promptFile": "v1.1.40_prompt.txt",
+  "requestClientInfo": true,
+  "requestArchiveContext": false,
   "modelFallback": {
     "cn:deepseek-v4.1-flash": [
       "intl:deepseek-v4.1-flash-sg",

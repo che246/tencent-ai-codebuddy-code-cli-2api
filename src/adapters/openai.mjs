@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { endpointsFor, config, formatAccountLogName, formatAccountFullDesc, isModelBlacklisted, isStepUnavailableByBlacklist } from '../config.mjs';
+import { endpointsFor, config, formatAccountLogName, formatAccountFullDesc, isModelBlacklisted, isStepUnavailableByBlacklist, getLoggingPolicy } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { AccountScheduler, sessionStickyMap } from '../core/scheduler.mjs';
 import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
@@ -19,6 +19,7 @@ import {
   parseModelRegion,
   REGION_PREFIX,
   prepareUpstreamBody,
+  extractArchiveContext,
   DEFAULT_MAX_TOKENS
 } from '../upstream/payload.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
@@ -113,11 +114,26 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
       }));
     }
 
-    Logger.info('CHAT', `收到 OpenAI 对话请求 [${targetModel}] (流式: ${isClientStream})`, {
-      clientIp: req.socket.remoteAddress,
+    const logPolicy = getLoggingPolicy();
+    const logMeta = {
       toolsCount: payload.tools?.length || 0,
       messagesCount: payload.messages?.length || 0
-    });
+    };
+    let clientDesc = '';
+    if (logPolicy.requestClientInfo) {
+      const clientIp = req.headers['x-forwarded-for']
+        ? req.headers['x-forwarded-for'].split(',')[0].trim()
+        : (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      const userAgent = req.headers['user-agent'] ? String(req.headers['user-agent']).slice(0, 150) : '';
+      if (clientIp) logMeta.clientIp = clientIp;
+      if (userAgent) logMeta.userAgent = userAgent;
+      clientDesc = clientIp ? ` (来源: ${clientIp})` : '';
+    }
+    if (logPolicy.requestArchiveContext) {
+      logMeta.context = extractArchiveContext(payload);
+    }
+
+    Logger.info('CHAT', `收到 OpenAI 对话请求 [${targetModel}]${clientDesc} (流式: ${isClientStream})`, logMeta);
 
     // 流式稳定性：首字节超时 + 客户端断开感知 + 静默看门狗
     const lifecycle = createUpstreamLifecycle(req, res, `openai:${targetModel}`);

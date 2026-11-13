@@ -401,3 +401,49 @@ export function prepareUpstreamBody(payload) {
     originalLength: jsonStr.length
   };
 }
+
+/**
+ * 提取请求上下文（system / messages 原文），用于排查上游拒绝或异常。
+ * 针对可能包含的 base64 图片进行安全摘要截断，防止数据库和日志体积异常膨胀。
+ */
+export function extractArchiveContext(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const ctx = {};
+  if (payload.system) {
+    if (typeof payload.system === 'string') {
+      ctx.system = payload.system.length > 8000 ? payload.system.slice(0, 8000) + '...[截断]' : payload.system;
+    } else if (Array.isArray(payload.system)) {
+      ctx.system = payload.system.map(s => (s.text && s.text.length > 8000) ? { ...s, text: s.text.slice(0, 8000) + '...[截断]' } : s);
+    } else {
+      ctx.system = payload.system;
+    }
+  }
+  if (Array.isArray(payload.messages)) {
+    ctx.messages = payload.messages.map(m => {
+      if (!m || typeof m !== 'object') return m;
+      if (typeof m.content === 'string') {
+        return {
+          role: m.role,
+          content: m.content.length > 8000 ? m.content.slice(0, 8000) + '...[截断]' : m.content
+        };
+      }
+      if (Array.isArray(m.content)) {
+        return {
+          role: m.role,
+          content: m.content.map(part => {
+            if (part?.type === 'image_url' && part.image_url?.url?.startsWith('data:')) {
+              return { type: 'image_url', image_url: { url: `[base64 image (${part.image_url.url.length} 字节) 省略]` } };
+            }
+            if (part?.type === 'image' && part.source?.data) {
+              return { type: 'image', source: `[base64 image (${part.source.data.length} 字节) 省略]` };
+            }
+            return part;
+          })
+        };
+      }
+      return m;
+    });
+  }
+  return ctx;
+}
+
