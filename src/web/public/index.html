@@ -923,7 +923,7 @@
             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items:flex-start;">
               <div style="display:flex; flex-direction:column; gap:6px;">
                 <label style="font-size:13px; font-weight:600; color:var(--text-main);">系统提示词模式</label>
-                <select id="selPromptMode" class="search-input" style="width:100%; padding:8px 12px; font-size:13px;">
+                <select id="selPromptMode" class="search-input" style="width:100%; padding:8px 12px; font-size:13px;" onchange="updatePromptUiState()">
                   <option value="passthrough" selected>passthrough — 透传客户端原始 system</option>
                   <option value="custom">custom — 网关自有提示词 (避免指纹误报)</option>
                   <option value="append">append — 客户端 system 后插网关提示词 (并用)</option>
@@ -932,7 +932,7 @@
                   <code>custom</code>: 替换客户端 system/developer 提示词为网关自有提示词；<code>append</code>: 在客户端原有 system 之后追加；<code>passthrough</code>: 完全透传客户端原始 system。
                 </div>
               </div>
-              <div style="display:flex; flex-direction:column; gap:6px;">
+              <div id="promptFileRow" style="display:none; flex-direction:column; gap:6px;">
                 <label style="font-size:13px; font-weight:600; color:var(--text-main);">提示词文件路径</label>
                 <input type="text" id="inputPromptFile" class="search-input" style="width:100%; padding:8px 12px; font-size:13px;" placeholder="留空 = 内置默认提示词">
                 <div style="font-size:12px; color:var(--text-muted); line-height:1.5;">
@@ -1730,11 +1730,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
           if (document.getElementById('inputPromptFile')) {
             document.getElementById('inputPromptFile').value = s.promptPolicy.file || '';
           }
-          if (document.getElementById('badgePromptMode')) {
-            const m = s.promptPolicy.mode || 'passthrough';
-            document.getElementById('badgePromptMode').innerText = m;
-            document.getElementById('badgePromptMode').className = 'badge ' + (m === 'custom' ? 'badge-ok' : m === 'append' ? 'badge-blue' : 'badge-cool');
-          }
+          updatePromptUiState();
         }
 
         // 思考档位策略
@@ -2162,6 +2158,19 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }
       await loadSettings();
       fetchLogs();
+    }
+
+    function updatePromptUiState() {
+      const mode = document.getElementById('selPromptMode')?.value || 'passthrough';
+      const promptFileRow = document.getElementById('promptFileRow');
+      if (promptFileRow) {
+        promptFileRow.style.display = (mode === 'custom' || mode === 'append') ? 'flex' : 'none';
+      }
+      const badge = document.getElementById('badgePromptMode');
+      if (badge) {
+        badge.innerText = mode;
+        badge.className = 'badge ' + (mode === 'custom' ? 'badge-ok' : mode === 'append' ? 'badge-blue' : 'badge-cool');
+      }
     }
 
     async function savePromptPolicy() {
