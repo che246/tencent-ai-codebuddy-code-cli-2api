@@ -8,6 +8,22 @@
 
 ---
 
+## [2.179.0-gw.13] - 2026-11-14
+
+### Web 控制台 API Key 管理与访问密码明文回显 (Console Key Management & Password Reveal)
+- **Web 控制台 API Key 可视化管理卡片**：
+  - 在 src/web/public/index.html 设置页增加「网关 API Key 密钥管理」卡片；
+  - 支持查看当前 API Key、明密文一键切换（👁️）、一键复制到剪贴板（📋）；
+  - 支持直接修改并保存自定义 Key，或点击「🔄 随机生成」一键换发高强度 sk-cb-<48位随机hex> 密钥；
+  - 密钥变更后自动更新 localStorage 鉴权上下文，防止管理会话意外中断；
+- **Web 控制台访问密码当前口令明文回显**：
+  - 在「Web 控制台访问密码保护」卡片中增加「当前生效密码」展示模块；
+  - 支持明文/掩码一键切换查看，并展示生效状态（专属独立密码 或 默认回落使用 apiKey），支持一键快速复制；
+- **REST API 端点联动升级**：
+  - 在 src/web/routes.mjs 的 POST /api/settings 中增加 generateNewApiKey 支持并回传最新的 webAuthToken。
+
+---
+
 ## [2.179.0-gw.12] - 2026-11-14
 
 ### 公网安全加固与 API Key 自动生成机制 (Security Hardening)

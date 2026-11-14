@@ -218,9 +218,13 @@ export async function handleApiRoutes(req, res, url) {
         if (typeof body.accountFailoverEnabled === 'boolean') {
           config.accountFailoverEnabled = body.accountFailoverEnabled;
         }
-        if (typeof body.apiKey === 'string') {
+        if (body.generateNewApiKey === true) {
+          config.apiKey = generateRandomApiKey();
+          Logger.info('CONFIG', `管理员通过 Web 控制台重新生成随机 API Key: ${config.apiKey}`);
+        } else if (typeof body.apiKey === 'string') {
           const k = body.apiKey.trim();
           config.apiKey = k || generateRandomApiKey();
+          Logger.info('CONFIG', `管理员通过 Web 控制台更新 API Key`);
         }
         if (typeof body.webAuthEnabled === 'boolean') {
           config.webAuthEnabled = body.webAuthEnabled;
@@ -265,7 +269,13 @@ export async function handleApiRoutes(req, res, url) {
           maxInFlightPerAccount: config.maxInFlightPerAccount
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true, config, promptPolicy: getPromptPolicy(), logDbSizeMb: LogDatabase.getSizeMb() }));
+        return res.end(JSON.stringify({
+          ok: true,
+          config,
+          webAuthToken: getWebAuthPassword(),
+          promptPolicy: getPromptPolicy(),
+          logDbSizeMb: LogDatabase.getSizeMb()
+        }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
