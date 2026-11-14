@@ -8,6 +8,31 @@
 
 ---
 
+## [2.179.0-gw.16] - 2026-11-14
+
+### 会话粘性账号复用 (Sticky Session) · 严格对齐官方 CLI 时间常数与上游 Prompt Cache 保活
+- **官方 CLI 常量与时间基准严格溯源 (Rule 0 & Rule 2)**：
+  - 依据官方 CLI `package/dist/codebuddy-headless.js` 真实实现引入三个核心常数：
+    - `CLI_COMPLETED_TASK_TTL_MS = 3e5` (300,000 ms = 5 分钟)：会话空闲保活超时时间（Idle TTL）。官方 CLI 任务及会话闲置的 TTL 常量，同时完美对齐 Anthropic Claude 3.5/3.7 Sonnet 与 OpenAI 官方 Prompt Caching 的 5 分钟保留窗口。在 5 分钟内同一会话的连续调用优先调度至同一账号，极大提升 Prompt Cache 命中率并大幅降低首字延迟与计算开销；
+    - `CLI_CLEANUP_INTERVAL_MS = 6e4` (60,000 ms = 1 分钟)：垃圾回收与过期会话定期扫描周期。启动时调用 `.unref()`，对齐官方 CLI 避免定时器阻塞进程退出；
+    - `CLI_PROMPT_TIMEOUT_MS = 18e5` (1,800,000 ms = 30 分钟)：会话绝对最大存活期（Max Lifetime）。对齐官方 CLI `DEFAULT_RUN_TIMEOUT_MS` 与 `ACCUMULATOR_TTL_MS`，防止长期僵尸连接或超长会话无限期锁定单一账号，到期自动释放以便账号池负载均衡。
+- **全方位会话特征提取引擎 (`extractSessionKey`)**：
+  - 统一并重构 `src/core/scheduler.mjs` 中的会话提取引擎，供 OpenAI 及 Anthropic 双协议适配器复用：
+    1. **显式请求头优先**：支持 `x-session-id`, `x-conversation-id`, `session-id`, `conversation-id`, `x-chat-id`, `anthropic-conversation-id`；
+    2. **显式载荷字段**：支持 OpenAI 官方规范 `payload.user`、`payload.session_id`、`payload.conversation_id` 与 Anthropic 官方规范 `payload.metadata.user_id` / `payload.metadata.session_id`；
+    3. **稳定多轮对话特征指纹 (Conversation Fingerprint)**：针对未传显式 ID 的客户端（如 Cursor、Cline、Continue、NextChat、LibreChat 等），基于 System Prompt 与首条 User Message 计算稳定 MD5 哈希，彻底解决旧实现因后续轮次消息增长导致指纹突变的问题，确保多轮对话全程稳定路由至同一账号；
+    4. **单次无状态调用兜底**：生成随机 UUID v7，保障一次性调用独立参与负载均衡。
+- **智能调度与故障自愈重绑**：
+  - 在复用账号前增加全流程健康检查（状态健康、未处于全局或单模型冷却期、未超在途并发上限、区域允许）；
+  - 若绑定账号受限，自动解绑并平滑回落至账号池选号，并在请求重试或故障转移时自动为会话绑定新的可用账号；
+  - 适配器在遇到上游限流或额度耗尽（429 / 6003 / 402）时，自动触发会话解绑与重选。
+- **Web 控制台配置与可视化监控**：
+  - 在「调度与路由策略」中新增「会话粘性账号复用 (Sticky Session)」卡片，支持开关即时热切换与保活超时配置（默认 300 秒，标注官方 CLI 依据）；
+  - 提供「🧹 清空会话绑定」一键清理操作与 `POST /api/sessions/clear` 运维接口；
+  - 在控制台概览顶栏与设置面板实时呈现当前活跃会话数量（`活跃会话: N`），与首页 KPI 看板的「缓存命中率」形成闭环联动。
+
+---
+
 ## [2.179.0-gw.15] - 2026-11-14
 
 ### Web 控制台架构重构 · 服务端零构建组件化拆分 (Zero-Build Modular Architecture)

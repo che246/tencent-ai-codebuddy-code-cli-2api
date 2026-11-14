@@ -139,6 +139,10 @@
                   <span style="color:var(--text-muted);">调度策略: </span>
                   <span id="repRoutingModeLabel" class="badge badge-purple" style="font-size:11px;">-</span>
                 </div>
+                <div>
+                  <span style="color:var(--text-muted);">会话粘性: </span>
+                  <span id="repStickySessionLabel" class="badge badge-ok" style="font-size:11px;">-</span>
+                </div>
               </div>
             </div>
             
@@ -627,6 +631,39 @@
                 <select id="selPinnedAccount" onchange="changePinnedAccountFromSelect()" style="background:var(--surface); color:var(--text-main); border:1px solid var(--card-border); padding:6px 10px; border-radius:6px; font-size:12px; outline:none; margin-left:15px; max-width:180px;">
                   <option value="">全池自动轮换 (未指定)</option>
                 </select>
+              </div>
+
+              <!-- 5.5 会话粘性账号复用 (Sticky Session，严格对齐官方 CLI 时间) -->
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; flex-direction:column; justify-content:space-between; gap:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                  <div>
+                    <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
+                      <span>会话粘性账号复用 (Sticky Session)</span>
+                      <span id="badgeStickySession" class="badge badge-ok">已开启</span>
+                      <span id="badgeActiveSessions" class="badge badge-purple" style="font-size:11px;">活跃会话: 0</span>
+                    </div>
+                    <div style="font-size:12px; color:var(--text-muted); margin-top:4px; line-height:1.5;">
+                      多轮对话请求优先调度至同一账号，充分复用上游大模型（如 Claude / GPT）的 Prompt Caching，大幅降低首字延迟与计算开销；账号限流或受限时自动平滑故障转移并重绑。
+                    </div>
+                  </div>
+                  <label class="switch" style="margin-left:10px; flex-shrink:0;">
+                    <input type="checkbox" id="chkStickySession" onchange="togglePolicy()">
+                    <span class="slider"></span>
+                  </label>
+                </div>
+                <!-- 展开配置区域：闲置保活时间与清空按钮 -->
+                <div id="stickySessionConfigRow" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.05); font-size:12px;">
+                  <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <span style="color:var(--text-muted);">会话闲置保活超时:</span>
+                    <input type="number" id="inputStickySessionTtl" class="search-input" style="width:70px; padding:4px 8px; font-size:12px; font-family:monospace; text-align:center;" min="10" max="3600" value="300" onchange="saveStickySessionTtl()">
+                    <span style="color:var(--text-muted);">秒</span>
+                    <span class="badge badge-cool" style="font-size:10px;" title="基于 package/dist/codebuddy-headless.js 官方实现常量 COMPLETED_TASK_TTL_MS = 3e5 (5分钟)">官方 CLI: 300s (5分钟)</span>
+                    <span class="badge badge-cool" style="font-size:10px;" title="官方 CLI PROMPT_TIMEOUT_MS = 18e5 (30分钟)">最大存活: 30分钟</span>
+                  </div>
+                  <div>
+                    <button class="btn-outline" style="padding:4px 10px; font-size:11px; white-space:nowrap; color:#f87171; border-color:rgba(248,113,113,0.3);" onclick="clearStickySessions()" title="手动清空网关内存中保存的会话与账号绑定关系">🧹 清空会话绑定</button>
+                  </div>
+                </div>
               </div>
 
               <!-- 6. Web 控制台访问密码保护 (融合控制台专属密码，支持明文查看与复制) -->

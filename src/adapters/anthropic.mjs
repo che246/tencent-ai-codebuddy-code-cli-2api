@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { endpointsFor, config, formatAccountLogName, formatAccountFullDesc, isModelBlacklisted, isStepUnavailableByBlacklist, getLoggingPolicy } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
-import { AccountScheduler, sessionStickyMap } from '../core/scheduler.mjs';
+import { AccountScheduler, sessionStickyMap, extractSessionKey } from '../core/scheduler.mjs';
 import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
 import {
   extractStructuredBizCode,
@@ -207,8 +207,7 @@ export async function handleAnthropicMessages(req, res, rawBody) {
       modelMeta
     );
 
-    const sessionKey = req.headers['x-session-id'] || 
-      crypto.createHash('md5').update(JSON.stringify(openAiMessages.slice(0, 2))).digest('hex');
+    const sessionKey = extractSessionKey(req, anthropicPayload);
 
     // 核心执行链路：支持多级备用模型降级链 (A -> B -> C -> ...) + 账号池多账号自愈轮换
     // 降级链中的每个模型都可以带区域前缀（cn: / intl:），未带前缀时继承主模型区域

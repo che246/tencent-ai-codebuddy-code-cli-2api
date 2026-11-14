@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { endpointsFor, config, formatAccountLogName, formatAccountFullDesc, isModelBlacklisted, isStepUnavailableByBlacklist, getLoggingPolicy } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
-import { AccountScheduler, sessionStickyMap } from '../core/scheduler.mjs';
+import { AccountScheduler, sessionStickyMap, extractSessionKey } from '../core/scheduler.mjs';
 import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
 import {
   extractStructuredBizCode,
@@ -87,8 +87,7 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
     const payload = JSON.parse(rawBody);
     const isClientStream = Boolean(payload.stream);
 
-    const sessionKey = req.headers['x-session-id'] || 
-      crypto.createHash('md5').update(JSON.stringify(payload.messages?.slice(0, 2) || '')).digest('hex');
+    const sessionKey = extractSessionKey(req, payload);
 
     // 模型名可能带区域前缀（cn: / intl:），剥掉后作为实际上游模型名，
     // 前缀同时用于锁定账号区域，避免跨区选号导致 401。

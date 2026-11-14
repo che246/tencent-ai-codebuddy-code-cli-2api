@@ -67,6 +67,13 @@
           }
         }
 
+        const stickyEl = document.getElementById('repStickySessionLabel');
+        if (stickyEl && m.sessionAffinity) {
+          const sa = m.sessionAffinity;
+          stickyEl.innerText = sa.enabled ? `开启 (${sa.activeSessions || 0}会话)` : '已关闭';
+          stickyEl.className = 'badge ' + (sa.enabled ? 'badge-ok' : 'badge-cool');
+        }
+
         // 1. 统计概览 7 卡片 (缓存命中率成为主指标，官网折算价降为辅助信息)
         document.getElementById('repTotalTokens').innerText = m.totalTokensDisplay || '0';
         document.getElementById('repTokensSplit').innerText = `${m.inputTokensDisplay || '0'} + ${m.outputTokensDisplay || '0'}`;

@@ -36,7 +36,7 @@ import {
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
-import { AccountScheduler } from '../core/scheduler.mjs';
+import { AccountScheduler, getSessionAffinityStats, clearSessionStickyMap } from '../core/scheduler.mjs';
 import { TlsCertificateStack } from '../core/tls-certs.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
 import { getMetricsReport, loadStats, formatTokenNumber, pruneStatsByTime } from '../core/metrics.mjs';
@@ -171,6 +171,7 @@ export async function handleApiRoutes(req, res, url) {
     const range = url.searchParams.get('range') || 'all';
     const report = getMetricsReport(range);
     report.currentAccount = AccountScheduler.getCurrentActiveAccountInfo();
+    report.sessionAffinity = getSessionAffinityStats();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(report));
   }
@@ -189,6 +190,10 @@ export async function handleApiRoutes(req, res, url) {
       routingStrategy: config.routingStrategy || 'least-inflight',
       accountFailoverEnabled: config.accountFailoverEnabled !== false,
       pinnedAccount: config.pinnedAccount || '',
+      stickySessionEnabled: config.stickySessionEnabled !== false,
+      stickySessionTtlMs: config.stickySessionTtlMs || 300000,
+      stickySessionMaxLifetimeMs: config.stickySessionMaxLifetimeMs || 1800000,
+      sessionStats: getSessionAffinityStats(),
       modelFallbackEnabled: config.modelFallbackEnabled !== false,
       modelFallback: config.modelFallback || {},
       tokenRefreshAdvanceDays: config.tokenRefreshAdvanceDays || 7,
@@ -272,6 +277,12 @@ export async function handleApiRoutes(req, res, url) {
         if (typeof body.webPassword === 'string') {
           config.webPassword = body.webPassword.trim();
         }
+        if (typeof body.stickySessionEnabled === 'boolean') {
+          config.stickySessionEnabled = body.stickySessionEnabled;
+        }
+        if (typeof body.stickySessionTtlMs === 'number') {
+          config.stickySessionTtlMs = Math.max(10000, body.stickySessionTtlMs);
+        }
         if (typeof body.routingStrategy === 'string') {
           config.routingStrategy = body.routingStrategy;
         }
@@ -323,6 +334,14 @@ export async function handleApiRoutes(req, res, url) {
       }
     });
     return;
+  }
+
+  // 2.2 清空所有活跃的会话粘性绑定
+  if (url.pathname === '/api/sessions/clear' && req.method === 'POST') {
+    const cleared = clearSessionStickyMap();
+    Logger.info('CONFIG', `管理员通过 Web 控制台清空了当前所有会话粘性绑定 (${cleared} 条)`);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ ok: true, cleared }));
   }
 
   // 2.5 API Key 独立多密钥管理接口

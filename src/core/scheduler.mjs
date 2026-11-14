@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import {
   config,
   accounts,
@@ -15,17 +16,183 @@ import {
 import { Logger } from './logger.mjs';
 import { LogDatabase } from './database.mjs';
 
-// 会话粘性映射: sessionKey -> { uid, lastActive } (带 1 小时 TTL 自动清理)
+// ─── 官方 CLI 常量与时间基准（严格溯源 package/dist/codebuddy-headless.js）───────────
+//
+// 1. 会话空闲保活 TTL: 3e5 = 300,000 ms (5 分钟)
+//    - CLI 源码变量: COMPLETED_TASK_TTL_MS (3e5), DEFAULT_PROMPT_TIMEOUT (3e5), STREAM_SAFE_TIMEOUT_MS (3e5)
+//    - 依据与语义: 任务/会话空闲保活超时窗口；同时严格对齐 Anthropic Claude 3.5/3.7 与 OpenAI
+//      官方 Prompt Cache 5 分钟保留期，确保同一会话连续调用命中 Prompt 缓存，首字延迟与计算开销大幅降低。
+export const CLI_COMPLETED_TASK_TTL_MS = 3e5; // 300,000 ms (5分钟)
+
+// 2. 清理扫描周期: 6e4 = 60,000 ms (1 分钟)
+//    - CLI 源码变量: CLEANUP_INTERVAL_MS (6e4), BG_TASK_CLEANUP_INTERVAL_MS (6e4)
+//    - 依据与语义: 官方 CLI 定时垃圾回收与过期任务扫描周期。
+export const CLI_CLEANUP_INTERVAL_MS = 6e4; // 60,000 ms (1分钟)
+
+// 3. 会话绝对最大存活期: 18e5 = 1,800,000 ms (30 分钟)
+//    - CLI 源码变量: PROMPT_TIMEOUT_MS (18e5), DEFAULT_RUN_TIMEOUT_MS (18e5), ACCUMULATOR_TTL_MS (18e5)
+//    - 依据与语义: 单一会话/任务全生命周期上限，防止单一会话无限期锁定某个账号，保障账号池均衡。
+export const CLI_PROMPT_TIMEOUT_MS = 18e5; // 1,800,000 ms (30分钟)
+
+// ─── 会话粘性映射 (Sticky Session Affinity) ──────────────────────────────────
+// 数据结构: sessionKey -> { uid, createdAt, lastActive }
 export const sessionStickyMap = new Map();
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, val] of sessionStickyMap.entries()) {
-    if (now - val.lastActive > 3600 * 1000) {
-      sessionStickyMap.delete(key);
+/**
+ * 提取请求对应的会话粘性标识 (Session Key)
+ * 优先级：
+ *   1. 显式客户端 HTTP 请求头 (x-session-id / x-conversation-id / session-id / conversation-id / x-chat-id / anthropic-conversation-id)
+ *   2. 客户端请求体参数 (payload.user / payload.session_id / payload.conversation_id / payload.metadata?.user_id / payload.metadata?.session_id)
+ *   3. 会话上下文特征指纹 (基于 System Prompt 与首条 User Message 哈希，确保多轮对话全程指纹稳定且一致)
+ *   4. 全新独立会话回落 (随机 UUID v7)
+ */
+export function extractSessionKey(req, payload) {
+  // 1. 显式 Header 判定 (忽略大小写)
+  const headers = req?.headers || {};
+  const headerKeys = [
+    'x-session-id',
+    'x-conversation-id',
+    'session-id',
+    'conversation-id',
+    'x-chat-id',
+    'anthropic-conversation-id'
+  ];
+  for (const hk of headerKeys) {
+    const val = headers[hk];
+    if (val && typeof val === 'string' && val.trim()) {
+      return val.trim();
     }
   }
-}, 10 * 60 * 1000);
+
+  // 2. 显式 Payload 字段判定
+  if (payload && typeof payload === 'object') {
+    if (typeof payload.user === 'string' && payload.user.trim()) {
+      return payload.user.trim();
+    }
+    if (typeof payload.session_id === 'string' && payload.session_id.trim()) {
+      return payload.session_id.trim();
+    }
+    if (typeof payload.conversation_id === 'string' && payload.conversation_id.trim()) {
+      return payload.conversation_id.trim();
+    }
+    if (typeof payload.chat_id === 'string' && payload.chat_id.trim()) {
+      return payload.chat_id.trim();
+    }
+    if (payload.metadata && typeof payload.metadata === 'object') {
+      const meta = payload.metadata;
+      if (typeof meta.user_id === 'string' && meta.user_id.trim()) {
+        return meta.user_id.trim();
+      }
+      if (typeof meta.session_id === 'string' && meta.session_id.trim()) {
+        return meta.session_id.trim();
+      }
+      if (typeof meta.conversation_id === 'string' && meta.conversation_id.trim()) {
+        return meta.conversation_id.trim();
+      }
+    }
+  }
+
+  // 3. 上下文首轮消息指纹 (稳定识别多轮对话，避免轮次增长导致哈希突变)
+  let sysText = '';
+  let firstUser = '';
+
+  // Anthropic 格式的 top-level system
+  if (payload?.system) {
+    if (typeof payload.system === 'string') {
+      sysText = payload.system;
+    } else if (Array.isArray(payload.system)) {
+      sysText = payload.system.map(s => s.text || '').filter(Boolean).join('\n');
+    }
+  }
+
+  // 提取消息列表中的 system (若未在上层找到) 与首条 user message
+  const msgs = Array.isArray(payload?.messages) ? payload.messages : [];
+  for (const m of msgs) {
+    if (!m || typeof m !== 'object') continue;
+    if (m.role === 'system' && !sysText) {
+      sysText = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    } else if (m.role === 'user' && !firstUser) {
+      firstUser = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    }
+    if (sysText && firstUser) break;
+  }
+
+  if (sysText || firstUser) {
+    const seed = (sysText ? 'sys:' + sysText.slice(0, 500) + '|' : '') + (firstUser ? 'user:' + firstUser.slice(0, 500) : '');
+    return crypto.createHash('md5').update(seed).digest('hex');
+  }
+
+  // 4. 无法提取会话特征的独立请求：回落为随机 UUID
+  return crypto.randomUUID();
+}
+
+/**
+ * 清理过期的会话粘性记录 (按官方 CLI CLEANUP_INTERVAL_MS 周期调度)
+ */
+export function cleanExpiredSessions() {
+  const now = Date.now();
+  const idleTtl = (typeof config.stickySessionTtlMs === 'number' && config.stickySessionTtlMs > 0)
+    ? config.stickySessionTtlMs
+    : CLI_COMPLETED_TASK_TTL_MS;
+  const maxLifetime = (typeof config.stickySessionMaxLifetimeMs === 'number' && config.stickySessionMaxLifetimeMs > 0)
+    ? config.stickySessionMaxLifetimeMs
+    : CLI_PROMPT_TIMEOUT_MS;
+
+  let cleaned = 0;
+  for (const [key, val] of sessionStickyMap.entries()) {
+    const isIdleExpired = (now - val.lastActive > idleTtl);
+    const isLifetimeExpired = val.createdAt && (now - val.createdAt > maxLifetime);
+    if (isIdleExpired || isLifetimeExpired) {
+      sessionStickyMap.delete(key);
+      cleaned++;
+    }
+  }
+  return cleaned;
+}
+
+// 启动定时清理扫描器，对齐 CLI 做法调用 unref() 避免挂住进程
+const sessionCleanupTimer = setInterval(cleanExpiredSessions, CLI_CLEANUP_INTERVAL_MS);
+if (sessionCleanupTimer && typeof sessionCleanupTimer.unref === 'function') {
+  sessionCleanupTimer.unref();
+}
+
+/**
+ * 获取当前会话粘性状态指标
+ */
+export function getSessionAffinityStats() {
+  const now = Date.now();
+  const idleTtl = (typeof config.stickySessionTtlMs === 'number' && config.stickySessionTtlMs > 0)
+    ? config.stickySessionTtlMs
+    : CLI_COMPLETED_TASK_TTL_MS;
+  const maxLifetime = (typeof config.stickySessionMaxLifetimeMs === 'number' && config.stickySessionMaxLifetimeMs > 0)
+    ? config.stickySessionMaxLifetimeMs
+    : CLI_PROMPT_TIMEOUT_MS;
+
+  let activeCount = 0;
+  for (const val of sessionStickyMap.values()) {
+    if (now - val.lastActive <= idleTtl && (!val.createdAt || (now - val.createdAt <= maxLifetime))) {
+      activeCount++;
+    }
+  }
+
+  return {
+    enabled: config.stickySessionEnabled !== false,
+    activeSessions: activeCount,
+    totalSessions: sessionStickyMap.size,
+    idleTtlMs: idleTtl,
+    maxLifetimeMs: maxLifetime,
+    cleanupIntervalMs: CLI_CLEANUP_INTERVAL_MS,
+  };
+}
+
+/**
+ * 手动清空当前所有会话粘性记录
+ */
+export function clearSessionStickyMap() {
+  const size = sessionStickyMap.size;
+  sessionStickyMap.clear();
+  return size;
+}
 
 // ─── 账号池调度引擎 ─────────────────────────────────────────────────────
 export class AccountScheduler {
@@ -81,20 +248,41 @@ export class AccountScheduler {
       }
     }
 
-    // 2. 会话粘性复用 (Sticky Session)
-    if (sessionKey && sessionStickyMap.has(sessionKey)) {
+    // 2. 会话粘性复用 (Sticky Session，优先复用同账号以最大化命中上游 Prompt Cache)
+    const stickyEnabled = config.stickySessionEnabled !== false;
+    if (stickyEnabled && sessionKey && sessionStickyMap.has(sessionKey)) {
       const sticky = sessionStickyMap.get(sessionKey);
-      if (!excludeUids.includes(sticky.uid)) {
+      const idleTtl = (typeof config.stickySessionTtlMs === 'number' && config.stickySessionTtlMs > 0)
+        ? config.stickySessionTtlMs
+        : CLI_COMPLETED_TASK_TTL_MS;
+      const maxLifetime = (typeof config.stickySessionMaxLifetimeMs === 'number' && config.stickySessionMaxLifetimeMs > 0)
+        ? config.stickySessionMaxLifetimeMs
+        : CLI_PROMPT_TIMEOUT_MS;
+
+      const isIdleExpired = (now - sticky.lastActive > idleTtl);
+      const isLifetimeExpired = sticky.createdAt && (now - sticky.createdAt > maxLifetime);
+
+      if (isIdleExpired || isLifetimeExpired) {
+        sessionStickyMap.delete(sessionKey);
+      } else if (!excludeUids.includes(sticky.uid)) {
         const acc = accounts.find(a => a.uid === sticky.uid);
         if (acc && regionAllowed(acc) && acc.status === 'healthy' && now > (acc.cooldownUntil || 0) && (acc.inFlight || 0) < maxLimit) {
           const isModelCooling = requestedModel && acc.modelCooldowns?.[requestedModel] && now < acc.modelCooldowns[requestedModel];
           if (!isModelCooling) {
             sticky.lastActive = now;
-            Logger.info('DISPATCH', `粘性会话复用账号 [${formatAccountFullDesc(acc)}]`, { sessionKey: sessionKey.slice(0, 8), model: requestedModel });
+            const remainingSec = Math.max(0, Math.round((idleTtl - (now - sticky.lastActive)) / 1000));
+            Logger.info('DISPATCH', `粘性会话复用账号 [${formatAccountFullDesc(acc)}] (会话: ${sessionKey.slice(0, 8)}, 剩余保活: ${remainingSec}s)`, {
+              sessionKey: sessionKey.slice(0, 8),
+              model: requestedModel
+            });
             this.lastDispatchedUid = acc.uid;
             this.lastDispatchedTime = now;
             return acc;
           }
+        } else {
+          // 绑定的账号当前受限（例如限流、并发打满、状态异常等），自动解绑以便进行池内选号和重绑
+          sessionStickyMap.delete(sessionKey);
+          Logger.info('DISPATCH', `粘性会话绑定的账号 [${sticky.uid}] 当前受限或并发饱和，已自动解绑并平滑回落至账号池选号`);
         }
       }
     }
@@ -152,8 +340,12 @@ export class AccountScheduler {
       chosen = candidates[0];
     }
 
-    if (sessionKey) {
-      sessionStickyMap.set(sessionKey, { uid: chosen.uid, lastActive: now });
+    if (sessionKey && stickyEnabled) {
+      sessionStickyMap.set(sessionKey, {
+        uid: chosen.uid,
+        createdAt: now,
+        lastActive: now
+      });
     }
     Logger.info('DISPATCH', `调度选中账号 [${formatAccountFullDesc(chosen)}] (策略: ${strategy}, 并发: ${chosen.inFlight || 0}, 剩余积分: ${chosen.creditsRemain || 0})`, { model: requestedModel });
     this.lastDispatchedUid = chosen.uid;

@@ -40,6 +40,26 @@
           document.getElementById('selPinnedAccount').value = s.pinnedAccount || '';
         }
 
+        // 会话粘性账号复用 (Sticky Session)
+        const isStickyOn = s.stickySessionEnabled !== false;
+        if (document.getElementById('chkStickySession')) {
+          document.getElementById('chkStickySession').checked = isStickyOn;
+        }
+        if (document.getElementById('badgeStickySession')) {
+          document.getElementById('badgeStickySession').className = 'badge ' + (isStickyOn ? 'badge-ok' : 'badge-cool');
+          document.getElementById('badgeStickySession').innerText = isStickyOn ? '已开启' : '已关闭';
+        }
+        if (document.getElementById('badgeActiveSessions')) {
+          const actCnt = s.sessionStats ? (s.sessionStats.activeSessions || 0) : 0;
+          document.getElementById('badgeActiveSessions').innerText = `活跃会话: ${actCnt}`;
+        }
+        if (document.getElementById('inputStickySessionTtl')) {
+          document.getElementById('inputStickySessionTtl').value = Math.round((s.stickySessionTtlMs || 300000) / 1000);
+        }
+        if (document.getElementById('stickySessionConfigRow')) {
+          document.getElementById('stickySessionConfigRow').style.display = isStickyOn ? 'flex' : 'none';
+        }
+
         cachedSettings = s;
 
         // 渲染 API Key 密钥管理
@@ -455,6 +475,7 @@
       const isFailover = document.getElementById('chkFailover').checked;
       const isFall = document.getElementById('chkFallback').checked;
       const isWebAuth = document.getElementById('chkWebAuth') ? document.getElementById('chkWebAuth').checked : true;
+      const isSticky = document.getElementById('chkStickySession') ? document.getElementById('chkStickySession').checked : true;
       const strat = document.getElementById('selStrategy').value;
       const maxInFlight = document.getElementById('inputMaxInFlight') ? parseInt(document.getElementById('inputMaxInFlight').value, 10) : 3;
 
@@ -463,6 +484,9 @@
       }
       if (document.getElementById('webPasswordSection')) {
         document.getElementById('webPasswordSection').style.display = isWebAuth ? 'flex' : 'none';
+      }
+      if (document.getElementById('stickySessionConfigRow')) {
+        document.getElementById('stickySessionConfigRow').style.display = isSticky ? 'flex' : 'none';
       }
 
       await fetch('/api/settings', {
@@ -474,6 +498,7 @@
           accountFailoverEnabled: isFailover,
           modelFallbackEnabled: isFall,
           webAuthEnabled: isWebAuth,
+          stickySessionEnabled: isSticky,
           routingStrategy: strat
         })
       });
@@ -481,6 +506,32 @@
       await loadSettings();
       loadAccounts();
       fetchLogs();
+    }
+
+    async function saveStickySessionTtl() {
+      const inp = document.getElementById('inputStickySessionTtl');
+      if (!inp) return;
+      const val = parseInt(inp.value, 10);
+      if (isNaN(val) || val < 10) return alert('请输入有效的保活秒数 (>= 10秒)');
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stickySessionTtlMs: val * 1000 })
+      });
+      alert(`已将会话闲置保活超时设置为 ${val} 秒 (CLI基准 300秒)`);
+      await loadSettings();
+    }
+
+    async function clearStickySessions() {
+      if (!confirm('确定清空当前所有会话粘性绑定关系吗？')) return;
+      try {
+        const res = await fetch('/api/sessions/clear', { method: 'POST' });
+        const d = await res.json();
+        alert(`已成功清空 ${d.cleared || 0} 个活跃会话绑定！`);
+        await loadSettings();
+      } catch (e) {
+        alert('清空失败: ' + e.message);
+      }
     }
 
     async function saveMaxInFlight() {
