@@ -1556,6 +1556,55 @@
     let currentFilter = 'all';
     let pollIntervals = [];
 
+    // ─── 全局通用剪贴板复制工具 (兼容 HTTPS、HTTP 局域网及各主流浏览器) ─────────────
+    async function copyToClipboard(text, successMsg = '已复制到剪贴板！') {
+      if (text === undefined || text === null) return false;
+      const str = String(text);
+
+      // 1. 若处于安全上下文 (HTTPS 或 localhost) 且原生 Clipboard API 可用
+      if (window.isSecureContext && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+          await navigator.clipboard.writeText(str);
+          if (successMsg) alert(successMsg);
+          return true;
+        } catch (e) {
+          console.warn('navigator.clipboard.writeText 异常，切换至 fallback 机制:', e);
+        }
+      }
+
+      // 2. 传统兼容方案：document.execCommand('copy')（广泛兼容局域网 HTTP、主流浏览器）
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = str;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        textArea.style.top = '-9999px';
+        textArea.style.opacity = '0';
+        textArea.setAttribute('readonly', '');
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        textArea.setSelectionRange(0, str.length);
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        if (successful) {
+          if (successMsg) alert(successMsg);
+          return true;
+        }
+      } catch (err) {
+        console.warn('execCommand copy 失败:', err);
+      }
+
+      // 3. 终极托底方案：系统 prompt 交互提示用户手动 Ctrl+C 复制
+      try {
+        window.prompt('当前环境安全限制无法直接操作剪贴板，请手动按 Ctrl+C 复制：', str);
+        return true;
+      } catch (_) {
+        alert('复制失败，请手动选择内容后复制');
+        return false;
+      }
+    }
+
     // ─── 统一 API 客户端鉴权拦截器 ─────────────────────────────────────────────
     const _nativeFetch = window.fetch;
     window.fetch = async function(resource, init = {}) {
@@ -1783,9 +1832,8 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     document.getElementById('guideCodeText').innerText = guides.openai;
 
     function copyCurrentGuide() {
-      const txt = document.getElementById('guideCodeText').innerText;
-      navigator.clipboard.writeText(txt);
-      alert('接入配置代码已复制到剪贴板！');
+      const txt = document.getElementById('guideCodeText')?.innerText || '';
+      copyToClipboard(txt, '接入配置代码已复制到剪贴板！');
     }
 
     function toggleTheme() {
@@ -2332,11 +2380,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     function copyCurrentWebPassword() {
       const effectivePwd = cachedSettings?.webPassword || cachedSettings?.apiKey || '';
       if (!effectivePwd) return alert('当前暂无密码');
-      navigator.clipboard.writeText(effectivePwd).then(() => {
-        alert('✅ 当前生效控制台密码已复制到剪贴板！');
-      }).catch(() => {
-        alert('复制失败，请手动选择复制');
-      });
+      copyToClipboard(effectivePwd, '✅ 当前生效控制台密码已复制到剪贴板！');
     }
 
     async function saveWebPassword() {
@@ -2407,7 +2451,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
                 <code style="font-family:monospace; font-size:12px; color:#a78bfa; background:rgba(255,255,255,0.04); padding:3px 8px; border-radius:4px; border:1px solid rgba(255,255,255,0.06); word-break:break-all;">${escapeHtml(displayKey)}</code>
                 <div style="display:flex; gap:4px;">
                   <button class="btn-outline" style="padding:2px 7px; font-size:11px;" onclick="toggleKeyVisibility('${item.id}')" title="${isVisible ? '隐藏明文' : '显示明文'}">${isVisible ? '🙈' : '👁️'}</button>
-                  <button class="btn-outline" style="padding:2px 7px; font-size:11px;" onclick="copySingleApiKey('${escapeHtml(rawKey)}')" title="复制此 API Key">📋</button>
+                  <button class="btn-outline" style="padding:2px 7px; font-size:11px;" onclick="copyApiKeyById('${item.id}')" title="复制此 API Key">📋</button>
                 </div>
               </div>
             </td>
@@ -2439,13 +2483,15 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       renderApiKeysTable(apiKeysList);
     }
 
+    function copyApiKeyById(id) {
+      const item = apiKeysList.find(k => k.id === id);
+      if (!item || !item.key) return alert('当前密钥为空');
+      copyToClipboard(item.key, '✅ API Key 已复制到剪贴板！');
+    }
+
     function copySingleApiKey(rawKey) {
       if (!rawKey) return alert('当前密钥为空');
-      navigator.clipboard.writeText(rawKey).then(() => {
-        alert('✅ API Key 已复制到剪贴板！');
-      }).catch(() => {
-        alert('复制失败，请手动选择复制');
-      });
+      copyToClipboard(rawKey, '✅ API Key 已复制到剪贴板！');
     }
 
     function openAddApiKeyModal() {
@@ -3502,8 +3548,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     function copyLogContext(id) {
       const item = allLogs.find(l => String(l.id) === String(id));
       if (item && item.meta && item.meta.context) {
-        navigator.clipboard.writeText(JSON.stringify(item.meta.context, null, 2));
-        alert('已复制请求上下文 JSON 到剪贴板！');
+        copyToClipboard(JSON.stringify(item.meta.context, null, 2), '已复制请求上下文 JSON 到剪贴板！');
       }
     }
 
@@ -4212,9 +4257,8 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     }
 
     function copyRawCode() {
-      const code = document.getElementById('rawModalCode').innerText;
-      navigator.clipboard.writeText(code);
-      alert('上游原始 JSON 已成功复制到剪贴板！');
+      const code = document.getElementById('rawModalCode')?.innerText || '';
+      copyToClipboard(code, '上游原始 JSON 已成功复制到剪贴板！');
     }
 
     function exportAllRawJson() {
@@ -4228,8 +4272,7 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
     }
 
     function copyText(txt) {
-      navigator.clipboard.writeText(txt);
-      alert(`模型 ID 已复制: ${txt}`);
+      copyToClipboard(txt, `模型 ID 已复制: ${txt}`);
     }
 
     async function runCheckin() {
@@ -4375,22 +4418,19 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       }, 2000);
     }
 
-    function copyLoginUrl() {
+    async function copyLoginUrl() {
       const urlInput = document.getElementById('loginUrlInput');
       const url = urlInput ? urlInput.value : '';
       if (!url) return;
-      navigator.clipboard.writeText(url).then(() => {
+      const ok = await copyToClipboard(url, '');
+      if (ok) {
         const btn = document.getElementById('btnCopyLoginUrl');
         if (btn) {
           const old = btn.innerText;
           btn.innerText = '✅ 已复制!';
           setTimeout(() => btn.innerText = old, 2000);
         }
-      }).catch(() => {
-        if (urlInput) urlInput.select();
-        document.execCommand('copy');
-        alert('授权跳转链接已复制到剪贴板！');
-      });
+      }
     }
 
     function closeModal() {
