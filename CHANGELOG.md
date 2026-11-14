@@ -8,6 +8,29 @@
 
 ---
 
+## [2.179.0-gw.15] - 2026-11-14
+
+### Web 控制台架构重构 · 服务端零构建组件化拆分 (Zero-Build Modular Architecture)
+- **架构方案 B 正式落地（服务端自动拼装组件化）**：
+  - 将原先近 5,000 行的臃肿单文件 `src/web/public/index.html` 彻底解耦，按功能职责模块化拆分为 HTML 纯骨架、3 个独立 CSS 样式文件与 7 个核心业务 JS 模块；
+  - **CSS 模块切分**（`src/web/public/styles/`）：
+    - `theme.css`：色彩变量、明暗主题与全局重置；
+    - `layout.css`：App Shell、响应式侧边栏与内容视口网格；
+    - `components.css`：Buttons、Cards、KPI 统计看板、Table、Badges、Switch 及各类模态弹窗。
+  - **JavaScript 模块解耦**（`src/web/public/scripts/`）：
+    - `core.js`：全局状态、安全剪贴板复制、客户端鉴权拦截器、登录弹窗与基础转义工具；
+    - `navigation.js`：路由切换、多客户端接入指南 Tab 切换与主题切换；
+    - `overview.js`：看板指标轮询加载与统计容量裁剪；
+    - `accounts.js`：多账号池管理、OAuth 授权、全员签到、积分流水监控留痕与模型解密锁定；
+    - `models.js`：模型矩阵展示、搜索筛选、黑名单规则编排与官方在线单价校验；
+    - `settings.js`：核心策略、多 API Key 管理、降级链编排与思考/提示词/数据用途声明策略；
+    - `logs.js`：SQLite 数据库多维检索、分页、日期筛选与请求上下文明文展开。
+- **服务端零构建自动内联拼装 (Zero-Build Inlining)**：
+  - 在 `src/web/routes.mjs` 中实现 `renderDashboardTemplate()` 引擎，在运行时利用正则解析 `<!-- @include "..." -->` 自动合成单页响应；
+  - **兼具两大架构优势**：源码保持高度解耦、职责单一与极高可读性（每个文件在 50KB 以内），同时运行时 100% 保持「零 npm 依赖、零前端构建工具链、单请求极速加载、天然免疫浏览器缓存版本错位」的轻量特性。
+
+---
+
 ## [2.179.0-gw.14] - 2026-11-14
 
 ### 多 API Key 独立密钥池管理与独占单行卡片展示 (Multi-Key Management & Standalone UI Card)

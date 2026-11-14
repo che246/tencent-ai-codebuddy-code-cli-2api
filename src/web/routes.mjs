@@ -61,10 +61,23 @@ export function verifyWebAuthToken(token) {
   return isValidApiKey(token);
 }
 
-// ─── Web 控制台静态页渲染 ───────────────────────────────────────────────────
+// ─── Web 控制台静态页渲染 (支持服务端零构建组件化自动拼装) ─────────────────
+export function renderDashboardTemplate() {
+  const rootHtml = fs.readFileSync(HTML_FILE_PATH, 'utf8');
+  const baseDir = path.dirname(HTML_FILE_PATH);
+  return rootHtml.replace(/<!--\s*@include\s+["']([^"']+)["']\s*-->/g, (match, relPath) => {
+    const filePath = path.join(baseDir, relPath);
+    if (fs.existsSync(filePath)) {
+      return '\n' + fs.readFileSync(filePath, 'utf8') + '\n';
+    }
+    Logger.warn('WEB', `模板拼装缺失子模块: ${relPath}`);
+    return `/* Missing include: ${relPath} */`;
+  });
+}
+
 export function handleDashboard(req, res) {
   try {
-    let html = fs.readFileSync(HTML_FILE_PATH, 'utf8');
+    let html = renderDashboardTemplate();
     const isAuthEnabled = config.webAuthEnabled !== false;
     html = html
       .replace(/{{PORT}}/g, String(config.port || 8317))
