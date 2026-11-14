@@ -8,6 +8,20 @@
 
 ---
 
+## [2.179.0-gw.12] - 2026-11-14
+
+### 公网安全加固与 API Key 自动生成机制 (Security Hardening)
+- **API Key 未配置时自动生成与落盘自愈**：
+  - 在 src/config.mjs 增加 ensureApiKey() 与 generateRandomApiKey()；
+  - 若 config.json 中缺失 apiKey 或配置为空字符串，网关启动或保存时自动生成符合 OpenAI 工业标准的高强度密钥（sk-cb-<48位随机hex>）并立即持久化写入配置文件；
+- **API 强制鉴权与常量时间比对 (Anti-Timing Attack)**：
+  - 在 src/server.mjs 修复 API 鉴权拦截判断：由原先 if (config.apiKey && token !== config.apiKey) 彻底升级为 if (!config.apiKey || !safeCompareTokens(token, config.apiKey))，杜绝公网未配 Key 时的全网裸奔调用漏洞；
+  - 引入 safeCompareTokens()，采用 crypto.timingSafeEqual 进行严格常量时间安全比对，彻底消除 Timing Side-Channel 攻击隐患；
+- **Web 控制台登录凭据回传防护**：
+  - 在 src/web/routes.mjs 中修复 POST /api/auth/login：在 webAuthEnabled === false 时不再向客户端泄露服务器底层的 apiKey 或内部密码。
+
+---
+
 ## [2.179.0-gw.11] - 2026-11-14
 
 ### 官方协议与环境指纹对齐 (Fingerprint Alignment)

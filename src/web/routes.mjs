@@ -25,7 +25,9 @@ import {
   getLoggingPolicy,
   setLoggingPolicy,
   getPrivateDataPolicy,
-  setPrivateDataPolicy
+  setPrivateDataPolicy,
+  safeCompareTokens,
+  generateRandomApiKey
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -50,7 +52,7 @@ export function verifyWebAuthToken(token) {
   const expected = getWebAuthPassword();
   if (!expected) return true;
   if (!token || typeof token !== 'string') return false;
-  return token.trim() === expected;
+  return safeCompareTokens(token, expected);
 }
 
 // ─── Web 控制台静态页渲染 ───────────────────────────────────────────────────
@@ -91,12 +93,12 @@ export async function handleApiRoutes(req, res, url) {
         const body = JSON.parse(b);
         const inputPass = (body.password || body.token || '').trim();
         const expected = getWebAuthPassword();
-        if (config.webAuthEnabled === false || (expected && inputPass === expected)) {
+        if (config.webAuthEnabled === false || (expected && safeCompareTokens(inputPass, expected))) {
           Logger.info('AUTH', `Web 控制台授权成功通过 (IP: ${req.socket.remoteAddress})`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             ok: true,
-            token: expected,
+            token: config.webAuthEnabled === false ? '' : expected,
             webAuthEnabled: config.webAuthEnabled !== false
           }));
         } else {
@@ -215,6 +217,10 @@ export async function handleApiRoutes(req, res, url) {
         }
         if (typeof body.accountFailoverEnabled === 'boolean') {
           config.accountFailoverEnabled = body.accountFailoverEnabled;
+        }
+        if (typeof body.apiKey === 'string') {
+          const k = body.apiKey.trim();
+          config.apiKey = k || generateRandomApiKey();
         }
         if (typeof body.webAuthEnabled === 'boolean') {
           config.webAuthEnabled = body.webAuthEnabled;
