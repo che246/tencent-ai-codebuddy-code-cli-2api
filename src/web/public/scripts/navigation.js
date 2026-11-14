@@ -75,22 +75,12 @@ curl http://127.0.0.1:{{PORT}}/v1/chat/completions \\
       copyToClipboard(txt, '接入配置代码已复制到剪贴板！');
     }
 
-    function toggleTheme() {
-      const html = document.documentElement;
-      if (html.classList.contains('dark')) {
-        html.classList.remove('dark');
-        html.classList.add('light');
-        localStorage.setItem('theme', 'light');
-      } else {
-        html.classList.remove('light');
-        html.classList.add('dark');
-        localStorage.setItem('theme', 'dark');
-      }
-    }
-    if (localStorage.getItem('theme') === 'light') {
-      document.documentElement.classList.remove('dark');
-      document.documentElement.classList.add('light');
-    }
+    // 锁定全局暗黑模式，清除历史遗留的 light 本地存储
+    try {
+      localStorage.removeItem('theme');
+    } catch (_) {}
+    document.documentElement.classList.remove('light');
+    document.documentElement.classList.add('dark');
 
     let currentSettings = { concurrencyLimitEnabled: true, maxInFlightPerAccount: 3, modelFallbackEnabled: true, accountFailoverEnabled: true, routingStrategy: 'least-inflight' };
     let currentBlacklist = [];      // 已保存的模型黑名单规则（服务端返回）
