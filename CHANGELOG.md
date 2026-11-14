@@ -8,6 +8,25 @@
 
 ---
 
+## [2.179.0-gw.14] - 2026-11-14
+
+### 多 API Key 独立密钥池管理与独占单行卡片展示 (Multi-Key Management & Standalone UI Card)
+- **多 API Key 独立密钥池与权限管控**：
+  - 在 src/config.mjs 中新增 getApiKeys()、isValidApiKey(token)、addApiKey({ key, note })、updateApiKey(id, { note, enabled, key }) 与 removeApiKey(id)；
+  - 采用结构化数组存储密钥实体 Array<{ id, key, note, createdAt, enabled }>，支持对每个 Key 单独设定备注用途与启停状态；
+  - **向后完全兼容**：自动将既有 config.apiKey 平滑纳管为默认主密钥，并在密钥更新时始终保持 config.apiKey 同步至首个有效密钥，旧有调用与引导文档完全无缝衔接；
+  - **工业级常量时间比对**：在 src/server.mjs 中全面切换为 isValidApiKey(token)，防御 Timing Side-Channel 时序侧信道反推攻击；
+  - **REST API 端点**：在 src/web/routes.mjs 中新增 GET /api/keys、POST /api/keys、POST /api/keys/update 与 POST /api/keys/delete 完整接口。
+- **Web 控制台 API Key 单独一行独立卡片展示**：
+  - 对齐「日志」与「数据用途声明」独立宽卡片视觉风格，将 API Key 密钥管理从双列网格中移出，改设为全宽单行卡片 (card 单独一行显示)；
+  - 动态渲染多密钥列表表格：展示「备注/用途」、「API Key（脱敏掩码 + 👁️ 明文切换 + 📋 一键复制）」、「创建时间」、「状态（点击即时切换启用/禁用）」与「操作（✏️ 修改备注 / 🗑️ 删除）」；
+  - 设有保底防护逻辑，禁止删除系统最后一个有效密钥，防止误操作导致网关鉴权锁死；
+  - 提供「➕ 添加新密钥」弹窗与「🔄 快速生成并添加」功能；
+- **Web 控制台访问密码当前生效口令明文回显与一键复制**：
+  - 在「Web 控制台访问密码保护」卡片中展示当前生效密码，支持 👁️ 切换明文/掩码，并支持 📋 一键复制，提示当前为专属密码或回落主密钥。
+
+---
+
 ## [2.179.0-gw.13] - 2026-11-14
 
 ### Web 控制台 API Key 管理与访问密码明文回显 (Console Key Management & Password Reveal)

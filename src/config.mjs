@@ -287,14 +287,126 @@ export function generateRandomApiKey() {
 }
 
 /**
+ * 规范化并获取当前所有 API Key 列表。
+ * 数据结构：Array<{ id: string, key: string, note: string, createdAt: number, enabled: boolean }>
+ * 向后兼容：若 apiKeys 为空但存在历史 config.apiKey，将其平滑纳管为默认主密钥。
+ */
+export function getApiKeys() {
+  if (!Array.isArray(config.apiKeys)) {
+    config.apiKeys = [];
+  }
+  if (config.apiKeys.length === 0 && config.apiKey && typeof config.apiKey === 'string' && config.apiKey.trim()) {
+    config.apiKeys.push({
+      id: 'key_' + Date.now(),
+      key: config.apiKey.trim(),
+      note: '默认主密钥',
+      createdAt: Date.now(),
+      enabled: true
+    });
+    saveConfig();
+  }
+  return config.apiKeys;
+}
+
+/**
+ * 校验传入的 token 是否匹配任意一个已启用的合法 API Key
+ * 采用安全常量时间比对防御 Timing Attack
+ */
+export function isValidApiKey(token) {
+  if (!token || typeof token !== 'string') return false;
+  const trimmed = token.trim();
+  if (!trimmed) return false;
+
+  const keys = getApiKeys();
+  if (keys.length === 0) {
+    return Boolean(config.apiKey && safeCompareTokens(trimmed, config.apiKey));
+  }
+
+  for (const item of keys) {
+    if (item.enabled !== false && safeCompareTokens(trimmed, item.key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 添加新的 API Key（支持指定备注，留空则自动生成 sk-cb-...）
+ */
+export function addApiKey({ key, note } = {}) {
+  const keys = getApiKeys();
+  const actualKey = (typeof key === 'string' && key.trim()) ? key.trim() : generateRandomApiKey();
+  const actualNote = (typeof note === 'string' && note.trim()) ? note.trim() : `密钥 #${keys.length + 1}`;
+  const newEntry = {
+    id: 'key_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    key: actualKey,
+    note: actualNote,
+    createdAt: Date.now(),
+    enabled: true
+  };
+  keys.push(newEntry);
+  const firstActive = keys.find(k => k.enabled !== false) || keys[0];
+  if (firstActive) config.apiKey = firstActive.key;
+  saveConfig();
+  return newEntry;
+}
+
+/**
+ * 更新指定 API Key 的备注、启用状态或密钥内容
+ */
+export function updateApiKey(id, { note, enabled, key } = {}) {
+  const keys = getApiKeys();
+  const item = keys.find(k => k.id === id || k.key === id);
+  if (!item) return null;
+  if (typeof note === 'string') item.note = note.trim();
+  if (typeof enabled === 'boolean') item.enabled = enabled;
+  if (typeof key === 'string' && key.trim()) item.key = key.trim();
+  const firstActive = keys.find(k => k.enabled !== false) || keys[0];
+  if (firstActive) config.apiKey = firstActive.key;
+  saveConfig();
+  return item;
+}
+
+/**
+ * 删除指定 API Key（保护至少保留一个 Key）
+ */
+export function removeApiKey(id) {
+  const keys = getApiKeys();
+  if (keys.length <= 1) {
+    throw new Error('系统至少需要保留一个有效 API Key，不能全部删除');
+  }
+  const idx = keys.findIndex(k => k.id === id || k.key === id);
+  if (idx === -1) return false;
+  keys.splice(idx, 1);
+  const firstActive = keys.find(k => k.enabled !== false) || keys[0];
+  if (firstActive) config.apiKey = firstActive.key;
+  saveConfig();
+  return true;
+}
+
+/**
  * 确保配置中有可用的 API Key：
  * 若未配置或为空值，则自动生成高强度安全随机 Key 并持久化回盘。
  */
 export function ensureApiKey() {
-  if (!config.apiKey || typeof config.apiKey !== 'string' || !config.apiKey.trim()) {
-    config.apiKey = generateRandomApiKey();
+  const keys = getApiKeys();
+  if (keys.length === 0) {
+    const newKey = generateRandomApiKey();
+    config.apiKey = newKey;
+    config.apiKeys = [{
+      id: 'key_' + Date.now(),
+      key: newKey,
+      note: '默认主密钥',
+      createdAt: Date.now(),
+      enabled: true
+    }];
     saveConfig();
     return true;
+  }
+  const firstActive = keys.find(k => k.enabled !== false) || keys[0];
+  if (firstActive && config.apiKey !== firstActive.key) {
+    config.apiKey = firstActive.key;
+    saveConfig();
   }
   return false;
 }

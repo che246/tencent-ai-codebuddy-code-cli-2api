@@ -27,7 +27,12 @@ import {
   getPrivateDataPolicy,
   setPrivateDataPolicy,
   safeCompareTokens,
-  generateRandomApiKey
+  generateRandomApiKey,
+  getApiKeys,
+  addApiKey,
+  updateApiKey,
+  removeApiKey,
+  isValidApiKey
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -49,10 +54,11 @@ export function getWebAuthPassword() {
 
 export function verifyWebAuthToken(token) {
   if (config.webAuthEnabled === false) return true;
-  const expected = getWebAuthPassword();
-  if (!expected) return true;
   if (!token || typeof token !== 'string') return false;
-  return safeCompareTokens(token, expected);
+  if (config.webPassword && typeof config.webPassword === 'string' && config.webPassword.trim()) {
+    return safeCompareTokens(token, config.webPassword.trim());
+  }
+  return isValidApiKey(token);
 }
 
 // ─── Web 控制台静态页渲染 ───────────────────────────────────────────────────
@@ -93,12 +99,14 @@ export async function handleApiRoutes(req, res, url) {
         const body = JSON.parse(b);
         const inputPass = (body.password || body.token || '').trim();
         const expected = getWebAuthPassword();
-        if (config.webAuthEnabled === false || (expected && safeCompareTokens(inputPass, expected))) {
+        const isAuthSuccess = config.webAuthEnabled === false ||
+          (config.webPassword ? safeCompareTokens(inputPass, config.webPassword) : isValidApiKey(inputPass));
+        if (isAuthSuccess) {
           Logger.info('AUTH', `Web 控制台授权成功通过 (IP: ${req.socket.remoteAddress})`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             ok: true,
-            token: config.webAuthEnabled === false ? '' : expected,
+            token: config.webAuthEnabled === false ? '' : (expected || inputPass),
             webAuthEnabled: config.webAuthEnabled !== false
           }));
         } else {
@@ -160,6 +168,7 @@ export async function handleApiRoutes(req, res, url) {
     return res.end(JSON.stringify({
       port: config.port,
       apiKey: config.apiKey,
+      apiKeys: getApiKeys(),
       webAuthEnabled: config.webAuthEnabled !== false,
       webPassword: config.webPassword || '',
       concurrencyLimitEnabled: config.concurrencyLimitEnabled !== false,
@@ -218,12 +227,30 @@ export async function handleApiRoutes(req, res, url) {
         if (typeof body.accountFailoverEnabled === 'boolean') {
           config.accountFailoverEnabled = body.accountFailoverEnabled;
         }
-        if (body.generateNewApiKey === true) {
-          config.apiKey = generateRandomApiKey();
+        if (Array.isArray(body.apiKeys)) {
+          config.apiKeys = body.apiKeys;
+          const firstActive = config.apiKeys.find(k => k.enabled !== false) || config.apiKeys[0];
+          if (firstActive) config.apiKey = firstActive.key;
+          Logger.info('CONFIG', `管理员通过 Web 控制台更新了多 API Key 列表 (共 ${config.apiKeys.length} 个)`);
+        } else if (body.generateNewApiKey === true) {
+          const newKey = generateRandomApiKey();
+          config.apiKey = newKey;
+          const keys = getApiKeys();
+          if (keys.length > 0) {
+            keys[0].key = newKey;
+          } else {
+            keys.push({ id: 'key_' + Date.now(), key: newKey, note: '默认主密钥', createdAt: Date.now(), enabled: true });
+          }
           Logger.info('CONFIG', `管理员通过 Web 控制台重新生成随机 API Key: ${config.apiKey}`);
         } else if (typeof body.apiKey === 'string') {
           const k = body.apiKey.trim();
           config.apiKey = k || generateRandomApiKey();
+          const keys = getApiKeys();
+          if (keys.length > 0) {
+            keys[0].key = config.apiKey;
+          } else {
+            keys.push({ id: 'key_' + Date.now(), key: config.apiKey, note: '默认主密钥', createdAt: Date.now(), enabled: true });
+          }
           Logger.info('CONFIG', `管理员通过 Web 控制台更新 API Key`);
         }
         if (typeof body.webAuthEnabled === 'boolean') {
@@ -272,6 +299,7 @@ export async function handleApiRoutes(req, res, url) {
         return res.end(JSON.stringify({
           ok: true,
           config,
+          apiKeys: getApiKeys(),
           webAuthToken: getWebAuthPassword(),
           promptPolicy: getPromptPolicy(),
           logDbSizeMb: LogDatabase.getSizeMb()
@@ -279,6 +307,87 @@ export async function handleApiRoutes(req, res, url) {
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 2.5 API Key 独立多密钥管理接口
+  if (url.pathname === '/api/keys' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      ok: true,
+      apiKey: config.apiKey,
+      keys: getApiKeys()
+    }));
+  }
+
+  if (url.pathname === '/api/keys' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(b);
+        const entry = addApiKey({ key: body.key, note: body.note });
+        Logger.info('CONFIG', `管理员通过 Web 控制台添加了 API Key [${entry.id}] (${entry.note})`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          ok: true,
+          entry,
+          apiKey: config.apiKey,
+          keys: getApiKeys()
+        }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/keys/update' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(b);
+        if (!body.id) throw new Error('缺少密钥 ID');
+        const updated = updateApiKey(body.id, { note: body.note, enabled: body.enabled, key: body.key });
+        if (!updated) throw new Error('未找到指定密钥');
+        Logger.info('CONFIG', `管理员通过 Web 控制台更新了 API Key [${body.id}] (${updated.note})`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          ok: true,
+          entry: updated,
+          apiKey: config.apiKey,
+          keys: getApiKeys()
+        }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/keys/delete' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(b);
+        if (!body.id) throw new Error('缺少密钥 ID');
+        removeApiKey(body.id);
+        Logger.info('CONFIG', `管理员通过 Web 控制台删除了 API Key [${body.id}]`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          ok: true,
+          apiKey: config.apiKey,
+          keys: getApiKeys()
+        }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
       }
     });
     return;
