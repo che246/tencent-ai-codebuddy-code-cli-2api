@@ -8,6 +8,16 @@
 
 ---
 
+## [2.179.0-gw.11] - 2026-11-14
+
+### 官方协议与环境指纹对齐 (Fingerprint Alignment)
+- **出站 Stainless SDK 指纹环境固定为 Windows x64**：
+  - 将出站请求头 x-stainless-os 统一固定为 'Windows'，x-stainless-arch 统一固定为 'x64'；
+  - **背景与原因**：官方 CLI 抓包（.capture/cmp/cli_2.179.0.log）在桌面端标准开发环境即为 Windows x64。当网关部署在 Linux 局域网服务器（如 192.168.1.201）或容器环境时，统一模拟桌面端开发者环境指纹，避免出站暴露 Linux 服务器环境特征；
+  - **涉及文件**：src/upstream/headers.mjs。
+
+---
+
 ## [2.179.0-gw.10] - 2026-11-14
 
 ### 数据用途声明与出站 X-Private-Data 动态策略 (Private Data Declaration)

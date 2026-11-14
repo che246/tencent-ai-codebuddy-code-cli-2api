@@ -227,11 +227,11 @@ export function buildOfficialUpstreamHeaders(accessToken, targetModel, sessionKe
   const spanId = crypto.randomBytes(8).toString('hex');
   const parentSpanId = crypto.randomBytes(8).toString('hex');
 
-  // OS 与平台架构（对齐 Stainless SDK）
-  const osName = process.platform === 'win32' ? 'Windows'
-    : (process.platform === 'darwin' ? 'MacOS' : 'Linux');
-  const archName = process.arch === 'x64' ? 'x64'
-    : (process.arch === 'arm64' ? 'arm64' : process.arch);
+  // OS 与平台架构（按要求统一模拟 Windows x64 桌面端开发环境，来自 CLI 真实 Windows 抓包：
+  // normalizePlatform('win32') -> 'Windows', normalizeArch('x64') -> 'x64'；
+  // 避免网关部署在 Linux 服务器或容器环境时出站暴露服务端系统特征）
+  const osName = 'Windows';
+  const archName = 'x64';
 
   const headers = {
     'Authorization': `Bearer ${accessToken}`,
