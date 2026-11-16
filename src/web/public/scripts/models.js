@@ -100,13 +100,17 @@
         if (regionFilter === 'cn' && item.region !== 'cn') return false;
         if (regionFilter === 'intl' && item.region !== 'intl') return false;
 
-        // 能力过滤：全部能力 / 支持工具调用 / 支持视觉 / 支持思考 / 默认模型
+        // 能力过滤：全部能力 / 支持工具调用 / 支持视觉 / 支持思考 / 默认模型 / 上游繁忙拥堵
         if (capabilityFilter === 'tool' && !item.supportsToolCall) return false;
         if (capabilityFilter === 'vision' && !item.supportsImages) return false;
         if (capabilityFilter === 'reasoning' && !(item.supportsReasoning || item.onlyReasoning || item.reasoning)) return false;
         if (capabilityFilter === 'default') {
           const isDef = item.id === 'default' || item.id === 'fast-model' || item.id === 'balanced-model' || item.isDefault;
           if (!isDef) return false;
+        }
+        if (capabilityFilter === 'busy') {
+          const b = item.busy || item.busy_level || item.busyLevel;
+          if (b !== 'busy' && b !== 'congested' && b !== 'unavailable') return false;
         }
 
         // 档位过滤：全部档位 / 可关闭思考 / low / medium / high / xhigh / max
@@ -185,6 +189,18 @@
         if (hasTool) badgesHtml += '<span class="badge" style="background:rgba(255,255,255,0.06); color:#cbd5e1; border:1px solid rgba(255,255,255,0.12); font-size:10px; padding:1px 6px; border-radius:4px;">工具</span>';
         if (hasVision) badgesHtml += '<span class="badge" style="background:rgba(255,255,255,0.06); color:#cbd5e1; border:1px solid rgba(255,255,255,0.12); font-size:10px; padding:1px 6px; border-radius:4px;">视觉</span>';
         if (reasoningAlwaysOn) badgesHtml += '<span class="badge" style="background:rgba(234,179,8,0.15); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:10px; padding:1px 6px; border-radius:4px;">思考常开</span>';
+
+        // 上游模型繁忙度（POST /v2/chat/busy 实时；只标 busy / congested / unavailable，idle / normal 不打扰）
+        const BUSY_WORDS = { busy: '繁忙', congested: '拥堵', unavailable: '不可用' };
+        const busyLevel = item.busy || item.busy_level || item.busyLevel || null;
+        if (busyLevel && BUSY_WORDS[busyLevel]) {
+          const isBad = busyLevel === 'congested' || busyLevel === 'unavailable';
+          const bg = isBad ? 'rgba(239,68,68,0.18)' : 'rgba(234,179,8,0.18)';
+          const color = isBad ? '#f87171' : '#facc15';
+          const border = isBad ? 'rgba(239,68,68,0.35)' : 'rgba(234,179,8,0.35)';
+          const title = `上游繁忙度 ${escapeAttr(busyLevel)}（/v2/chat/busy 实时；服务端偶发无数据，同一批重查可能变）`;
+          badgesHtml += `<span class="badge" style="background:${bg}; color:${color}; border:1px solid ${border}; font-size:10px; padding:1px 6px; border-radius:4px;" title="${title}">${BUSY_WORDS[busyLevel]}</span>`;
+        }
 
         const nameZh = item.name || item.id;
         const promo = item.promotion || null;

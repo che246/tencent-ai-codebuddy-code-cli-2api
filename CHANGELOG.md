@@ -8,6 +8,19 @@
 
 ---
 
+## [2.179.0-gw.21] - 2026-11-17
+
+### 官方上游模型实时繁忙度探测对齐 (POST /v2/chat/busy) 与 Web 面板拥堵状态徽章 (Official Model Realtime Busy Probing & Congestion Badges)
+- **官方上游实时繁忙度接口对齐 (Rule 0 & Rule 2)**：
+  - **背景与逆向依据**：官方客户端（WorkBuddy / CodeBuddy RPC 层）在查询模型状态时通过 `POST /v2/chat/busy` 实时探测模型繁忙度（`idle` | `normal` | `busy` | `congested` | `unavailable` | `unknown`）。仅国内版部署该接口（国际版返回 404），属于纯只读观测数据；
+  - **实时繁忙度探针引擎 (`fetchUpstreamModelBusyLevels` in `src/upstream/models.mjs`)**：批量分批（每批 50 款模型）携带官方同款轻量头族（`Accept`, `Content-Type`, `X-User-Id`, `X-Product: SaaS`, `X-Domain`, `X-Request-ID`）请求上游，为模型自动挂载最新实测 `busy` 状态；
+- **Web 控制台模型列表拥堵/繁忙徽章与筛选**：
+  - **模型特性徽章集成 (`src/web/public/scripts/models.js`)**：在「工具」、「视觉」等能力标签旁智能呈现官方同款 `拥堵` (红色 `congested`/`unavailable`) 与 `繁忙` (黄色 `busy`) 徽章（`idle`/`normal` 保持安静不打扰）；
+  - **悬停浮窗 Tooltip**：鼠标悬停清晰提示“上游繁忙度 congested（/v2/chat/busy 实时；服务端偶发无数据，同一批重查可能变）”，与官方桌面端行为严格一致；
+  - **筛选工具栏全能力扩展 (`src/web/public/index.html`)**：支持一键筛选「上游繁忙 / 拥堵」模型。
+
+---
+
 ## [2.179.0-gw.20] - 2026-11-17
 
 ### 官方上游模型促销活动协议对齐与 Web 面板活动角标全景展示 (Official Model Promotions & Web UI Activity Badges)

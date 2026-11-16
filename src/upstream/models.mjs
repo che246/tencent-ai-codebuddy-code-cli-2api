@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { CONFIG_URL, endpointsFor, resolveAccountRegion, REGION_CN, REGION_INTL, REGION_BASE, USER_AGENT, accounts, ROOT_DIR } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 
@@ -190,9 +191,82 @@ function loadModelsFromProductJson() {
   return [];
 }
 
+let cachedBusyMap = {};
+let lastBusyFetchTimestamp = 0;
+
+/**
+ * 官方上游模型实时繁忙度探测 (POST /v2/chat/busy)
+ * 来源：官方桌面端 / Web 端实时探针（见 WorkBuddy / CodeBuddy RPC 抓包）：
+ *   POST {chatBase}/v2/chat/busy
+ *   Header: Accept, Content-Type, User-Agent, Authorization, X-User-Id, X-Product: SaaS, X-Domain, X-Request-ID
+ *   Body: {"models": ["deepseek-v4.1-flash", ...]} (单次上限 50 个)
+ *   响应: {"code":0,"data":[{"model":"deepseek-v4.1-flash","busy_level":"congested"}, ...]}
+ * busy_level ∈ idle | normal | busy | congested | unavailable | unknown
+ * 仅国内版支持（国际版返回 404），纯观测数据，不影响路由选号。
+ */
+export async function fetchUpstreamModelBusyLevels(modelIds = [], force = false) {
+  const now = Date.now();
+  if (!force && Object.keys(cachedBusyMap).length > 0 && (now - lastBusyFetchTimestamp < 60 * 1000)) {
+    return cachedBusyMap;
+  }
+  if (!Array.isArray(modelIds) || modelIds.length === 0) return cachedBusyMap;
+
+  const cnAcc = accounts.find(a => a.status === 'healthy' && resolveAccountRegion(a) === REGION_CN && a.accessToken);
+  if (!cnAcc) return cachedBusyMap;
+
+  const ep = endpointsFor(cnAcc);
+  const busyUrl = `${ep.apiBase}/v2/chat/busy`;
+  const result = { ...cachedBusyMap };
+
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < modelIds.length; i += BATCH_SIZE) {
+    const batch = modelIds.slice(i, i + BATCH_SIZE);
+    try {
+      const traceId = crypto.randomBytes(16).toString('hex');
+      const res = await fetch(busyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/plain, */*',
+          'User-Agent': USER_AGENT,
+          'Authorization': `Bearer ${cnAcc.accessToken}`,
+          'X-User-Id': cnAcc.uid || '',
+          'X-Product': 'SaaS',
+          'X-Domain': 'copilot.tencent.com',
+          'X-Request-ID': traceId
+        },
+        body: JSON.stringify({ models: batch }),
+        signal: AbortSignal.timeout(4000)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.code === 0 && Array.isArray(json.data)) {
+          for (const item of json.data) {
+            if (item && item.model && item.busy_level) {
+              result[item.model.toLowerCase()] = item.busy_level.toLowerCase();
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  cachedBusyMap = result;
+  lastBusyFetchTimestamp = now;
+  return result;
+}
+
 export async function fetchDetailedModels(forceRefresh = false) {
   const now = Date.now();
   if (!forceRefresh && cachedRawUpstreamModels && (now - lastModelFetchTimestamp < 5 * 60 * 1000)) {
+    const allIds = cachedRawUpstreamModels.map(m => m.id);
+    const busyMap = await fetchUpstreamModelBusyLevels(allIds, false);
+    for (const m of cachedRawUpstreamModels) {
+      if (busyMap[m.id.toLowerCase()]) {
+        m.busy = busyMap[m.id.toLowerCase()];
+        m.busy_level = m.busy;
+      }
+    }
     return attachProbeStatus(cachedRawUpstreamModels, cachedRawPromotions.length > 0 ? cachedRawPromotions : loadPromotionsFromProductJson());
   }
 
@@ -270,6 +344,15 @@ export async function fetchDetailedModels(forceRefresh = false) {
 
   if (merged.size > 0) {
     const models = [...merged.values()];
+    const allIds = models.map(m => m.id);
+    const busyMap = await fetchUpstreamModelBusyLevels(allIds, forceRefresh);
+    for (const m of models) {
+      if (busyMap[m.id.toLowerCase()]) {
+        m.busy = busyMap[m.id.toLowerCase()];
+        m.busy_level = m.busy;
+      }
+    }
+
     const activePromotions = mergedPromotions.size > 0 ? [...mergedPromotions.values()] : loadPromotionsFromProductJson();
     cachedRawUpstreamModels = models;
     cachedRawPromotions = activePromotions;
@@ -290,6 +373,14 @@ export async function fetchDetailedModels(forceRefresh = false) {
   ));
   const fallbackPromotions = loadPromotionsFromProductJson();
   if (fallbackModels.length > 0) {
+    const allIds = fallbackModels.map(m => m.id);
+    const busyMap = await fetchUpstreamModelBusyLevels(allIds, forceRefresh);
+    for (const m of fallbackModels) {
+      if (busyMap[m.id.toLowerCase()]) {
+        m.busy = busyMap[m.id.toLowerCase()];
+        m.busy_level = m.busy;
+      }
+    }
     cachedRawUpstreamModels = fallbackModels;
     cachedRawPromotions = fallbackPromotions;
     Logger.info('CONFIG', `上游不可达，已从 product.json 加载离线模型矩阵 (共 ${fallbackModels.length} 款，活动: ${fallbackPromotions.length} 项)`);
@@ -341,22 +432,30 @@ export function attachProbeStatus(models, promotions = []) {
     }
 
     // ─── 官方上游模型繁忙度 (从上游获取与评估) ─────────────────────
-    // 优先读取上游接口原始下发的负载与繁忙度属性 (如 busyLevel, load, status 等)
-    let upstreamBusyRaw = m.busyLevel || m.busy_level || m.load || m.loadLevel || m.status || m.busy || null;
+    // 优先读取上游接口 POST /v2/chat/busy 原始下发的繁忙度属性 (busy_level ∈ idle | normal | busy | congested | unavailable)
+    let upstreamBusyRaw = m.busy || m.busy_level || m.busyLevel || null;
     let upstreamBusyLevel = 'idle';
     let upstreamBusyLabel = '🟢 空闲 (畅通)';
     let upstreamBusyDesc = '上游官方节点正常在线，负载充裕';
 
     if (upstreamBusyRaw) {
-      const rawStr = String(upstreamBusyRaw).toLowerCase();
-      if (rawStr.includes('busy') || rawStr.includes('high') || rawStr.includes('congest')) {
+      const rawStr = String(upstreamBusyRaw).toLowerCase().trim();
+      if (rawStr === 'congested') {
+        upstreamBusyLevel = 'congested';
+        upstreamBusyLabel = '🔴 拥堵';
+        upstreamBusyDesc = '上游官方实时标定: 极度拥堵 (congested)，排队时延较高';
+      } else if (rawStr === 'unavailable') {
+        upstreamBusyLevel = 'unavailable';
+        upstreamBusyLabel = '🔴 不可用';
+        upstreamBusyDesc = '上游官方实时标定: 节点不可用 (unavailable)';
+      } else if (rawStr === 'busy') {
         upstreamBusyLevel = 'busy';
-        upstreamBusyLabel = '🟡 繁忙 (高载)';
-        upstreamBusyDesc = `上游标定负载状态: ${upstreamBusyRaw}`;
-      } else if (rawStr.includes('overload') || rawStr.includes('down') || rawStr.includes('error') || rawStr.includes('limit')) {
-        upstreamBusyLevel = 'overload';
-        upstreamBusyLabel = '🔴 拥挤 (限流)';
-        upstreamBusyDesc = `上游标定负载状态: ${upstreamBusyRaw}`;
+        upstreamBusyLabel = '🟡 繁忙';
+        upstreamBusyDesc = '上游官方实时标定: 高载繁忙 (busy)';
+      } else if (rawStr === 'idle' || rawStr === 'normal') {
+        upstreamBusyLevel = 'idle';
+        upstreamBusyLabel = '🟢 空闲 (畅通)';
+        upstreamBusyDesc = '上游官方实时标定: 负载充裕通畅 (idle)';
       } else {
         upstreamBusyLevel = 'normal';
         upstreamBusyLabel = `🟢 ${upstreamBusyRaw}`;
@@ -381,6 +480,8 @@ export function attachProbeStatus(models, promotions = []) {
 
     return {
       ...m,
+      busy: upstreamBusyRaw,
+      busy_level: upstreamBusyRaw,
       promotion,
       probeStatus,
       probeLabel,
