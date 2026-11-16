@@ -483,6 +483,7 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
         // 无论成功/异常/客户端断开，都必须释放名额，杜绝 inFlight 泄漏
         lifecycle.markFinished();
         activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
+        AccountScheduler.recordApiUsage(activeAcc);
         heartbeat.stop();
         keapalivePings = heartbeat.pingCount || 0;
         lifecycle.dispose();
@@ -572,6 +573,7 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
         }
 
         activeAcc.inFlight = Math.max(0, activeAcc.inFlight - 1);
+        AccountScheduler.recordApiUsage(activeAcc);
         nonStreamInFlightDecremented = true;
 
         const assembledMessage = {

@@ -41,6 +41,14 @@ export const CLI_PROMPT_TIMEOUT_MS = 18e5; // 1,800,000 ms (30分钟)
 // 数据结构: sessionKey -> { uid, createdAt, lastActive }
 export const sessionStickyMap = new Map();
 
+// ─── 闲置感知与按需刷新状态 ────────────────────────────────────────────────
+// 网关最近一次业务 API 调用时间戳 (用于闲置感知：若长时间无任何客户端调用，后台完全停止空转轮询)
+let lastApiCallTimestamp = 0;
+// 账号后置防抖刷新定时器字典: uid -> Timeout
+const postCallRefreshTimers = new Map();
+// 闲置感知阈值：默认 15 分钟（900,000 ms）无请求则认定为闲置
+export const GATEWAY_IDLE_THRESHOLD_MS = 15 * 60 * 1000;
+
 /**
  * 提取请求对应的会话粘性标识 (Session Key)
  * 优先级：
@@ -561,6 +569,78 @@ export class AccountScheduler {
     } catch (e) {
       Logger.error('BILLING', `账号 [${formatAccountFullDesc(acc)}] 刷新积分失败: ${e.message}`);
     }
+  }
+
+  /**
+   * 记录业务 API 调用（推理请求开始或结束时触碰）
+   * 1. 刷新网关全局活跃时间戳 lastApiCallTimestamp，打破闲置态
+   * 2. 标记特定账号已使用 (acc.lastUsedAt, acc.needsCreditRefresh)
+   * 3. 延迟触发针对该账号的后置防抖积分刷新 (等待上游计费出账 3.5 秒)
+   */
+  static recordApiUsage(acc = null) {
+    lastApiCallTimestamp = Date.now();
+    if (acc && acc.uid) {
+      acc.lastUsedAt = Date.now();
+      acc.needsCreditRefresh = true;
+
+      // 清除该账号原先排队的防抖刷新，3.5 秒后主动拉取该账号最新账单
+      if (postCallRefreshTimers.has(acc.uid)) {
+        clearTimeout(postCallRefreshTimers.get(acc.uid));
+      }
+      const t = setTimeout(() => {
+        postCallRefreshTimers.delete(acc.uid);
+        this.refreshCredits(acc).catch(() => {});
+        acc.needsCreditRefresh = false;
+      }, 3500);
+      postCallRefreshTimers.set(acc.uid, t);
+    }
+  }
+
+  /**
+   * 检查网关当前是否处于闲置状态（距上次业务 API 调用超过指定阈值）
+   */
+  static isGatewayIdle(thresholdMs = GATEWAY_IDLE_THRESHOLD_MS) {
+    if (lastApiCallTimestamp === 0) return true;
+    return (Date.now() - lastApiCallTimestamp) > thresholdMs;
+  }
+
+  static getLastApiCallTime() {
+    return lastApiCallTimestamp;
+  }
+
+  /**
+   * 闲置感知按需刷新：
+   * 供后台定时任务调度。若网关处于闲置状态（无业务调用），完全跳过；
+   * 若非闲置，则仅对调用过且账单待更新的账号错峰刷新，绝不盲目轮询全部账号。
+   */
+  static async refreshActiveAccountsIfStale() {
+    if (this.isGatewayIdle()) {
+      return { skippedAll: true, reason: 'idle' };
+    }
+
+    const activeCandidates = accounts.filter(acc => {
+      if (!acc.accessToken) return false;
+      return acc.needsCreditRefresh || (acc.lastUsedAt && acc.lastUsedAt > (acc.creditsUpdatedAt || 0));
+    });
+
+    if (activeCandidates.length === 0) {
+      return { refreshed: 0, skipped: accounts.length, reason: 'no-active-changes' };
+    }
+
+    let refreshed = 0;
+    for (let i = 0; i < activeCandidates.length; i++) {
+      const acc = activeCandidates[i];
+      setTimeout(async () => {
+        try {
+          await this.refreshCredits(acc);
+          acc.needsCreditRefresh = false;
+        } catch (_) {}
+      }, i * 300);
+      refreshed++;
+    }
+
+    Logger.info('BILLING', `闲置感知调度：针对 ${refreshed} 个近期活跃账号执行积分账单同步`);
+    return { refreshed, total: activeCandidates.length };
   }
 
   /**

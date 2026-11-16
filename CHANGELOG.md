@@ -8,6 +8,27 @@
 
 ---
 
+## [2.179.0-gw.22] - 2026-11-17
+
+### 闲置感知按需积分刷新策略与官方模型卡片文案/档位语义精准对齐 (Idle-Aware Credit Refresh & Upstream Model Semantics)
+- **网关闲置感知与按需账单刷新 (Activity-Driven Credit Refresh)**：
+  - **背景与痛点**：原后台定时器每 5 分钟无条件遍历全量账号轮询腾讯云计费接口 `/billing/meter/get-user-resource-summary`，在无客户端调用（闲置态）下每天产生数千次无意义的盲目轮询，增加被风控或限流的风险；
+  - **全链路调用感知引擎 (`src/core/scheduler.mjs`)**：
+    - 引入全局业务调用时间戳 `lastApiCallTimestamp` 与闲置判定窗口 `GATEWAY_IDLE_THRESHOLD_MS`（默认 15 分钟）；
+    - 在双协议适配器（[src/adapters/openai.mjs](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/openai.mjs) 与 [src/adapters/anthropic.mjs](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/anthropic.mjs)）请求终态及流结束处精准打点 `AccountScheduler.recordApiUsage(activeAcc)`；
+  - **后置防抖即时刷新与闲置停更 (`refreshActiveAccountsIfStale`)**：
+    - 单账号调用结束后，自动排队 3.5 秒后置防抖刷新，精准拉取本次消耗结算后的真实最新余额；
+    - 后台 5 分钟轮询检测到网关处于闲置期时，完全停止向上游发起任何计费请求；仅在活跃期且存在待刷新账单的账号上执行错峰同步。
+- **官方上游模型卡片文案与语义精准对齐 (Rule 0 & Rule 2)**：
+  - **拥堵状态文案对齐 (`src/web/public/scripts/models.js`)**：
+    - 针对 `congested` 状态，对齐官方 CodeBuddy 桌面端精准渲染为醒目的红标 **`极度拥堵`**（原简写为“拥堵”）；`busy` 对应 **`拥堵`**，`normal` 对应 **`畅通`**，`idle` 对应 **`空闲`**；
+  - **思考强度档位中文对齐**：
+    - 思考档位全面对照官方展示：`max (极致)`、`xhigh (极高)`、`high (深度)`、`medium (标准)`、`low (浅思)`、`off (关闭)`；
+  - **上下文与输出窗口单位对齐**：
+    - 上下文/输出长度达百万级别（如 1000K / 1048576 tokens）时，对齐官方标准格式化展示为 **`1M`**。
+
+---
+
 ## [2.179.0-gw.21] - 2026-11-17
 
 ### 官方上游模型实时繁忙度探测对齐 (POST /v2/chat/busy) 与 Web 面板拥堵状态徽章 (Official Model Realtime Busy Probing & Congestion Badges)

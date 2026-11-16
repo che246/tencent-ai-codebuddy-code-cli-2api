@@ -164,13 +164,9 @@ const server = http.createServer(async (req, res) => {
   return res.end(JSON.stringify({ error: 'Endpoint not found' }));
 });
 
-// 3. 后台定时任务 (每 5 分钟轮询，错峰 300ms 避免向腾讯云上游产生并发风暴)
+// 3. 后台定时任务 (按需闲置感知：若长时间无业务调用，停止空转轮询；非闲置时仅同步近期活跃账号)
 setInterval(() => {
-  accounts.forEach((acc, idx) => {
-    setTimeout(() => {
-      AccountScheduler.refreshCredits(acc);
-    }, idx * 300);
-  });
+  AccountScheduler.refreshActiveAccountsIfStale();
 }, 5 * 60 * 1000);
 
 // 每小时自动执行日志轮转：严格仅保留最近 3 天的日志

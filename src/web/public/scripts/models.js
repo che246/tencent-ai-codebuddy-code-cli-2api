@@ -190,16 +190,16 @@
         if (hasVision) badgesHtml += '<span class="badge" style="background:rgba(255,255,255,0.06); color:#cbd5e1; border:1px solid rgba(255,255,255,0.12); font-size:10px; padding:1px 6px; border-radius:4px;">视觉</span>';
         if (reasoningAlwaysOn) badgesHtml += '<span class="badge" style="background:rgba(234,179,8,0.15); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:10px; padding:1px 6px; border-radius:4px;">思考常开</span>';
 
-        // 上游模型繁忙度（POST /v2/chat/busy 实时；只标 busy / congested / unavailable，idle / normal 不打扰）
-        const BUSY_WORDS = { busy: '繁忙', congested: '拥堵', unavailable: '不可用' };
+        // 上游模型繁忙度（POST /v2/chat/busy 实时；对齐官方客户端文案：congested=极度拥堵, busy=拥堵）
+        const BUSY_WORDS = { idle: '空闲', normal: '畅通', busy: '拥堵', congested: '极度拥堵', unavailable: '不可用' };
         const busyLevel = item.busy || item.busy_level || item.busyLevel || null;
         if (busyLevel && BUSY_WORDS[busyLevel]) {
           const isBad = busyLevel === 'congested' || busyLevel === 'unavailable';
-          const bg = isBad ? 'rgba(239,68,68,0.18)' : 'rgba(234,179,8,0.18)';
-          const color = isBad ? '#f87171' : '#facc15';
-          const border = isBad ? 'rgba(239,68,68,0.35)' : 'rgba(234,179,8,0.35)';
-          const title = `上游繁忙度 ${escapeAttr(busyLevel)}（/v2/chat/busy 实时；服务端偶发无数据，同一批重查可能变）`;
-          badgesHtml += `<span class="badge" style="background:${bg}; color:${color}; border:1px solid ${border}; font-size:10px; padding:1px 6px; border-radius:4px;" title="${title}">${BUSY_WORDS[busyLevel]}</span>`;
+          const bg = isBad ? 'rgba(239,68,68,0.2)' : 'rgba(249,115,22,0.18)';
+          const color = isBad ? '#ef4444' : '#fb923c';
+          const border = isBad ? 'rgba(239,68,68,0.4)' : 'rgba(249,115,22,0.35)';
+          const title = `上游繁忙程度：${BUSY_WORDS[busyLevel]} (${escapeAttr(busyLevel)})（/v2/chat/busy 实时探针；服务端偶发无数据）`;
+          badgesHtml += `<span class="badge" style="background:${bg}; color:${color}; border:1px solid ${border}; font-size:10px; padding:1px 6px; border-radius:4px; font-weight:600;" title="${title}">${BUSY_WORDS[busyLevel]}</span>`;
         }
 
         const nameZh = item.name || item.id;
@@ -285,16 +285,18 @@
           const upstreamDef = r.defaultEffort || r.effort || 'high';
           const effectiveLevel = curOverride && curOverride !== 'default' ? curOverride : upstreamDef;
 
+          const EFFORT_ZH = { low: '浅思', medium: '标准', high: '深度', xhigh: '极高', max: '极致', off: '关闭' };
           let opts = '';
           for (const eff of supported) {
-            opts += `<option value="${eff}"${effectiveLevel === eff ? ' selected' : ''}>${eff}</option>`;
+            const labelZh = EFFORT_ZH[eff] ? `${eff} (${EFFORT_ZH[eff]})` : eff;
+            opts += `<option value="${eff}"${effectiveLevel === eff ? ' selected' : ''}>${labelZh}</option>`;
           }
           if (canDisable) {
-            opts += `<option value="off"${effectiveLevel === 'off' || effectiveLevel === 'none' ? ' selected' : ''}>off</option>`;
+            opts += `<option value="off"${effectiveLevel === 'off' || effectiveLevel === 'none' ? ' selected' : ''}>off (关闭)</option>`;
           }
 
           gwEffortHtml = `
-            <select class="search-input" style="padding:4px 8px; font-size:12px; width:105px; border-radius:6px; background:var(--surface);" onchange="updateModelThinkingLevel('${escapeAttr(item.id)}', this.value)">
+            <select class="search-input" style="padding:4px 8px; font-size:12px; width:115px; border-radius:6px; background:var(--surface);" onchange="updateModelThinkingLevel('${escapeAttr(item.id)}', this.value)">
               ${opts}
             </select>
           `;
@@ -305,7 +307,9 @@
         if (hasReasoning) {
           const upstreamDef = item.reasoning?.defaultEffort || item.reasoning?.effort || '';
           if (upstreamDef) {
-            upstreamDefHtml = `<span class="badge" style="background:rgba(34,197,94,0.18); color:#4ade80; border:1px solid rgba(34,197,94,0.35); padding:2px 10px; border-radius:12px; font-weight:600; font-size:11.5px;">${escapeHtml(upstreamDef)}</span>`;
+            const EFFORT_ZH = { low: '浅思', medium: '标准', high: '深度', xhigh: '极高', max: '极致', off: '关闭' };
+            const defLabel = EFFORT_ZH[upstreamDef] ? `${upstreamDef} (${EFFORT_ZH[upstreamDef]})` : upstreamDef;
+            upstreamDefHtml = `<span class="badge" style="background:rgba(34,197,94,0.18); color:#4ade80; border:1px solid rgba(34,197,94,0.35); padding:2px 10px; border-radius:12px; font-weight:600; font-size:11.5px;">${escapeHtml(defLabel)}</span>`;
           }
         }
 
@@ -314,24 +318,34 @@
         if (hasReasoning) {
           const r = item.reasoning || {};
           const isFixed = item.id.includes('fast-model') || item.id.includes('balanced-model') || item.id.includes('deep-model');
+          const EFFORT_ZH = { low: '浅思', medium: '标准', high: '深度', xhigh: '极高', max: '极致', off: '关闭' };
           if (isFixed) {
-            supportedHtml = `<span style="color:var(--text-muted); font-size:12px;">固定档 · 默认 ${r.effort || 'medium'}</span>`;
+            const defZh = EFFORT_ZH[r.effort] || '标准';
+            supportedHtml = `<span style="color:var(--text-muted); font-size:12px;">固定档 · 默认 ${r.effort || 'medium'} (${defZh})</span>`;
           } else if (Array.isArray(r.supportedEfforts) && r.supportedEfforts.length > 0) {
-            const badges = r.supportedEfforts.map(e => `<span class="badge" style="background:rgba(234,179,8,0.12); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:11px; padding:2px 7px; border-radius:4px; margin-right:4px;">${e}</span>`).join('');
+            const badges = r.supportedEfforts.map(e => {
+              const zh = EFFORT_ZH[e] ? `·${EFFORT_ZH[e]}` : '';
+              return `<span class="badge" style="background:rgba(234,179,8,0.12); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:11px; padding:2px 7px; border-radius:4px; margin-right:4px;">${e}${zh}</span>`;
+            }).join('');
             const canDisableText = (r.canDisableThinking !== false && !item.onlyReasoning) ? '<span style="color:var(--text-muted); font-size:11px; margin-left:3px;">off (可关)</span>' : '';
             supportedHtml = `<div style="display:flex; align-items:center; flex-wrap:wrap; gap:3px;">${badges}${canDisableText}</div>`;
           } else if (r.effort) {
-            supportedHtml = `<span class="badge" style="background:rgba(234,179,8,0.12); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:11px; padding:2px 7px; border-radius:4px;">${r.effort}</span>`;
+            const zh = EFFORT_ZH[r.effort] ? ` (${EFFORT_ZH[r.effort]})` : '';
+            supportedHtml = `<span class="badge" style="background:rgba(234,179,8,0.12); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:11px; padding:2px 7px; border-radius:4px;">${r.effort}${zh}</span>`;
           }
         }
 
-        // 6. 上下文长度
+        // 6. 上下文长度 (>=1M 渲染为 1M, 对齐官方)
         const inTokens = item.maxInputTokens || 0;
-        const ctxStr = inTokens >= 1000 ? `${Math.round(inTokens / 1000)}K` : (inTokens || '-');
+        const ctxStr = inTokens >= 1000000
+          ? `${(inTokens / 1000000).toFixed(inTokens % 1000000 === 0 ? 0 : 1)}M`
+          : (inTokens >= 1000 ? `${Math.round(inTokens / 1000)}K` : (inTokens || '-'));
 
         // 7. 最大输出
         const outTokens = item.maxOutputTokens || 0;
-        const outStr = outTokens >= 1000 ? `${Math.round(outTokens / 1000)}K` : (outTokens || '-');
+        const outStr = outTokens >= 1000000
+          ? `${(outTokens / 1000000).toFixed(outTokens % 1000000 === 0 ? 0 : 1)}M`
+          : (outTokens >= 1000 ? `${Math.round(outTokens / 1000)}K` : (outTokens || '-'));
 
         return `
           <tr style="${!isVisible ? 'opacity:0.45;' : ''} border-bottom:1px solid rgba(255,255,255,0.05);">
