@@ -138,13 +138,19 @@
           : '无限制';
 
         tbody.innerHTML = data.map(a => {
-          // 国际版上游不提供签到接口，展示为「无签到」且不给打卡按钮
+          // 国内版走每日签到接口，国际版通过随机轻量对话激活当日活跃奖励(+30 积分)
           const isIntlAcc = a.region === 'intl';
-          const checkinBadge = isIntlAcc
-            ? `<span class="badge badge-cool" title="国际版（www.codebuddy.ai）账号体系没有每日签到功能">🚫 无签到</span>`
-            : a.isCheckedInToday
-              ? `<span class="badge badge-ok" title="${a.lastCheckinMsg || ''}">✅ 已签到</span>`
-              : `<span class="badge badge-cool">⏳ 未签到</span> <button class="btn-primary" style="padding:2px 8px; font-size:11px; margin-left:6px;" onclick="runCheckinSingle('${a.uid}')">打卡</button>`;
+          const isDone = Boolean(a.isCheckedInToday);
+          const checkinTitle = isIntlAcc
+            ? (isDone ? (a.lastCheckinMsg || '今日活跃对话打卡已完成') : '国际版：随机与上游轻量对话一次激活当日活跃奖励(+30 积分)')
+            : (a.lastCheckinMsg || (isDone ? '今天已签到' : '今日未签到'));
+          const checkinText = isIntlAcc
+            ? (isDone ? '✅ 已打卡' : '⏳ 未打卡')
+            : (isDone ? '✅ 已签到' : '⏳ 未签到');
+          const checkinBtnText = isIntlAcc ? '对话打卡' : '打卡';
+          const checkinBadge = isDone
+            ? `<span class="badge badge-ok" title="${escapeAttr(checkinTitle)}">${checkinText}</span>`
+            : `<span class="badge badge-cool" title="${escapeAttr(checkinTitle)}">${checkinText}</span> <button class="btn-primary" style="padding:2px 8px; font-size:11px; margin-left:6px;" onclick="runCheckinSingle('${a.uid}')">${checkinBtnText}</button>`;
 
           const noteHtml = a.note 
             ? `<span class="acc-note-tag" onclick="editAccountNote('${a.uid}', '${escapeAttr(a.note)}')" title="点击修改备注">📝 ${escapeHtml(a.note)}</span>` 
@@ -420,7 +426,7 @@
           body: JSON.stringify({ uid })
         });
         const data = await res.json();
-        alert(`[单号签到反馈] ${data.msg}`);
+        alert(`[打卡签到反馈] ${data.msg}`);
         loadAccounts();
         fetchLogs();
       } catch (e) {

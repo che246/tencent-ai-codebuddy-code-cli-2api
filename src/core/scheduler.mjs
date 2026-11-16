@@ -9,12 +9,15 @@ import {
   resolveAccountRegion,
   normalizeRegion,
   REGION_CN,
+  REGION_INTL,
   USER_AGENT,
   formatAccountLogName,
   formatAccountFullDesc
 } from '../config.mjs';
 import { Logger } from './logger.mjs';
 import { LogDatabase } from './database.mjs';
+import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
+import { prepareUpstreamBody, ensureLeadingSystemMessage } from '../upstream/payload.mjs';
 
 // ─── 官方 CLI 常量与时间基准（严格溯源 package/dist/codebuddy-headless.js）───────────
 //
@@ -646,20 +649,36 @@ export class AccountScheduler {
     }
   }
 
+  // 国际版每日活跃对话打卡随机提示词池
+  static INTL_CHECKIN_PROMPTS = [
+    'Hi, please reply with "pong".',
+    'Hello! Give me a random motivational quote in one sentence.',
+    'Hi, please reply with "OK".',
+    'Hello, what is 1 + 1?',
+    'Hi! Reply with "Ready".',
+    'Hello, have a wonderful day!',
+    'Hi, ping!'
+  ];
+
   static async dailyCheckin(acc, force = false) {
     if (!acc.accessToken) return { success: false, msg: '无有效 Token' };
-
-    // 国际版没有签到功能：上游不提供该接口，直接跳过，不打请求也不报错。
-    // （实测 www.codebuddy.ai 的 /v2/billing/meter/daily-checkin 返回 401，
-    //   且国际版账号体系中本就没有「每日签到领积分」这一机制。）
-    if (resolveAccountRegion(acc) !== REGION_CN) {
-      return { success: false, skipped: true, unsupported: true, msg: '国际版账号无签到功能' };
+    const region = resolveAccountRegion(acc);
+    if (region === REGION_INTL) {
+      return this.dailyCheckinIntl(acc, force);
     }
+    return this.dailyCheckinCn(acc, force);
+  }
 
+  // 国内版每日签到：调用官方 /v2/billing/meter/daily-checkin 接口领积分
+  static async dailyCheckinCn(acc, force = false) {
     const today = getTodayString();
 
     // 1. 前置状态判断：当天若已成功签到且非强制，则直接返回已签到状态，避免频繁重复调用上游
-    const isAlreadyDoneToday = acc.lastCheckinDate === today && (acc.lastCheckinSuccess || acc.lastCheckinMsg?.includes('已签到') || acc.lastCheckinMsg?.includes('成功'));
+    const isAlreadyDoneToday = acc.lastCheckinDate === today && (
+      acc.lastCheckinSuccess ||
+      acc.lastCheckinMsg?.includes('已签到') ||
+      acc.lastCheckinMsg?.includes('成功')
+    );
     if (!force && isAlreadyDoneToday) {
       return {
         success: true,
@@ -718,40 +737,138 @@ export class AccountScheduler {
     }
   }
 
-  // 每小时定时轮巡检测：前置过滤当天已签到的账号，未签到的账号或进入新一天时自动补签
+  // 国际版每日打卡：官方国际版无单独 checkin 接口，每日与上游发起一次轻量随机对话即视为活跃并激活当日奖励（Bonus Pack）
+  static async dailyCheckinIntl(acc, force = false) {
+    const today = getTodayString();
+    const isAlreadyDoneToday = acc.lastCheckinDate === today && (
+      acc.lastCheckinSuccess ||
+      acc.lastCheckinMsg?.includes('完成') ||
+      acc.lastCheckinMsg?.includes('成功') ||
+      acc.lastCheckinMsg?.includes('已签到') ||
+      acc.lastCheckinMsg?.includes('已打卡')
+    );
+
+    if (!force && isAlreadyDoneToday) {
+      return {
+        success: true,
+        alreadyCheckedIn: true,
+        msg: acc.lastCheckinMsg || '今天已完成活跃打卡，请明天再来'
+      };
+    }
+
+    try {
+      const model = 'deepseek-v4.1-flash';
+      const prompt = AccountScheduler.INTL_CHECKIN_PROMPTS[Math.floor(Math.random() * AccountScheduler.INTL_CHECKIN_PROMPTS.length)];
+      let messages = [{ role: 'user', content: prompt }];
+      messages = ensureLeadingSystemMessage(messages, 'intl');
+
+      const upstreamPayload = {
+        model,
+        messages,
+        stream: true,
+        temperature: 0.7,
+        max_tokens: 32,
+        stream_options: { include_usage: true },
+        extra_vars: {
+          initiator: 'user',
+          interactionType: 'prompt'
+        }
+      };
+
+      const { body, isGzip } = prepareUpstreamBody(upstreamPayload);
+      const headers = buildOfficialUpstreamHeaders(acc.accessToken, model, 'checkin-' + Date.now(), acc.uid, isGzip, acc);
+      const ep = endpointsFor(acc);
+
+      const res = await fetch(ep.upstream, {
+        method: 'POST',
+        headers,
+        body,
+        signal: AbortSignal.timeout(20000)
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        acc.lastCheckinDate = today;
+        acc.lastCheckinSuccess = false;
+        acc.lastCheckinTime = getLocalTimeString();
+        acc.lastCheckinMsg = `对话打卡失败 (HTTP ${res.status})`;
+        Logger.error('CHECKIN', `国际版账号 [${formatAccountFullDesc(acc)}] 活跃对话打卡失败 HTTP ${res.status}: ${errText.slice(0, 150)}`);
+        return { success: false, msg: acc.lastCheckinMsg };
+      }
+
+      // 消费流式响应完成对话链路
+      let replyText = '';
+      if (res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) {
+              const chunk = decoder.decode(value);
+              for (const line of chunk.split('\n')) {
+                if (line.startsWith('data: ') && !line.includes('[DONE]')) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    replyText += data.choices?.[0]?.delta?.content || '';
+                  } catch (_) {}
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      const userMsg = '活跃对话完成，已激活当日奖励';
+      acc.lastCheckinDate = today;
+      acc.lastCheckinSuccess = true;
+      acc.lastCheckinTime = getLocalTimeString();
+      acc.lastCheckinMsg = userMsg;
+
+      Logger.info('CHECKIN', `国际版账号 [${formatAccountFullDesc(acc)}] 活跃对话打卡成功: ${userMsg} (上游回复: ${replyText.trim().slice(0, 30) || 'OK'})`);
+
+      // 稍等 1 秒待上游入账后刷新积分
+      await new Promise(r => setTimeout(r, 1200));
+      await this.refreshCredits(acc);
+      saveAccounts();
+
+      return { success: true, msg: userMsg };
+    } catch (e) {
+      Logger.error('CHECKIN', `国际版账号 [${formatAccountFullDesc(acc)}] 活跃对话打卡异常: ${e.message}`);
+      return { success: false, msg: `网络错误: ${e.message}` };
+    }
+  }
+
+  // 每小时定时轮巡检测：前置过滤当天已完成签到/打卡的账号，未签到的账号或进入新一天时自动补签
   static async checkAndRunHourlyCheckin(force = false) {
     const today = getTodayString();
     let checkedCount = 0;
     let skippedCount = 0;
-    let unsupportedCount = 0;
 
     for (const acc of accounts) {
       if (!acc.accessToken || acc.status !== 'healthy') continue;
 
-      // 国际版没有签到机制，轮巡时直接跳过，不产生请求也不写日志噪音
-      if (resolveAccountRegion(acc) !== REGION_CN) {
-        unsupportedCount++;
-        continue;
-      }
-
-      // 检查当天签到状态：如果当天已完成，则跳过，直至次日零点跨天后再检测
-      const isAlreadyDoneToday = acc.lastCheckinDate === today && (acc.lastCheckinSuccess || acc.lastCheckinMsg?.includes('已签到') || acc.lastCheckinMsg?.includes('成功'));
+      // 检查当天签到/打卡状态：如果当天已完成，则跳过，直至次日零点跨天后再检测
+      const isAlreadyDoneToday = acc.lastCheckinDate === today && (
+        acc.lastCheckinSuccess ||
+        acc.lastCheckinMsg?.includes('已签到') ||
+        acc.lastCheckinMsg?.includes('已打卡') ||
+        acc.lastCheckinMsg?.includes('成功') ||
+        acc.lastCheckinMsg?.includes('完成')
+      );
       if (!force && isAlreadyDoneToday) {
         skippedCount++;
         continue;
       }
 
-      // 未签到或已跨入新的一天，进行签到
+      // 未签到或已跨入新的一天，进行签到/打卡（国内版走签到接口，国际版走活跃对话）
       const res = await this.dailyCheckin(acc, force);
       if (res.success) checkedCount++;
     }
 
-    if (checkedCount > 0 || unsupportedCount > 0) {
-      const parts = [];
-      if (checkedCount > 0) parts.push(`成功为 ${checkedCount} 个未签到账号完成签到`);
-      if (skippedCount > 0) parts.push(`${skippedCount} 个账号今日已签自动跳过`);
-      if (unsupportedCount > 0) parts.push(`${unsupportedCount} 个国际版账号无签到功能已跳过`);
-      Logger.info('SCHEDULER', `每小时签到巡检：${parts.join('，')}`);
+    if (checkedCount > 0) {
+      Logger.info('SCHEDULER', `每小时签到巡检：成功为 ${checkedCount} 个账号完成签到/活跃打卡（${skippedCount} 个账号今日已完成自动跳过）`);
     }
   }
 

@@ -617,8 +617,20 @@ export async function handleApiRoutes(req, res, url) {
         cooldownRemainingSec: globalCooldownRemainingSec,
         lockedModels: activeLockedModels,
         lockedCount: activeLockedModels.length,
-        isCheckedInToday: a.lastCheckinDate === today && (a.lastCheckinSuccess || a.lastCheckinMsg?.includes('已签到') || a.lastCheckinMsg?.includes('成功')),
-        lastCheckinMsg: (a.lastCheckinDate === today && (a.lastCheckinSuccess || a.lastCheckinMsg?.includes('已签到') || a.lastCheckinMsg?.includes('成功'))) ? (a.lastCheckinMsg || '今天已签到') : '今日未签到'
+        isCheckedInToday: a.lastCheckinDate === today && (
+          a.lastCheckinSuccess ||
+          a.lastCheckinMsg?.includes('已签到') ||
+          a.lastCheckinMsg?.includes('已打卡') ||
+          a.lastCheckinMsg?.includes('成功') ||
+          a.lastCheckinMsg?.includes('完成')
+        ),
+        lastCheckinMsg: (a.lastCheckinDate === today && (
+          a.lastCheckinSuccess ||
+          a.lastCheckinMsg?.includes('已签到') ||
+          a.lastCheckinMsg?.includes('已打卡') ||
+          a.lastCheckinMsg?.includes('成功') ||
+          a.lastCheckinMsg?.includes('完成')
+        )) ? (a.lastCheckinMsg || (a.region === 'intl' ? '今日活跃打卡已完成' : '今天已签到')) : (a.region === 'intl' ? '今日未打卡' : '今日未签到')
       };
     })));
   }
