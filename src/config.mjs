@@ -40,15 +40,77 @@ export function normalizeRegion(region) {
 
 /**
  * 从账号推断区域。
- * 优先用显式 region 字段；没有则看 endpoint 域名：
- * 含 codebuddy.ai 的为国际版。这样手工录入的官方账号（只带 endpoint）也能正确路由。
+ * 兼容官方 CLI / IDE（CodeBuddy / WorkBuddy）原始结构：
+ * 优先用显式 region 或 realm 字段；没有则根据 endpoint 或 domain 域名推断。
  */
 export function resolveAccountRegion(acc) {
   if (!acc) return REGION_CN;
   if (acc.region) return normalizeRegion(acc.region);
+  if (acc.realm) return normalizeRegion(acc.realm);
   const ep = String(acc.endpoint || '').toLowerCase();
-  if (ep.includes('codebuddy.ai')) return REGION_INTL;
+  const dm = String(acc.domain || '').toLowerCase();
+  if (ep.includes('codebuddy.ai') || ep.includes('workbuddy.ai') || dm.includes('codebuddy.ai') || dm.includes('workbuddy.ai')) {
+    return REGION_INTL;
+  }
   return REGION_CN;
+}
+
+/**
+ * 规范化导入的账号实体对象。
+ * 深度对齐官方 CLI / IDE（如 CodeBuddy / WorkBuddy）导出的 accounts 原始格式：
+ *   - 兼容 uid, nickname, domain, realm ("intl"/"cn"), product ("workbuddy"/"codebuddy"), platform, enterpriseId
+ *   - 自动从 accessToken JWT Payload 解析 email、preferred_username 与 exp 过期时间
+ *   - 补全网关运行状态字段 (status, inFlight, creditsRemain, modelCooldowns 等)
+ */
+export function normalizeAccount(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const acc = { ...raw };
+
+  // 1. 若缺少 email，尝试从 accessToken JWT Payload 提取
+  if (!acc.email && typeof acc.accessToken === 'string' && acc.accessToken.includes('.')) {
+    try {
+      const parts = acc.accessToken.split('.');
+      if (parts.length >= 2) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+        acc.email = payload.email || payload.preferred_username || payload.name || '';
+        if (!acc.nickname && payload.preferred_username) {
+          acc.nickname = payload.preferred_username;
+        }
+        if (!acc.expiresAt && payload.exp) {
+          acc.expiresAt = payload.exp * 1000;
+        }
+      }
+    } catch (_) {}
+  }
+  if (!acc.email) {
+    acc.email = acc.nickname || acc.uid || 'unnamed-account';
+  }
+
+  // 2. 规范化区域 (支持 realm 字段与 workbuddy.ai / codebuddy.ai 域)
+  acc.region = resolveAccountRegion(acc);
+
+  // 3. 规范化端点 endpoint
+  if (!acc.endpoint) {
+    acc.endpoint = acc.region === REGION_INTL ? 'https://www.codebuddy.ai' : 'https://copilot.tencent.com';
+  }
+
+  // 4. 账号基础属性与状态字段兜底
+  acc.type = acc.type || 'personal';
+  acc.status = acc.status || 'healthy';
+  acc.inFlight = typeof acc.inFlight === 'number' ? acc.inFlight : 0;
+  acc.creditsRemain = typeof acc.creditsRemain === 'number' ? acc.creditsRemain : 0;
+  acc.modelCooldowns = acc.modelCooldowns || {};
+  acc.modelCooldownReasons = acc.modelCooldownReasons || {};
+  acc.cooldownUntil = typeof acc.cooldownUntil === 'number' ? acc.cooldownUntil : 0;
+  acc.lastCheckinSuccess = Boolean(acc.lastCheckinSuccess);
+
+  // 5. 备注 note 自动推断
+  if (!acc.note) {
+    const isWb = acc.product === 'workbuddy' || (acc.domain && acc.domain.includes('workbuddy'));
+    acc.note = isWb ? 'WorkBuddy 国际版' : (acc.region === REGION_INTL ? 'CodeBuddy 国际版' : '国内版');
+  }
+
+  return acc;
 }
 
 /** 取某账号的上游 base 配置 */

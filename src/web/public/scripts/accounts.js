@@ -904,3 +904,71 @@
         alert('操作异常: ' + e.message);
       }
     }
+
+// ─── 账号批量/快捷导入 (支持 CLI / WorkBuddy JSON 结构) ────────────────────
+    function openImportAccountModal() {
+      const txt = document.getElementById('txtImportAccountJson');
+      const note = document.getElementById('inputImportAccountNote');
+      const status = document.getElementById('importAccountStatus');
+      if (txt) txt.value = '';
+      if (note) note.value = '';
+      if (status) status.innerText = '';
+      const modal = document.getElementById('importAccountModal');
+      if (modal) modal.style.display = 'flex';
+    }
+
+    function closeImportAccountModal() {
+      const modal = document.getElementById('importAccountModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    async function submitImportAccount() {
+      const txt = document.getElementById('txtImportAccountJson');
+      const noteInp = document.getElementById('inputImportAccountNote');
+      const statusEl = document.getElementById('importAccountStatus');
+      const btn = document.getElementById('btnConfirmImportAccount');
+
+      let raw = (txt ? txt.value : '').trim();
+      const note = (noteInp ? noteInp.value : '').trim();
+
+      if (!raw) {
+        alert('请粘贴账号 JSON 凭据数据');
+        return;
+      }
+
+      // 容错处理：若用户只复制了 "accounts": [...] 或 accounts: [...]
+      if (raw.startsWith('"accounts"') || raw.startsWith('accounts') || raw.startsWith('\'accounts\'')) {
+        raw = '{' + raw + '}';
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        alert('JSON 解析失败，请检查格式是否有效:\n' + e.message);
+        return;
+      }
+
+      if (btn) btn.disabled = true;
+      if (statusEl) statusEl.innerText = '正在导入并校验账号...';
+
+      try {
+        const res = await fetch('/api/accounts/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rawJson: JSON.stringify(parsed), note })
+        });
+        const d = await res.json();
+        if (!res.ok) {
+          throw new Error(d.error || '导入失败');
+        }
+        alert(`🎉 成功导入/更新 ${d.count} 个账号！`);
+        closeImportAccountModal();
+        loadAccounts();
+      } catch (err) {
+        alert('导入失败: ' + err.message);
+      } finally {
+        if (btn) btn.disabled = false;
+        if (statusEl) statusEl.innerText = '';
+      }
+    }

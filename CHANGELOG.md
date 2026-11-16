@@ -8,6 +8,23 @@
 
 ---
 
+## [2.179.0-gw.17] - 2026-11-16
+
+### 官方 CLI / WorkBuddy 账号凭据导入与领域自适应 (CLI & WorkBuddy Account Ingestion)
+- **官方 CLI / IDE 导出结构兼容与领域解析对齐 (Rule 0 & Rule 2)**：
+  - 深度兼容官方 CLI 及 WorkBuddy 导出结构 `{"accounts": [...]}`（含 `uid`, `nickname`, `domain`, `realm`, `product`, `platform`, `accessToken`, `refreshToken`）；
+  - **区域推断增强 (`resolveAccountRegion`)**：在 `src/config.mjs` 中扩展识别逻辑，支持根据 `realm`（如 `realm: "intl"`）及 `domain` / `endpoint`（如 `workbuddy.ai`, `codebuddy.ai`）自动识别并归类为国际版（`REGION_INTL`），彻底解决旧逻辑中因缺少 `region` 字段误判为国内版导致上游 401 的痛点；
+  - **账号规范化解析引擎 (`normalizeAccount`)**：自动从 `accessToken` JWT Payload 解析 `email`、`preferred_username` 与 `exp` 有效期，自动设置状态为健康并推断清晰的备注信息（如“WorkBuddy 国际版”）。
+- **账号批量与单凭据导入 REST API (`POST /api/accounts/import`)**：
+  - 在 `src/web/routes.mjs` 中新增账号导入端点，支持解析标准 JSON 数组、`{ accounts: [...] }` 结构或单个账号对象；
+  - 采用 UID 自动去重策略：已存在则平滑更新凭据与字段，新账号则自动入池；
+  - 导入完成后自动异步触发 `AccountScheduler.refreshCredits(acc)`，即时拉取上游可用积分并记录变动流水。
+- **Web 控制台导入模态框与快捷操作**：
+  - 在顶栏快捷操作区与账号管理卡片标题栏均新增「📥 导入账号」按钮；
+  - 新增 `#importAccountModal` 导入弹窗，支持直接粘贴原始 JSON 文本（支持自动容错省略外层大括号的 `"accounts": [...]` 片段），提供自定义备注输入与即时状态反馈。
+
+---
+
 ## [2.179.0-gw.16] - 2026-11-14
 
 ### 会话粘性账号复用 (Sticky Session) · 严格对齐官方 CLI 时间常数与上游 Prompt Cache 保活

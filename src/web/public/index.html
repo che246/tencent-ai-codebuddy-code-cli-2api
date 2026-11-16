@@ -74,6 +74,7 @@
         <div class="topbar-actions">
           <button id="btnAllCheckin" class="btn-success" onclick="runCheckin()">⚡ 全员打卡签到</button>
           <button class="btn-outline" onclick="forceRefreshCredits()" title="立即从上游重新拉取所有账号的可用积分（忽略 30 秒最小间隔）">🔄 刷新积分</button>
+          <button class="btn-outline" onclick="openImportAccountModal()" title="支持粘贴官方 CLI、WorkBuddy 或自建导出的账号 JSON 凭据">📥 导入账号</button>
           <button class="btn-primary" onclick="startOAuth()">➕ 扫码添加账号</button>
           <button id="btnLogoutBtn" class="btn-outline" style="padding:5px 12px; font-size:12px; display:none;" onclick="logoutWebAuth()" title="退出控制台并锁定">🔒 退出</button>
         </div>
@@ -308,6 +309,7 @@
                 <span class="badge badge-ok" id="badgeAccountCount">加载中</span>
               </div>
               <div style="display:flex; gap:8px;">
+                <button class="btn-primary" style="font-size:12px; padding:4px 10px;" onclick="openImportAccountModal()">📥 导入账号凭据</button>
                 <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadAccounts()">🔄 刷新状态</button>
               </div>
             </div>
@@ -1353,6 +1355,42 @@
         <div style="display:flex; gap:10px;">
           <button class="btn-outline" onclick="closePickPrimaryModal()">取消</button>
           <button class="btn-primary" onclick="confirmPickPrimaryModel()">确定创建</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 账号导入 Modal (支持官方 CLI、WorkBuddy 导出的 JSON 凭据) -->
+  <div class="modal" id="importAccountModal">
+    <div class="modal-content" style="max-width:580px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0; font-size:16px; color:var(--accent);">📥 导入账号凭据 (CLI / WorkBuddy JSON)</h3>
+        <button onclick="closeImportAccountModal()" style="background:transparent; color:var(--text-muted); font-size:18px;">✕</button>
+      </div>
+
+      <p style="color:var(--text-muted); font-size:12px; margin-bottom:12px; line-height:1.5;">
+        支持直接粘贴官方 CodeBuddy CLI 或 WorkBuddy CLI 导出的 <code>{"accounts": [...]}</code> 原始结构，或单账号 JSON 对象。系统将自动解析凭据、识别区域（国内/国际）并同步可用积分。
+      </p>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px; font-weight:bold; color:var(--text-main); display:block; margin-bottom:6px;">
+          账号 JSON 凭据数据:
+        </label>
+        <textarea id="txtImportAccountJson" class="search-input" style="width:100%; height:160px; font-family:monospace; font-size:11px; padding:10px; resize:vertical; line-height:1.4;" placeholder='{"accounts": [{"uid": "...", "accessToken": "...", "refreshToken": "...", "domain": "www.workbuddy.ai", "realm": "intl"}]}'></textarea>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px; font-weight:bold; color:var(--text-main); display:block; margin-bottom:6px;">
+          自定义备注说明 (可选，留空则自动识别):
+        </label>
+        <input type="text" id="inputImportAccountNote" class="search-input" style="width:100%; padding:8px 12px; font-size:12px;" placeholder="例如: WorkBuddy 国际版 / 备用号">
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span id="importAccountStatus" style="font-size:12px; color:var(--text-muted);"></span>
+        <div style="display:flex; gap:10px;">
+          <button class="btn-outline" onclick="closeImportAccountModal()">取消</button>
+          <button class="btn-primary" id="btnConfirmImportAccount" onclick="submitImportAccount()">确认导入</button>
         </div>
       </div>
     </div>

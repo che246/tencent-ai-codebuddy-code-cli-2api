@@ -32,7 +32,8 @@ import {
   addApiKey,
   updateApiKey,
   removeApiKey,
-  isValidApiKey
+  isValidApiKey,
+  normalizeAccount
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -1138,6 +1139,88 @@ export async function handleApiRoutes(req, res, url) {
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // 12.95. 批量/单个导入官方 CLI 或外部导出的账号凭据
+  if (url.pathname === '/api/accounts/import' && req.method === 'POST') {
+    let b = '';
+    req.on('data', c => b += c);
+    req.on('end', async () => {
+      try {
+        let payload = JSON.parse(b || '{}');
+        if (payload.rawJson && typeof payload.rawJson === 'string') {
+          payload = JSON.parse(payload.rawJson);
+        }
+
+        let list = [];
+        if (Array.isArray(payload)) {
+          list = payload;
+        } else if (Array.isArray(payload.accounts)) {
+          list = payload.accounts;
+        } else if (payload.account && typeof payload.account === 'object') {
+          list = [payload.account];
+        } else if (payload.accessToken || payload.refreshToken || payload.uid) {
+          list = [payload];
+        }
+
+        if (list.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: '未识别到有效的账号数据，请检查 JSON 结构' }));
+        }
+
+        const importedResults = [];
+        for (const item of list) {
+          const norm = normalizeAccount(item);
+          if (!norm || (!norm.accessToken && !norm.refreshToken)) {
+            continue;
+          }
+
+          const existingIdx = accounts.findIndex(a => a.uid === norm.uid);
+          if (existingIdx !== -1) {
+            const existing = accounts[existingIdx];
+            existing.accessToken = norm.accessToken || existing.accessToken;
+            existing.refreshToken = norm.refreshToken || existing.refreshToken;
+            existing.expiresAt = norm.expiresAt || existing.expiresAt;
+            existing.domain = norm.domain || existing.domain;
+            existing.realm = norm.realm || existing.realm;
+            existing.product = norm.product || existing.product;
+            existing.region = norm.region || existing.region;
+            existing.endpoint = norm.endpoint || existing.endpoint;
+            existing.status = 'healthy';
+            if (norm.email && norm.email !== 'unnamed-account') existing.email = norm.email;
+            if (norm.note && (!existing.note || existing.note === '默认账号')) existing.note = norm.note;
+            importedResults.push(existing);
+            AccountScheduler.refreshCredits(existing).catch(() => {});
+          } else {
+            accounts.push(norm);
+            importedResults.push(norm);
+            AccountScheduler.refreshCredits(norm).catch(() => {});
+          }
+        }
+
+        saveAccounts();
+        Logger.info('AUTH', `成功导入/更新 ${importedResults.length} 个账号凭据`);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          ok: true,
+          count: importedResults.length,
+          imported: importedResults.map(a => ({
+            uid: a.uid,
+            email: a.email,
+            region: a.region,
+            domain: a.domain,
+            product: a.product,
+            note: a.note,
+            creditsRemain: a.creditsRemain
+          }))
+        }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: '解析或导入失败: ' + e.message }));
       }
     });
     return;
