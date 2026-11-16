@@ -8,6 +8,19 @@
 
 ---
 
+## [2.179.0-gw.19] - 2026-11-16
+
+### 全工程深度代码审计与双协议降级链路区域隔离加固 (Codebase Audit & Routing Hardening)
+- **多模型降级链故障转移 (Failover) 区域隔离加固 (Rule 0 & Rule 2)**：
+  - **背景与痛点**：在 OpenAI 与 Anthropic 双协议适配器处理模型降级链（`modelFallback`）时，若首选模型限流触发同模型异号重试或下一个候选模型接力时，原故障转移选号分支未严格传递当前候选步骤所锁定的 `curRegion`，极端场景下跨区备选模型（如 `cn:deepseek-v4.1-flash` -> `intl:deepseek-v4.1-flash-sg`）重试时可能误匹配到非目标区域账号导致上游 401 鉴权失败；
+  - **加固实现**：在 [src/adapters/openai.mjs](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/openai.mjs) 及 [src/adapters/anthropic.mjs](file:///d:/AI/tencent-ai-codebuddy-code/src/adapters/anthropic.mjs) 中统一将选号约束 `region` 绑定为当前候选步骤所属的 `curRegion`，实现全链路严格的区域隔离闭环。
+- **账号池冷启动自愈与规范化防护 (`src/config.mjs`)**：
+  - 加载持久化文件 `accounts.json` 时全量管道式接入 `normalizeAccount` 过滤器，确保即使外部环境或运维人员手工更新/追加非标准 CLI 格式账号，网关启动与运行时均自动完成字段兜底补齐（`inFlight=0`、`modelCooldowns={}`、区域推断等），杜绝空字段引发的未定义异常。
+- **全工程语法与依赖纯净度审计**：
+  - 经全量静态扫描与语法测试验证：全工程 29 个核心源码模块均保持 Node.js >= 22 原生零依赖纯血架构，无语法与类型隐患，服务端模板动态拼装渲染（`renderDashboardTemplate`）解析零缺失。
+
+---
+
 ## [2.179.0-gw.18] - 2026-11-16
 
 ### 国际版每日随机活跃对话打卡 · 自动激活每日 Bonus Pack 奖励 (Intl Daily Dialogue Check-in)

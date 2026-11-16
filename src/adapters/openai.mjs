@@ -308,7 +308,7 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
 
                 // 1) 优先：检查账号池中是否有其他可用账号继续执行相同模型
                 const canFailoverAccount = config.accountFailoverEnabled !== false;
-                const otherAcc = canFailoverAccount ? AccountScheduler.selectAccount(curModel, sessionKey, { excludeUids: Array.from(attemptedUids), region: forcedRegion }) : null;
+                const otherAcc = canFailoverAccount ? AccountScheduler.selectAccount(curModel, sessionKey, { excludeUids: Array.from(attemptedUids), region: curRegion }) : null;
 
                 if (otherAcc) {
                   const wasPinned = config.pinnedAccount && (

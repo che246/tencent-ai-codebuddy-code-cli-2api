@@ -384,7 +384,7 @@ export function loadJsonWithBackup(mainPath, defaultValue) {
 }
 
 export let config = loadJsonWithBackup(CONFIG_PATH, {});
-export let accounts = loadJsonWithBackup(ACCOUNTS_PATH, []);
+export let accounts = loadJsonWithBackup(ACCOUNTS_PATH, []).map(a => normalizeAccount(a)).filter(Boolean);
 
 // 会话粘性 (Sticky Session) 默认配置（严格对齐官方 CLI 常量：COMPLETED_TASK_TTL_MS=3e5, PROMPT_TIMEOUT_MS=18e5）
 if (config.stickySessionEnabled === undefined) {
