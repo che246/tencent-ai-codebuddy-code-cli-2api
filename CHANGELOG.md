@@ -21,7 +21,8 @@
   - 导入完成后自动异步触发 `AccountScheduler.refreshCredits(acc)`，即时拉取上游可用积分并记录变动流水。
 - **Web 控制台导入模态框与快捷操作**：
   - 在顶栏快捷操作区与账号管理卡片标题栏均新增「📥 导入账号」按钮；
-  - 新增 `#importAccountModal` 导入弹窗，支持直接粘贴原始 JSON 文本（支持自动容错省略外层大括号的 `"accounts": [...]` 片段），提供自定义备注输入与即时状态反馈。
+  - 新增 `#importAccountModal` 导入弹窗，支持直接粘贴原始 JSON 文本，提供自定义备注输入与即时状态反馈；
+  - **智能括号补全与健壮 JSON 容错解析 (`robustParseJson`)**：前后端双层集成基于括号栈的容错解析算法，自动识别并补全用户复制粘贴时遗漏的外层花括号或结尾中括号（如仅复制到 `"accounts": [{...` 缺少 `}]`），彻底杜绝 `JSON.parse: end of data when ',' or ']' was expected` 的格式解析报错。
 
 ---
 

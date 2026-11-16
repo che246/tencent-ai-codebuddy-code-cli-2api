@@ -56,6 +56,65 @@ export function resolveAccountRegion(acc) {
 }
 
 /**
+ * 健壮 JSON 容错解析引擎。
+ * 兼容未闭合引号、大括号、中括号以及只有 "accounts": [...] 片段的非标准 JSON 字符串，
+ * 采用栈自动闭合补全未配对的结构。
+ */
+export function robustParseJson(str) {
+  let s = String(str || '').trim();
+  if (!s) return null;
+
+  try {
+    return JSON.parse(s);
+  } catch (_) {}
+
+  s = s.replace(/[,;]\s*$/, '').trim();
+
+  if (/^['"]?accounts['"]?\s*:/i.test(s)) {
+    s = '{' + s;
+  }
+
+  const stack = [];
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (ch === '{') stack.push('}');
+      else if (ch === '[') stack.push(']');
+      else if (ch === '}' || ch === ']') {
+        if (stack.length > 0 && stack[stack.length - 1] === ch) {
+          stack.pop();
+        }
+      }
+    }
+  }
+
+  if (inString) {
+    s += '"';
+  }
+
+  while (stack.length > 0) {
+    s += stack.pop();
+  }
+
+  return JSON.parse(s);
+}
+
+/**
  * 规范化导入的账号实体对象。
  * 深度对齐官方 CLI / IDE（如 CodeBuddy / WorkBuddy）导出的 accounts 原始格式：
  *   - 兼容 uid, nickname, domain, realm ("intl"/"cn"), product ("workbuddy"/"codebuddy"), platform, enterpriseId

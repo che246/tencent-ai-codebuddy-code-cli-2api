@@ -922,6 +922,65 @@
       if (modal) modal.style.display = 'none';
     }
 
+    function robustParseJson(str) {
+      let s = String(str || '').trim();
+      if (!s) return null;
+
+      try {
+        return JSON.parse(s);
+      } catch (_) {}
+
+      // 剥离末尾可能多余的逗号或分号
+      s = s.replace(/[,;]\s*$/, '').trim();
+
+      // 兼容用户复制时仅复制了 "accounts": [...] 或 accounts: [...]
+      if (/^['"]?accounts['"]?\s*:/i.test(s)) {
+        s = '{' + s;
+      }
+
+      // 利用括号栈追踪未闭合的双引号、大括号与中括号
+      const stack = [];
+      let inString = false;
+      let escape = false;
+
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escape = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (ch === '{') stack.push('}');
+          else if (ch === '[') stack.push(']');
+          else if (ch === '}' || ch === ']') {
+            if (stack.length > 0 && stack[stack.length - 1] === ch) {
+              stack.pop();
+            }
+          }
+        }
+      }
+
+      // 如果双引号未闭合，先闭合双引号
+      if (inString) {
+        s += '"';
+      }
+
+      // 按相反顺序补全所有未闭合的括号
+      while (stack.length > 0) {
+        s += stack.pop();
+      }
+
+      return JSON.parse(s);
+    }
+
     async function submitImportAccount() {
       const txt = document.getElementById('txtImportAccountJson');
       const noteInp = document.getElementById('inputImportAccountNote');
@@ -936,14 +995,9 @@
         return;
       }
 
-      // 容错处理：若用户只复制了 "accounts": [...] 或 accounts: [...]
-      if (raw.startsWith('"accounts"') || raw.startsWith('accounts') || raw.startsWith('\'accounts\'')) {
-        raw = '{' + raw + '}';
-      }
-
       let parsed;
       try {
-        parsed = JSON.parse(raw);
+        parsed = robustParseJson(raw);
       } catch (e) {
         alert('JSON 解析失败，请检查格式是否有效:\n' + e.message);
         return;

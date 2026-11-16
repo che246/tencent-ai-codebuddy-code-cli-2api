@@ -33,7 +33,8 @@ import {
   updateApiKey,
   removeApiKey,
   isValidApiKey,
-  normalizeAccount
+  normalizeAccount,
+  robustParseJson
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -1150,9 +1151,15 @@ export async function handleApiRoutes(req, res, url) {
     req.on('data', c => b += c);
     req.on('end', async () => {
       try {
-        let payload = JSON.parse(b || '{}');
+        let payload;
+        try {
+          payload = JSON.parse(b || '{}');
+        } catch (_) {
+          payload = robustParseJson(b || '{}');
+        }
+
         if (payload.rawJson && typeof payload.rawJson === 'string') {
-          payload = JSON.parse(payload.rawJson);
+          payload = robustParseJson(payload.rawJson);
         }
 
         let list = [];
