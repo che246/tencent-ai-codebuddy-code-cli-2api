@@ -8,6 +8,23 @@
 
 ---
 
+## [2.179.0-gw.20] - 2026-11-17
+
+### 官方上游模型促销活动协议对齐与 Web 面板活动角标全景展示 (Official Model Promotions & Web UI Activity Badges)
+- **官方上游促销活动协议对齐与动态捕获 (Rule 0 & Rule 2)**：
+  - **背景与痛点**：官方上游在 `/v3/config` 的 `data.modelPromotions` 下发了完整的促销规则对象（包含活动标签 `badge.label`、背景色 `badge.color`、官方矢量图标 `badge.icon`、悬浮提示文案 `hover.textZh`、折扣折算系数 `discount.factor` 及生效周期 `schedule`）。网关原本仅在模型列做硬编码判断，未完整对齐并透传官方丰富的促销元数据；
+  - **动态促销活动提取与持久化 (`src/upstream/models.mjs`)**：在 `fetchDetailedModels` 中支持从 `/v3/config` 动态解析 `data.data.modelPromotions`，并将全量促销矩阵与模型矩阵一同合并持久化至 [product.json](file:///d:/AI/tencent-ai-codebuddy-code/product.json)（`loadPromotionsFromProductJson` / `persistModelsToProductJson`）；
+  - **模型促销规则匹配引擎 (`resolveModelPromotion`)**：按模型 ID、全名及关联别名精准关联上游活动（如当前官方正生效的 `hy4flash-free` 限时免费赠送额度活动）；同时针对官方常态非高峰优惠策略进行兜底对齐（如 `DeepSeek-V4.1-Flash` 与 `GLM-5.2` 在非高峰期享受 5 折夜间折扣、0 积分模型自动标记限时免费）。
+- **网关 Web 控制台模型列表促销角标与交互增强**：
+  - **促销活动角标与悬停气泡卡片 (`src/web/public/scripts/models.js` & `components.css`)**：
+    - 模型名称旁直观展示官方同款样式活动角标（如 🌙 `夜间折扣`、🎁 `限时免费`、⚡ `限时特惠`），支持渲染官方动态矢量图标或主题图标；
+    - 鼠标悬停（Hover）即弹出高质感 Tooltip 气泡卡片，呈现完整活动规则（如“周一至周五 09:00-12:00、14:00-18:00 属高峰原价，非高峰期积分5折 去使用”）、折算优惠比例、活动有效截止时间（`schedule.validUntil`）及官方操作指引；
+    - 在「积分倍率」列智能展示折后参考倍率（例如 `x0.11` 标明 `5折` 并计算出 `特惠折后 ≈ x0.05`，免费模型标明 `0x (免积分)`）；
+  - **综合筛选工具栏价格分类升级 (`src/web/public/index.html`)**：
+    - 下拉筛选器扩展为：`🔥 有活动 / 限时免费`、`🎁 限时免费`、`🌙 夜间折扣`、`⚡ 打折特惠 (非免费)`，支持一键精准过滤出所有享用优惠力度的模型。
+
+---
+
 ## [2.179.0-gw.19] - 2026-11-16
 
 ### 全工程深度代码审计与双协议降级链路区域隔离加固 (Codebase Audit & Routing Hardening)

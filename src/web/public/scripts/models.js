@@ -122,13 +122,22 @@
           }
         }
 
-        // 价格过滤：全部价格 / 有折扣/限时免费 / 限时免费 / 打折(非免费)
+        // 价格过滤：全部价格 / 有活动折扣/限时免费 / 限时免费 / 夜间折扣 / 打折特惠(非免费)
         if (priceFilter !== 'all') {
+          const promo = item.promotion;
           const mult = getModelMultiplier(item);
-          const isFree = mult === 0 || (item.credits || '').includes('0.00') || (item.credits || '').includes('0x');
-          const isDiscount = (item.credits || '').includes('0.11') || (item.credits || '').includes('0.50') || (item.credits || '').includes('0.79') || item.discount || item.nightDiscount || (mult > 0 && mult < 1);
+          const isFree = (promo && (promo.kind === 'free' || promo.discount?.factor === 0))
+            || mult === 0
+            || (item.credits || '').includes('0.00')
+            || (item.credits || '').includes('0x');
+          const isNight = Boolean(promo && promo.badge?.label?.includes('夜间'));
+          const isDiscount = Boolean(promo && promo.discount?.factor && promo.discount.factor < 1 && promo.discount.factor > 0)
+            || isNight
+            || (mult > 0 && mult < 1);
+
           if (priceFilter === 'discount_or_free' && !isFree && !isDiscount) return false;
           if (priceFilter === 'free' && !isFree) return false;
+          if (priceFilter === 'night' && !isNight) return false;
           if (priceFilter === 'discount' && (!isDiscount || isFree)) return false;
         }
 
@@ -162,7 +171,7 @@
         const isBlocked = currentBlacklist.includes(item.fullId) || currentBlacklist.includes(item.id);
         const isVisible = !isBlocked;
 
-        // 1. 模型列 (ID, 名称, 特性徽章)
+        // 1. 模型列 (ID, 名称, 特性徽章, 促销活动角标)
         const isDefault = item.id === 'default' || item.id === 'fast-model';
         const hasTool = item.supportsToolCall;
         const hasVision = item.supportsImages;
@@ -178,38 +187,66 @@
         if (reasoningAlwaysOn) badgesHtml += '<span class="badge" style="background:rgba(234,179,8,0.15); color:#facc15; border:1px solid rgba(234,179,8,0.3); font-size:10px; padding:1px 6px; border-radius:4px;">思考常开</span>';
 
         const nameZh = item.name || item.id;
+        const promo = item.promotion || null;
+        const mult = getModelMultiplier(item);
+        const isFree = (promo && (promo.kind === 'free' || promo.discount?.factor === 0)) || mult === 0 || (item.credits || '').includes('0.00') || (item.credits || '').includes('0x');
+
+        let promoBadgeHtml = '';
+        if (promo && promo.badge) {
+          const badgeLabel = promo.badge.label || (isFree ? '限时免费' : '限时折扣');
+          const badgeColor = promo.badge.color || '#009273';
+          const iconHtml = promo.badge.icon
+            ? `<img src="${promo.badge.icon}" style="width:12px; height:12px; vertical-align:middle; margin-right:3px; display:inline-block;" alt="" />`
+            : (badgeLabel.includes('夜间') ? '🌙 ' : (badgeLabel.includes('免费') ? '🎁 ' : '⚡ '));
+
+          const hoverText = promo.hover?.textZh || (isFree ? '当前模型处于官方限时免费阶段，调用消耗 0 积分。' : '官方限时优惠活动中');
+          const scheduleText = promo.schedule?.validUntil
+            ? `<div style="margin-top:5px; font-size:11px; color:#94a3b8; display:flex; align-items:center; gap:4px;"><span>📅</span><span>活动有效期至: ${new Date(promo.schedule.validUntil).toLocaleDateString()}</span></div>`
+            : '';
+          const discountDesc = (promo.discount?.factor && promo.discount.factor < 1 && promo.discount.factor > 0)
+            ? `<div style="margin-top:3px; font-size:11px; color:#4ade80; font-weight:600;">💰 折算比例: ${Math.round(promo.discount.factor * 10)} 折优惠 (${promo.discount.discountedCredits || ''})</div>`
+            : '';
+          const actionText = promo.hover?.action?.labelZh
+            ? `<span style="color:#38bdf8; font-size:11px; margin-left:4px;">${escapeHtml(promo.hover.action.labelZh)} &rarr;</span>`
+            : '';
+
+          promoBadgeHtml = `
+            <div class="promo-badge-wrap" title="${escapeAttr(hoverText)}">
+              <span class="promo-pill" style="background:${badgeColor}22; color:${badgeColor}; border:1px solid ${badgeColor}66;">
+                ${iconHtml}<span>${escapeHtml(badgeLabel)}</span>
+              </span>
+              <div class="promo-tooltip">
+                <div style="font-weight:700; color:#fff; font-size:12.5px; margin-bottom:4px; display:flex; align-items:center; gap:5px;">
+                  ${iconHtml}<span>${escapeHtml(badgeLabel)}</span>
+                </div>
+                <div style="color:#e2e8f0; font-size:11.5px; line-height:1.5;">${escapeHtml(hoverText)}${actionText}</div>
+                ${discountDesc}
+                ${scheduleText}
+              </div>
+            </div>
+          `;
+        }
 
         // 2. 积分倍率
-        const mult = getModelMultiplier(item);
-        const isFree = mult === 0 || (item.credits || '').includes('0.00') || (item.credits || '').includes('0x');
-        const isNightDiscount = item.id.includes('v4.1-flash') || item.id.includes('glm-5.2');
-
         let priceHtml = '';
         if (isFree) {
           priceHtml = `
             <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
-              <span style="font-weight:700; color:#fff; font-size:12.5px;">0x</span>
-              <span class="badge" style="background:rgba(74,222,128,0.15); color:#4ade80; border:1px solid rgba(74,222,128,0.3); font-size:10px; padding:1px 5px; border-radius:4px;">限时免费</span>
-              <span style="color:var(--text-muted); font-size:11px;">x0.00</span>
+              <span style="font-weight:700; color:#4ade80; font-size:12.5px;">0x</span>
+              <span style="color:var(--text-muted); font-size:11px;">(免积分)</span>
             </div>
           `;
-        } else if (isNightDiscount) {
-          if (item.id.includes('glm-5.2')) {
-            priceHtml = `
-              <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
-                <span style="font-weight:700; color:#fff; font-size:12.5px;">0.50x</span>
-                <span class="badge" style="background:rgba(74,222,128,0.15); color:#4ade80; border:1px solid rgba(74,222,128,0.3); font-size:10px; padding:1px 5px; border-radius:4px;">夜间折扣</span>
-                <span style="color:var(--text-muted); font-size:11px;">x0.99</span>
-              </div>
-            `;
-          } else {
-            priceHtml = `
+        } else if (promo && promo.discount?.factor && promo.discount.factor < 1 && promo.discount.factor > 0) {
+          const discountedMult = (mult * promo.discount.factor).toFixed(2);
+          priceHtml = `
+            <div style="display:flex; flex-direction:column; gap:2px;">
               <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
                 <span style="font-weight:700; color:#fff; font-size:12.5px;">x${mult.toFixed(2)}</span>
-                <span class="badge" style="background:rgba(74,222,128,0.15); color:#4ade80; border:1px solid rgba(74,222,128,0.3); font-size:10px; padding:1px 5px; border-radius:4px;">夜间折扣</span>
+                <span style="font-size:11px; color:#4ade80; font-weight:600; background:rgba(74,222,128,0.12); border:1px solid rgba(74,222,128,0.25); padding:1px 5px; border-radius:3px;">${Math.round(promo.discount.factor * 10)}折</span>
               </div>
-            `;
-          }
+              <span style="color:var(--text-muted); font-size:11px;">特惠折后 ≈ x${discountedMult}</span>
+            </div>
+          `;
         } else {
           priceHtml = `<span style="font-weight:700; color:#fff; font-size:12.5px;">x${mult.toFixed(2)}</span>`;
         }
@@ -283,7 +320,10 @@
         return `
           <tr style="${!isVisible ? 'opacity:0.45;' : ''} border-bottom:1px solid rgba(255,255,255,0.05);">
             <td style="padding:10px 12px;">
-              <div style="font-weight:700; color:#fff; font-size:13.5px; line-height:1.4;">${escapeHtml(item.fullId)}</div>
+              <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                <span style="font-weight:700; color:#fff; font-size:13.5px; line-height:1.4;">${escapeHtml(item.fullId)}</span>
+                ${promoBadgeHtml}
+              </div>
               <div style="color:var(--text-muted); font-size:12px; margin-top:2px; margin-bottom:4px;">${escapeHtml(nameZh)}</div>
               <div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">${badgesHtml}</div>
             </td>

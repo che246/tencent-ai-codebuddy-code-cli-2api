@@ -9,14 +9,15 @@ import { Logger } from '../core/logger.mjs';
 export const PRODUCT_JSON_PATH = path.resolve(ROOT_DIR, 'product.json');
 
 let cachedRawUpstreamModels = null;
+let cachedRawPromotions = [];
 let lastModelFetchTimestamp = 0;
 
 /**
- * 把上游返回的模型矩阵持久化到 product.json（保留原有其他字段）。
- * 上游只提供 models / agents / productFeatures，prompts/tools 等由官方文件自带；
+ * 把上游返回的模型矩阵和促销活动持久化到 product.json（保留原有其他字段）。
+ * 上游只提供 models / agents / productFeatures / modelPromotions，prompts/tools 等由官方文件自带；
  * 这里采用"合并"而非"覆盖"，避免丢失本地已有的非模型字段。
  */
-function persistModelsToProductJson(models) {
+function persistModelsToProductJson(models, promotions = []) {
   if (!Array.isArray(models) || models.length === 0) return false;
   try {
     let base = {};
@@ -25,20 +26,149 @@ function persistModelsToProductJson(models) {
     }
     const prevIds = new Set((base.models || []).map(m => m.id));
     base.models = models;
+    if (Array.isArray(promotions) && promotions.length > 0) {
+      base.modelPromotions = promotions;
+    }
     base.modelsSyncedAt = new Date().toISOString();
     fs.writeFileSync(PRODUCT_JSON_PATH, JSON.stringify(base, null, 2), 'utf8');
 
     const added = models.map(m => m.id).filter(id => !prevIds.has(id));
     if (added.length > 0) {
-      Logger.info('CONFIG', `product.json 已更新模型矩阵 (${models.length} 款，新增: ${added.join(', ')})`);
+      Logger.info('CONFIG', `product.json 已更新模型矩阵 (${models.length} 款，新增: ${added.join(', ')}，活动: ${(promotions || []).length} 项)`);
     } else {
-      Logger.info('CONFIG', `product.json 已同步模型矩阵 (${models.length} 款)`);
+      Logger.info('CONFIG', `product.json 已同步模型矩阵 (${models.length} 款，活动: ${(promotions || []).length} 项)`);
     }
     return true;
   } catch (e) {
     Logger.warn('CONFIG', `写入 product.json 失败: ${e.message}`);
     return false;
   }
+}
+
+/** 从 product.json 读取促销活动矩阵（优先根目录快照，缺失时回落至 package/ 官方内置快照） */
+function loadPromotionsFromProductJson() {
+  if (fs.existsSync(PRODUCT_JSON_PATH)) {
+    try {
+      const p = JSON.parse(fs.readFileSync(PRODUCT_JSON_PATH, 'utf8'));
+      if (Array.isArray(p.modelPromotions) && p.modelPromotions.length > 0) return p.modelPromotions;
+    } catch (_) {}
+  }
+  const builtinPath = path.resolve(ROOT_DIR, 'package', 'product.json');
+  if (fs.existsSync(builtinPath)) {
+    try {
+      const p = JSON.parse(fs.readFileSync(builtinPath, 'utf8'));
+      if (Array.isArray(p.modelPromotions) && p.modelPromotions.length > 0) return p.modelPromotions;
+    } catch (_) {}
+  }
+  return [];
+}
+
+/**
+ * 解析并关联单个模型的活动角标与促销详情
+ * 1. 优先对齐上游官方 /v3/config 下发的动态 modelPromotions 规则 (含 badge, hover, discount, schedule)
+ * 2. 官方常态折扣策略与免费模型兜底 (如 DeepSeek-V4.1-Flash、GLM-5.2 的非高峰5折夜间折扣，以及 0 积分免费模型)
+ */
+export function resolveModelPromotion(m, promotions = []) {
+  if (!m) return null;
+  const mId = String(m.id || '').toLowerCase().trim();
+  const mName = String(m.name || '').toLowerCase().trim();
+
+  // 1. 优先匹配上游动态下发的 promotions
+  if (Array.isArray(promotions) && promotions.length > 0) {
+    for (const p of promotions) {
+      if (!p || p.enabled === false) continue;
+      const modelIds = Array.isArray(p.modelIds) ? p.modelIds.map(x => String(x).toLowerCase().trim()) : [];
+      const match = modelIds.includes(mId)
+        || modelIds.includes(mName)
+        || (m.relatedModels && Object.values(m.relatedModels).some(rm => modelIds.includes(String(rm).toLowerCase().trim())));
+      if (match) {
+        return {
+          id: p.id,
+          kind: p.kind || 'discount',
+          badge: {
+            label: p.badge?.label || '限时优惠',
+            color: p.badge?.color || '#009273',
+            icon: p.badge?.icon || null,
+            display: p.badge?.display || 'activeOnly'
+          },
+          hover: {
+            textZh: p.hover?.textZh || '',
+            textEn: p.hover?.textEn || '',
+            action: p.hover?.action || null
+          },
+          discount: p.discount || null,
+          schedule: p.schedule || null,
+          source: 'upstream'
+        };
+      }
+    }
+  }
+
+  // 2. 官方上游常态/内置规则兜底
+  const creditsStr = String(m.credits || '').toLowerCase();
+  const isFree = creditsStr.includes('0.00') || creditsStr.includes('0x') || m.multiplier === 0;
+
+  if (isFree) {
+    return {
+      id: `free-${mId}`,
+      kind: 'free',
+      badge: {
+        label: '限时免费',
+        color: '#009273',
+        icon: null
+      },
+      hover: {
+        textZh: '当前模型处于官方限时免费阶段，调用消耗 0 积分。'
+      },
+      discount: {
+        factor: 0,
+        discountedCredits: '0x'
+      },
+      source: 'preset'
+    };
+  }
+
+  if (mId.includes('deepseek-v4.1-flash') || mId.includes('v4.1-flash') || mName.includes('deepseek-v4.1-flash')) {
+    return {
+      id: 'ds-v4.1-flash-night-discount',
+      kind: 'discount',
+      badge: {
+        label: '夜间折扣',
+        color: '#009273',
+        icon: null
+      },
+      hover: {
+        textZh: '周一至周五 09:00-12:00、14:00-18:00 属高峰原价，非高峰期积分5折 去使用'
+      },
+      discount: {
+        factor: 0.5,
+        discountedCredits: '0.055x'
+      },
+      source: 'preset'
+    };
+  }
+
+  if (mId.includes('glm-5.2') || mName.includes('glm-5.2')) {
+    return {
+      id: 'glm-5.2-night-discount',
+      kind: 'discount',
+      badge: {
+        label: '夜间折扣',
+        color: '#009273',
+        icon: null
+      },
+      hover: {
+        textZh: '周一至周五 09:00-12:00、14:00-18:00 属高峰原价，非高峰期积分5折'
+      },
+      discount: {
+        factor: 0.5,
+        discountedCredits: '0.395x'
+      },
+      source: 'preset'
+    };
+  }
+
+  return null;
 }
 
 /** 从 product.json 读取模型矩阵（优先根目录快照，缺失时回落至 package/ 官方内置快照） */
@@ -63,7 +193,7 @@ function loadModelsFromProductJson() {
 export async function fetchDetailedModels(forceRefresh = false) {
   const now = Date.now();
   if (!forceRefresh && cachedRawUpstreamModels && (now - lastModelFetchTimestamp < 5 * 60 * 1000)) {
-    return attachProbeStatus(cachedRawUpstreamModels);
+    return attachProbeStatus(cachedRawUpstreamModels, cachedRawPromotions.length > 0 ? cachedRawPromotions : loadPromotionsFromProductJson());
   }
 
   // 1) 在线优先：按账号所属区域分别拉取，合并去重
@@ -71,6 +201,7 @@ export async function fetchDetailedModels(forceRefresh = false) {
   //    两个区域都拉到才能让客户端看到完整可用列表。
   //    优化：同区域由首个可用账号成功拉取后即标记完成，无需对同区全池重复请求
   const merged = new Map();
+  const mergedPromotions = new Map();
   const regionStat = {};
   const fetchedRegions = new Set();
 
@@ -91,6 +222,11 @@ export async function fetchDetailedModels(forceRefresh = false) {
       if (res.ok) {
         const data = await res.json();
         const models = data.data?.models || [];
+        const promos = Array.isArray(data.data?.modelPromotions) ? data.data.modelPromotions : [];
+        for (const p of promos) {
+          if (p && p.id) mergedPromotions.set(p.id, p);
+        }
+
         if (models.length > 0) {
           fetchedRegions.add(region);
           regionStat[region] = models.length;
@@ -134,35 +270,41 @@ export async function fetchDetailedModels(forceRefresh = false) {
 
   if (merged.size > 0) {
     const models = [...merged.values()];
+    const activePromotions = mergedPromotions.size > 0 ? [...mergedPromotions.values()] : loadPromotionsFromProductJson();
     cachedRawUpstreamModels = models;
+    cachedRawPromotions = activePromotions;
     lastModelFetchTimestamp = now;
     const cnCount = models.filter(m => m.regions && m.regions.includes(REGION_CN)).length;
     const intlCount = models.filter(m => m.regions && m.regions.includes(REGION_INTL)).length;
     const bothCount = models.filter(m => m.regions && m.regions.includes(REGION_CN) && m.regions.includes(REGION_INTL)).length;
     const cnAccCount = accounts.filter(a => a.status === 'healthy' && resolveAccountRegion(a) === REGION_CN).length;
     const intlAccCount = accounts.filter(a => a.status === 'healthy' && resolveAccountRegion(a) === REGION_INTL).length;
-    Logger.info('CONFIG', `成功从上游拉取模型矩阵 (全局去重共 ${models.length} 款；国内版: ${cnCount} 款 [${cnAccCount} 账号]，国际版: ${intlCount} 款 [${intlAccCount} 账号]，两区通用: ${bothCount} 款)`);
-    persistModelsToProductJson(models);
-    return attachProbeStatus(models);
+    Logger.info('CONFIG', `成功从上游拉取模型矩阵 (全局去重共 ${models.length} 款；国内版: ${cnCount} 款 [${cnAccCount} 账号]，国际版: ${intlCount} 款 [${intlAccCount} 账号]，两区通用: ${bothCount} 款，活动: ${activePromotions.length} 项)`);
+    persistModelsToProductJson(models, activePromotions);
+    return attachProbeStatus(models, activePromotions);
   }
 
   // 3) 离线兜底：只读 product.json 或内置快照
   const fallbackModels = existingSnapshot.map(m => (
     Array.isArray(m?.regions) && m.regions.length ? m : { ...m, regions: [REGION_CN] }
   ));
+  const fallbackPromotions = loadPromotionsFromProductJson();
   if (fallbackModels.length > 0) {
     cachedRawUpstreamModels = fallbackModels;
-    Logger.info('CONFIG', `上游不可达，已从 product.json 加载离线模型矩阵 (共 ${fallbackModels.length} 款)`);
-    return attachProbeStatus(fallbackModels);
+    cachedRawPromotions = fallbackPromotions;
+    Logger.info('CONFIG', `上游不可达，已从 product.json 加载离线模型矩阵 (共 ${fallbackModels.length} 款，活动: ${fallbackPromotions.length} 项)`);
+    return attachProbeStatus(fallbackModels, fallbackPromotions);
   }
 
   Logger.warn('CONFIG', '上游不可达且 product.json 无模型数据，模型列表为空');
-  return attachProbeStatus([]);
+  return attachProbeStatus([], []);
 }
 
-export function attachProbeStatus(models) {
+export function attachProbeStatus(models, promotions = []) {
+  const activePromotions = Array.isArray(promotions) && promotions.length > 0 ? promotions : (cachedRawPromotions || []);
   const now = Date.now();
   return models.map(m => {
+    const promotion = resolveModelPromotion(m, activePromotions);
     let coolingCount = 0;
     const coolingAccounts = [];
 
@@ -239,6 +381,7 @@ export function attachProbeStatus(models) {
 
     return {
       ...m,
+      promotion,
       probeStatus,
       probeLabel,
       totalAccounts,
