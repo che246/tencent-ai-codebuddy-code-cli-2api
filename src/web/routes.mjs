@@ -1180,7 +1180,11 @@ export async function handleApiRoutes(req, res, url) {
         } else if (Array.isArray(payload.accounts)) {
           list = payload.accounts;
         } else if (payload.account && typeof payload.account === 'object') {
-          list = [payload.account];
+          if (payload.auth && typeof payload.auth === 'object') {
+            list = [{ ...payload.account, ...payload.auth }];
+          } else {
+            list = [payload.account];
+          }
         } else if (payload.accessToken || payload.refreshToken || payload.uid) {
           list = [payload];
         }

@@ -8,6 +8,17 @@
 
 ---
 
+## [2.179.0-gw.23] - 2026-11-18
+
+### 账号导入复合结构增强与 WorkBuddy 国内版自动识别 (Account Import Enhancement & WorkBuddy CN Recognition)
+- **账号导入结构兼容性扩展 (`src/web/routes.mjs`)**：
+  - **背景与逆向依据**：官方客户端及部分外部工具在导出或复制账号认证信息时，采用 `{ account: {...}, auth: {...} }` 分离结构（`account` 承载昵称与 uid，`auth` 承载 accessToken/refreshToken/domain/realm 等）；
+  - **自动合并与属性透传**：在 `/api/accounts/import` 接口中，支持自动识别并解构合并 `account` 与 `auth` 对象，无缝对接标准规范化流程。
+- **WorkBuddy 国内版属性与备注精准推断 (`src/config.mjs`)**：
+  - 修复 WorkBuddy 在国内域（`domain: www.workbuddy.cn` / `realm: cn`）下备注被单一判定为国际版的偏差，依据账号区域精准映射为 `WorkBuddy 国内版`，保持与腾讯云国内计费节点及端点完全对齐。
+
+---
+
 ## [2.179.0-gw.22] - 2026-11-17
 
 ### 闲置感知按需积分刷新策略与官方模型卡片文案/档位语义精准对齐 (Idle-Aware Credit Refresh & Upstream Model Semantics)

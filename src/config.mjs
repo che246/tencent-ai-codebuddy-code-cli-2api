@@ -166,7 +166,9 @@ export function normalizeAccount(raw) {
   // 5. 备注 note 自动推断
   if (!acc.note) {
     const isWb = acc.product === 'workbuddy' || (acc.domain && acc.domain.includes('workbuddy'));
-    acc.note = isWb ? 'WorkBuddy 国际版' : (acc.region === REGION_INTL ? 'CodeBuddy 国际版' : '国内版');
+    acc.note = isWb
+      ? (acc.region === REGION_INTL ? 'WorkBuddy 国际版' : 'WorkBuddy 国内版')
+      : (acc.region === REGION_INTL ? 'CodeBuddy 国际版' : '国内版');
   }
 
   return acc;
