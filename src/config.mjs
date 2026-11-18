@@ -398,6 +398,10 @@ if (config.stickySessionTtlMs === undefined) {
 if (config.stickySessionMaxLifetimeMs === undefined) {
   config.stickySessionMaxLifetimeMs = 1800000; // 18e5 ms = 30 分钟
 }
+// 账号池负载均衡轮换区域范围（all: 全部轮换, cn: 仅国内版, intl: 仅国外/国际版）
+if (!config.routingRegionScope) {
+  config.routingRegionScope = 'all';
+}
 
 /**
  * 常量时间安全比对两个 Token 字符串，防御 Timing Side-Channel 攻击

@@ -8,6 +8,23 @@
 
 ---
 
+## [2.179.0-gw.25] - 2026-11-18
+
+### 账号池负载均衡轮换区域范围策略支持 (Routing Region Scope: Domestic / International / All)
+- **网关账号调度引擎区域范围感知与轮换策略 (`src/core/scheduler.mjs` & `src/config.mjs`)**：
+  - **背景与需求**：满足用户灵活指定全局轮换策略所作用的账号池范围（全部账号、仅国内版、或仅国外版）；
+  - **核心选号调度分流机制 (`AccountScheduler.selectAccount`)**：
+    - 支持配置全局轮换范围 `config.routingRegionScope`（`all` 全部轮换 / `cn` 仅国内版 / `intl` 仅国外版）；
+    - **最高优先级保证**：若请求模型显式指定了区域前缀（如 `cn:deepseek-v4.1-flash` 或 `intl:claude-3-5-sonnet`）或降级链强制约束，严格以模型前缀区域为准；
+    - **普通/通用模型智能匹配**：对于无前缀通用模型调用，严格按照设定的区域范围锁定参与轮换的候选账号池（如设为 `cn` 则只在 4 个国内账号间轮换，设为 `intl` 则只在 8 个国际账号间轮换）；
+  - **调度状态联动 (`getCurrentActiveAccountInfo`)**：
+    - 活跃账号快照与概览卡片智能呈现当前轮换范围标签（如 `国内·最多积分`、`国外·最小并发` 等）。
+- **Web 控制台运行策略设置面板交互升级 (`src/web/public/index.html` & `src/web/public/scripts/settings.js`)**：
+  - 在「账号池负载均衡轮换策略」配置项中新增「轮换区域范围」下拉选择器（`🌍 全部轮换 (国内 + 国外)`、`🇨🇳 仅国内版轮换`、`🌐 仅国外/国际版轮换`）；
+  - 配套实时状态角标 `badgeRoutingScope`（全部轮换 / 仅国内版 / 仅国外版），修改后即刻热生效并持久化至 `config.json`。
+
+---
+
 ## [2.179.0-gw.24] - 2026-11-18
 
 ### 账号池运维状态与配额监控全景区域筛选 (Account Pool Regional Filtering & Search)

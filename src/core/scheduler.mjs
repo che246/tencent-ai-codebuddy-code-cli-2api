@@ -216,9 +216,15 @@ export class AccountScheduler {
     const maxLimit = config.concurrencyLimitEnabled !== false ? (config.maxInFlightPerAccount || 3) : 9999;
     const excludeUids = Array.isArray(options.excludeUids) ? options.excludeUids : [];
     const strategy = options.strategy || config.routingStrategy || 'least-inflight';
-    // 区域限制：模型名带 cn:/intl: 前缀时，只允许调度该区域的账号
+    // 区域限制逻辑：
+    // 1. 若调用显式传入 region（模型名带 cn:/intl: 前缀或降级步骤锁定），最高优先级严格满足
+    // 2. 否则按全局轮换策略 routingRegionScope 决定参与轮换的区域池（cn: 仅国内版, intl: 仅国外版, all: 全量轮换）
     const forcedRegion = options.region ? normalizeRegion(options.region) : null;
-    const regionAllowed = (a) => !forcedRegion || resolveAccountRegion(a) === forcedRegion;
+    const globalScope = (config.routingRegionScope && config.routingRegionScope !== 'all')
+      ? normalizeRegion(config.routingRegionScope)
+      : null;
+    const effectiveRegion = forcedRegion || globalScope;
+    const regionAllowed = (a) => !effectiveRegion || resolveAccountRegion(a) === effectiveRegion;
 
     // 1. 优先检查：网关侧全局指定账号 (config.pinnedAccount)
     if (config.pinnedAccount) {
@@ -233,7 +239,7 @@ export class AccountScheduler {
       if (matched) {
         let restrictedReason = null;
         if (!regionAllowed(matched)) {
-          restrictedReason = `区域不符 (需要 ${forcedRegion})`;
+          restrictedReason = `区域不符 (需要 ${effectiveRegion})`;
         } else if (excludeUids.includes(matched.uid)) {
           restrictedReason = '本轮重试已尝试过';
         } else if (matched.status !== 'healthy') {
@@ -405,18 +411,23 @@ export class AccountScheduler {
       }
     }
 
+    const globalScope = (config.routingRegionScope && config.routingRegionScope !== 'all')
+      ? normalizeRegion(config.routingRegionScope)
+      : null;
+    const scopeDesc = globalScope === 'cn' ? '国内版' : (globalScope === 'intl' ? '国外/国际版' : '全量池');
+
     if (!activeAcc && this.lastDispatchedUid) {
-      activeAcc = accounts.find(a => a.uid === this.lastDispatchedUid && a.status === 'healthy');
+      activeAcc = accounts.find(a => a.uid === this.lastDispatchedUid && a.status === 'healthy' && (!globalScope || resolveAccountRegion(a) === globalScope));
       if (activeAcc && !modeLabel.includes('指定账号受限')) {
-        modeLabel = '账号池调度 (最近执行)';
+        modeLabel = `账号池轮换 [${scopeDesc}] (最近执行)`;
       }
     }
 
     if (!activeAcc && accounts.length > 0) {
-      const candidates = accounts.filter(a => a.status === 'healthy' && now > (a.cooldownUntil || 0));
-      activeAcc = candidates[0] || accounts[0];
+      const candidates = accounts.filter(a => a.status === 'healthy' && now > (a.cooldownUntil || 0) && (!globalScope || resolveAccountRegion(a) === globalScope));
+      activeAcc = candidates[0] || accounts.find(a => !globalScope || resolveAccountRegion(a) === globalScope) || accounts[0];
       if (!modeLabel.includes('指定账号受限')) {
-        modeLabel = '账号池调度 (当前就绪)';
+        modeLabel = `账号池轮换 [${scopeDesc}] (当前就绪)`;
       }
     }
 
@@ -457,7 +468,8 @@ export class AccountScheduler {
       inFlight: activeAcc.inFlight || 0,
       status: activeAcc.status || 'healthy',
       isCooldown: now < (activeAcc.cooldownUntil || 0),
-      strategy: config.routingStrategy || 'least-inflight'
+      strategy: config.routingStrategy || 'least-inflight',
+      routingRegionScope: config.routingRegionScope || 'all'
     };
   }
 

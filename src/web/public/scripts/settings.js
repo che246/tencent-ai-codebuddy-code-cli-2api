@@ -30,6 +30,23 @@
         if (document.getElementById('selStrategy') && s.routingStrategy) {
           document.getElementById('selStrategy').value = s.routingStrategy;
         }
+        if (document.getElementById('selRoutingRegionScope')) {
+          const sc = s.routingRegionScope || 'all';
+          document.getElementById('selRoutingRegionScope').value = sc;
+          const bScope = document.getElementById('badgeRoutingScope');
+          if (bScope) {
+            if (sc === 'cn') {
+              bScope.className = 'badge badge-blue';
+              bScope.innerText = '仅国内版';
+            } else if (sc === 'intl') {
+              bScope.className = 'badge badge-purple';
+              bScope.innerText = '仅国外版';
+            } else {
+              bScope.className = 'badge badge-ok';
+              bScope.innerText = '全部轮换';
+            }
+          }
+        }
 
         if (document.getElementById('badgePinnedAccount')) {
           const hasPin = Boolean(s.pinnedAccount);
@@ -477,6 +494,7 @@
       const isWebAuth = document.getElementById('chkWebAuth') ? document.getElementById('chkWebAuth').checked : true;
       const isSticky = document.getElementById('chkStickySession') ? document.getElementById('chkStickySession').checked : true;
       const strat = document.getElementById('selStrategy').value;
+      const routingRegionScope = document.getElementById('selRoutingRegionScope') ? document.getElementById('selRoutingRegionScope').value : 'all';
       const maxInFlight = document.getElementById('inputMaxInFlight') ? parseInt(document.getElementById('inputMaxInFlight').value, 10) : 3;
 
       if (document.getElementById('concurrencyConfigRow')) {
@@ -499,7 +517,8 @@
           modelFallbackEnabled: isFall,
           webAuthEnabled: isWebAuth,
           stickySessionEnabled: isSticky,
-          routingStrategy: strat
+          routingStrategy: strat,
+          routingRegionScope
         })
       });
 

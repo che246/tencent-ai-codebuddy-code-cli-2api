@@ -626,20 +626,34 @@
               </div>
 
               <!-- 4. 账号池轮询调度策略 -->
-              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;">
-                <div>
+              <div style="background:var(--code-bg); padding:16px; border-radius:8px; border:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <div style="max-width:480px;">
                   <div style="font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px;">
                     <span>账号池负载均衡轮换策略</span>
+                    <span id="badgeRoutingScope" class="badge badge-ok">全部轮换</span>
                   </div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
-                    选择多账号协同调度时的选号算法，实时负载均衡。
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:4px; line-height:1.5;">
+                    指定参与轮换的账号区域池（国内 / 国外 / 全部）及多账号协同调度选号算法。模型名若自带 <code>cn:</code> 或 <code>intl:</code> 前缀仍优先精准锁定对应区域。
                   </div>
                 </div>
-                <select id="selStrategy" onchange="togglePolicy()" style="background:var(--surface); color:var(--text-main); border:1px solid var(--card-border); padding:6px 10px; border-radius:6px; font-size:12px; outline:none; margin-left:15px;">
-                  <option value="least-inflight">最小在途并发优先</option>
-                  <option value="round-robin">严格顺序轮流 (Round-Robin)</option>
-                  <option value="credits">最多剩余积分优先</option>
-                </select>
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:var(--text-muted);">轮换区域范围:</span>
+                    <select id="selRoutingRegionScope" onchange="togglePolicy()" style="background:var(--surface); color:var(--text-main); border:1px solid var(--card-border); padding:6px 10px; border-radius:6px; font-size:12px; outline:none; min-width:160px;">
+                      <option value="all">🌍 全部轮换 (国内 + 国外)</option>
+                      <option value="cn">🇨🇳 仅国内版轮换</option>
+                      <option value="intl">🌐 仅国外/国际版轮换</option>
+                    </select>
+                  </div>
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:var(--text-muted);">调度算法:</span>
+                    <select id="selStrategy" onchange="togglePolicy()" style="background:var(--surface); color:var(--text-main); border:1px solid var(--card-border); padding:6px 10px; border-radius:6px; font-size:12px; outline:none; min-width:160px;">
+                      <option value="least-inflight">最小在途并发优先</option>
+                      <option value="round-robin">严格顺序轮流 (Round-Robin)</option>
+                      <option value="credits">最多剩余积分优先</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
               <!-- 5. 网关全局指定账号 -->

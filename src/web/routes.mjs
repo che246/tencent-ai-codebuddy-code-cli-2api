@@ -190,6 +190,7 @@ export async function handleApiRoutes(req, res, url) {
       concurrencyLimitEnabled: config.concurrencyLimitEnabled !== false,
       maxInFlightPerAccount: config.maxInFlightPerAccount || 3,
       routingStrategy: config.routingStrategy || 'least-inflight',
+      routingRegionScope: config.routingRegionScope || 'all',
       accountFailoverEnabled: config.accountFailoverEnabled !== false,
       pinnedAccount: config.pinnedAccount || '',
       stickySessionEnabled: config.stickySessionEnabled !== false,
@@ -287,6 +288,10 @@ export async function handleApiRoutes(req, res, url) {
         }
         if (typeof body.routingStrategy === 'string') {
           config.routingStrategy = body.routingStrategy;
+        }
+        if (typeof body.routingRegionScope === 'string') {
+          const sc = body.routingRegionScope.trim().toLowerCase();
+          config.routingRegionScope = (sc === 'cn' || sc === 'intl') ? sc : 'all';
         }
         if (typeof body.pinnedAccount === 'string') {
           config.pinnedAccount = body.pinnedAccount.trim();

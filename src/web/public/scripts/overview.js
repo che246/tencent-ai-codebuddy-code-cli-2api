@@ -56,7 +56,13 @@
           if (credEl) credEl.innerText = Number(ca.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
           if (infEl) infEl.innerText = `${ca.inFlight || 0} 并发`;
           if (stratEl) {
-            stratEl.innerText = (ca.isPinned && !ca.pinnedRestricted) ? '优先指定' : (ca.strategy === 'round-robin' ? '严格轮询' : ca.strategy === 'credits' ? '最多积分' : '最小并发削峰');
+            if (ca.isPinned && !ca.pinnedRestricted) {
+              stratEl.innerText = '优先指定';
+            } else {
+              const scopeZh = ca.routingRegionScope === 'cn' ? '国内·' : (ca.routingRegionScope === 'intl' ? '国外·' : '');
+              const stratZh = ca.strategy === 'round-robin' ? '严格轮询' : ca.strategy === 'credits' ? '最多积分' : '最小并发削峰';
+              stratEl.innerText = `${scopeZh}${stratZh}`;
+            }
           }
         } else {
           if (nameEl) nameEl.innerText = '暂无可用账号';
