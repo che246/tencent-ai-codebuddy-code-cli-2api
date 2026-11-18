@@ -313,6 +313,27 @@
                 <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadAccounts()">🔄 刷新状态</button>
               </div>
             </div>
+
+            <!-- 账号池区域筛选与搜索栏 -->
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.06);">
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <span style="font-size:12px; color:var(--text-muted); font-weight:600;">区域筛选:</span>
+                <div class="filter-bar" style="margin-bottom:0; display:inline-flex; gap:6px;">
+                  <button type="button" class="filter-btn active" id="accFilterBtnAll" onclick="setAccountRegionFilter('all')">
+                    全部显示 <span id="accCountAll" style="opacity:0.85; font-size:11px;">(0)</span>
+                  </button>
+                  <button type="button" class="filter-btn" id="accFilterBtnCn" onclick="setAccountRegionFilter('cn')">
+                    🇨🇳 国内版 <span id="accCountCn" style="opacity:0.85; font-size:11px;">(0)</span>
+                  </button>
+                  <button type="button" class="filter-btn" id="accFilterBtnIntl" onclick="setAccountRegionFilter('intl')">
+                    🌐 国际版 (国外) <span id="accCountIntl" style="opacity:0.85; font-size:11px;">(0)</span>
+                  </button>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="text" id="accSearchInput" class="search-input" placeholder="搜索 UID / 昵称 / 备注..." style="padding:4px 10px; font-size:12px; width:200px;" oninput="renderAccountList()">
+              </div>
+            </div>
             <div style="overflow-x:auto; width:100%; border-radius:6px;">
               <table style="min-width:1150px;">
                 <thead>

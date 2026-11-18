@@ -1,4 +1,30 @@
 // ─── 账号池状态管理与刷新 ─────────────────────────────────────────────────
+    let allAccountsData = [];
+    let currentAccountRegionFilter = 'all'; // 'all' | 'cn' | 'intl'
+
+    function setAccountRegionFilter(filter) {
+      currentAccountRegionFilter = filter;
+      ['all', 'cn', 'intl'].forEach(f => {
+        const btn = document.getElementById('accFilterBtn' + f.charAt(0).toUpperCase() + f.slice(1));
+        if (btn) {
+          if (f === filter) btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+      });
+      renderAccountList();
+    }
+
+    function updateAccountFilterCounts() {
+      const cnCount = allAccountsData.filter(a => a.region === 'cn').length;
+      const intlCount = allAccountsData.filter(a => a.region === 'intl').length;
+      const elAll = document.getElementById('accCountAll');
+      const elCn = document.getElementById('accCountCn');
+      const elIntl = document.getElementById('accCountIntl');
+      if (elAll) elAll.innerText = `(${allAccountsData.length})`;
+      if (elCn) elCn.innerText = `(${cnCount})`;
+      if (elIntl) elIntl.innerText = `(${intlCount})`;
+    }
+
     async function forceRefreshCredits() {
       const btn = event?.target;
       const oldText = btn?.innerText;
@@ -126,139 +152,9 @@
           }
         }
 
-        const tbody = document.getElementById('accBody');
-        if (!tbody) return;
-        if (!Array.isArray(data) || data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px;">暂无可用账号，请点击右上角「➕ 扫码添加账号」</td></tr>';
-          return;
-        }
-
-        const maxLimit = (currentSettings && currentSettings.concurrencyLimitEnabled !== false)
-          ? (currentSettings.maxInFlightPerAccount || 3)
-          : '无限制';
-
-        tbody.innerHTML = data.map(a => {
-          // 国内版走每日签到接口，国际版通过随机轻量对话激活当日活跃奖励(+30 积分)
-          const isIntlAcc = a.region === 'intl';
-          const isDone = Boolean(a.isCheckedInToday);
-          const checkinTitle = isIntlAcc
-            ? (isDone ? (a.lastCheckinMsg || '今日活跃对话打卡已完成') : '国际版：随机与上游轻量对话一次激活当日活跃奖励(+30 积分)')
-            : (a.lastCheckinMsg || (isDone ? '今天已签到' : '今日未签到'));
-          const checkinText = isIntlAcc
-            ? (isDone ? '✅ 已打卡' : '⏳ 未打卡')
-            : (isDone ? '✅ 已签到' : '⏳ 未签到');
-          const checkinBtnText = isIntlAcc ? '对话打卡' : '打卡';
-          const checkinBadge = isDone
-            ? `<span class="badge badge-ok" title="${escapeAttr(checkinTitle)}">${checkinText}</span>`
-            : `<span class="badge badge-cool" title="${escapeAttr(checkinTitle)}">${checkinText}</span> <button class="btn-primary" style="padding:2px 8px; font-size:11px; margin-left:6px;" onclick="runCheckinSingle('${a.uid}')">${checkinBtnText}</button>`;
-
-          const noteHtml = a.note 
-            ? `<span class="acc-note-tag" onclick="editAccountNote('${a.uid}', '${escapeAttr(a.note)}')" title="点击修改备注">📝 ${escapeHtml(a.note)}</span>` 
-            : `<span class="acc-note-empty" onclick="editAccountNote('${a.uid}', '')" title="点击添加备注">➕ 添加备注</span>`;
-
-          // 区域标识：国内版 / 国际版。点击可在两版之间切换（token 不通用，切换后需重新授权）
-          const accRegion = a.region === 'intl' ? 'intl' : 'cn';
-          const regionBadge = accRegion === 'intl'
-            ? `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(168,85,247,0.18); color:#c084fc; border:1px solid rgba(168,85,247,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','cn')" title="当前为国际版 (www.codebuddy.ai)。点击切换为国内版">🌐 国际版</span>`
-            : `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(2,132,199,0.18); color:#38bdf8; border:1px solid rgba(2,132,199,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','intl')" title="当前为国内版 (www.codebuddy.cn)。点击切换为国际版">🇨🇳 国内版</span>`;
-
-          const isPinned = currentSettings && currentSettings.pinnedAccount === a.uid;
-          const pinBtn = isPinned
-            ? `<button class="btn-copy" style="background:#7e22ce; color:#fff; border-color:#a855f7; padding:3px 7px; font-size:11px;" onclick="pinAccount('')" title="当前全局锁定指定！点击取消并恢复自动轮换">⭐ 已指定</button>`
-            : `<button class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick="pinAccount('${a.uid}')" title="设置该账号为网关全局优先指定账号">⭐ 设为指定</button>`;
-
-          const tokenTip = `输入: ${(a.inputTokens || 0).toLocaleString()} tokens&#10;输出: ${(a.outputTokens || 0).toLocaleString()} tokens&#10;总计: ${(a.totalTokens || 0).toLocaleString()} tokens`;
-
-          let tokenExpiryHtml = '';
-          const daysColor = (a.daysRemaining !== null && a.daysRemaining <= (a.advanceDays || 7)) ? '#fb923c' : '#4ade80';
-          const daysLabel = a.daysRemaining !== null ? `剩 ${a.daysRemaining} 天` : '长效有效';
-
-          if (a.hasRefreshToken) {
-            const refreshBtn = a.isRefreshEligible
-              ? `<button class="btn-primary" style="padding:1px 6px; font-size:10px; margin-top:3px;" onclick="refreshTokenSingle('${a.uid}')" title="满足提前换发条件，点击立即换发新令牌">⚡ 提前续签</button>`
-              : `<button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px; opacity:0.75;" onclick="refreshTokenSingle('${a.uid}')" title="点击立即强制与官方换发新令牌">换发</button>`;
-
-            tokenExpiryHtml = `
-              <div style="font-size:12px;">
-                <span class="badge badge-ok" style="font-size:9px; padding:1px 4px;">自动续期</span>
-                <b style="color:${daysColor}; font-family:monospace; margin-left:2px;">${daysLabel}</b>
-                <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
-                ${refreshBtn}
-              </div>
-            `;
-          } else {
-            tokenExpiryHtml = `
-              <div style="font-size:12px;">
-                <span class="badge badge-cool" style="font-size:9px; padding:1px 4px;" title="手动录入或未记录 refreshToken，到期前需重新扫码">无刷新令牌</span>
-                <b style="color:${daysColor}; font-family:monospace; margin-left:2px;">${daysLabel}</b>
-                <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
-                <button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px;" onclick="startOAuth()" title="重新扫码授权即可获取长效 refreshToken 实现永久自动续签">扫码补齐</button>
-              </div>
-            `;
-          }
-
-          let lockPoolHtml = '';
-          if (a.lockedCount > 0) {
-            const listItems = (a.lockedModels || []).map(lm => `
-              <div style="font-size:12px; margin:4px 0; color:#fff; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                <span>• <b>${escapeHtml(lm.modelId)}</b></span>
-                <span style="color:#facc15; font-size:11px; font-weight:bold; white-space:nowrap;">剩 ${lm.remainingSec}s</span>
-              </div>
-              <div style="font-size:10px; color:var(--text-muted); margin-bottom:4px; padding-left:8px;">原因: ${escapeHtml(lm.reason)}</div>
-            `).join('');
-
-            lockPoolHtml = `
-              <div class="probe-tip-wrap">
-                <span class="badge badge-err" style="cursor:help;">🔒 已锁 ${a.lockedCount} 款模型</span>
-                <div class="probe-tip-popover" style="border-color:rgba(239, 68, 68, 0.6); min-width:240px;">
-                  <div style="font-weight:bold; color:#f87171; font-size:12px; margin-bottom:4px;">🔒 当前账号模型锁池清单:</div>
-                  ${listItems}
-                  <button class="btn-outline" style="font-size:10px; padding:3px 8px; margin-top:6px; width:100%; text-align:center; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')">🔓 一键解除锁池</button>
-                </div>
-              </div>
-            `;
-          } else if (a.isCooldown) {
-            lockPoolHtml = `<span class="badge badge-cool" title="账号处于全局冷却退避中">⏱️ 全局锁 (剩 ${a.cooldownRemainingSec || 0}s)</span>`;
-          } else {
-            lockPoolHtml = `<span class="badge badge-ok">🟢 全部模型可用</span>`;
-          }
-
-          const unlockBtn = (a.lockedCount > 0 || a.isCooldown)
-            ? `<button class="btn-outline" style="padding:3px 7px; font-size:11px; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')" title="立即解除锁池与冷却状态">🔓 解锁</button>`
-            : '';
-
-          return `
-            <tr>
-              <td><code>${a.uid}</code></td>
-              <td><b>${a.email || a.uid}</b></td>
-              <td>${noteHtml}<div style="margin-top:4px;">${regionBadge}</div></td>
-              <td>${tokenExpiryHtml}</td>
-              <td>
-                <b style="color:#4ade80; font-size:14px; cursor:pointer;" onclick="showCreditDetails('${a.uid}')" title="点击查看官方 plans-usage 积分构成明细">${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b>
-                <button class="btn-copy" style="margin-left:6px; font-size:10px; padding:1px 5px;" onclick="showCreditDetails('${a.uid}')" title="查看官方 plans-usage 积分构成明细">明细</button>
-                <span style="display:block; font-size:10px; color:var(--text-muted); margin-top:2px;" title="该账号积分最后一次从上游成功刷新的时间">${fmtAgo(a.creditsUpdatedAt)}</span>
-              </td>
-              <td>
-                <b style="color:var(--accent); font-family:monospace; font-size:13px; cursor:help;" title="${tokenTip}">${a.totalTokensDisplay || '0'}</b>
-                <span style="font-size:11px; color:var(--text-muted); display:block;">${(a.requests || 0)} 次请求</span>
-              </td>
-              <td>${checkinBadge}</td>
-              <td><span class="badge ${a.inFlight > 0 ? 'badge-blue' : ''}">${a.inFlight || 0} / ${maxLimit}</span></td>
-              <td>
-                ${a.status === 'unauthorized' ? '<span class="badge badge-err">Token失效</span>' : 
-                  a.isCooldown ? '<span class="badge badge-cool">冷却退避</span>' : 
-                  '<span class="badge badge-ok">健康活跃</span>'}
-              </td>
-              <td>${lockPoolHtml}</td>
-              <td style="white-space:nowrap;">
-                ${pinBtn}
-                ${unlockBtn}
-                <button class="btn-outline" style="padding:3px 8px; font-size:11px;" onclick="runCheckinSingle('${a.uid}')" title="同步积分">🔄 刷新</button>
-                <button class="btn-danger" onclick="deleteAccount('${a.uid}')">删除</button>
-              </td>
-            </tr>
-          `;
-        }).join('');
+        allAccountsData = Array.isArray(data) ? data : [];
+        updateAccountFilterCounts();
+        renderAccountList();
 
         // 同步更新设置页中的指定账号下拉列表
         const selPinned = document.getElementById('selPinnedAccount');
@@ -307,6 +203,164 @@
       } catch (err) {
         console.error('loadAccounts render error:', err);
       }
+    }
+
+    function renderAccountList() {
+      const tbody = document.getElementById('accBody');
+      if (!tbody) return;
+      if (!Array.isArray(allAccountsData) || allAccountsData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:30px;">暂无可用账号，请点击右上角「➕ 扫码添加账号」</td></tr>';
+        return;
+      }
+
+      const q = (document.getElementById('accSearchInput')?.value || '').trim().toLowerCase();
+      const filtered = allAccountsData.filter(a => {
+        if (currentAccountRegionFilter === 'cn' && a.region !== 'cn') return false;
+        if (currentAccountRegionFilter === 'intl' && a.region !== 'intl') return false;
+        if (q) {
+          const uid = (a.uid || '').toLowerCase();
+          const email = (a.email || '').toLowerCase();
+          const nickname = (a.nickname || '').toLowerCase();
+          const note = (a.note || '').toLowerCase();
+          if (!uid.includes(q) && !email.includes(q) && !nickname.includes(q) && !note.includes(q)) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        const filterName = currentAccountRegionFilter === 'cn' ? '国内版' : (currentAccountRegionFilter === 'intl' ? '国际版 (国外)' : '');
+        tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配${filterName ? '【' + filterName + '】' : ''}的账号</td></tr>`;
+        return;
+      }
+
+      const maxLimit = (currentSettings && currentSettings.concurrencyLimitEnabled !== false)
+        ? (currentSettings.maxInFlightPerAccount || 3)
+        : '无限制';
+
+      tbody.innerHTML = filtered.map(a => {
+        // 国内版走每日签到接口，国际版通过随机轻量对话激活当日活跃奖励(+30 积分)
+        const isIntlAcc = a.region === 'intl';
+        const isDone = Boolean(a.isCheckedInToday);
+        const checkinTitle = isIntlAcc
+          ? (isDone ? (a.lastCheckinMsg || '今日活跃对话打卡已完成') : '国际版：随机与上游轻量对话一次激活当日活跃奖励(+30 积分)')
+          : (a.lastCheckinMsg || (isDone ? '今天已签到' : '今日未签到'));
+        const checkinText = isIntlAcc
+          ? (isDone ? '✅ 已打卡' : '⏳ 未打卡')
+          : (isDone ? '✅ 已签到' : '⏳ 未签到');
+        const checkinBtnText = isIntlAcc ? '对话打卡' : '打卡';
+        const checkinBadge = isDone
+          ? `<span class="badge badge-ok" title="${escapeAttr(checkinTitle)}">${checkinText}</span>`
+          : `<span class="badge badge-cool" title="${escapeAttr(checkinTitle)}">${checkinText}</span> <button class="btn-primary" style="padding:2px 8px; font-size:11px; margin-left:6px;" onclick="runCheckinSingle('${a.uid}')">${checkinBtnText}</button>`;
+
+        const noteHtml = a.note 
+          ? `<span class="acc-note-tag" onclick="editAccountNote('${a.uid}', '${escapeAttr(a.note)}')" title="点击修改备注">📝 ${escapeHtml(a.note)}</span>` 
+          : `<span class="acc-note-empty" onclick="editAccountNote('${a.uid}', '')" title="点击添加备注">➕ 添加备注</span>`;
+
+        // 区域标识：国内版 / 国际版。点击可在两版之间切换（token 不通用，切换后需重新授权）
+        const accRegion = a.region === 'intl' ? 'intl' : 'cn';
+        const regionBadge = accRegion === 'intl'
+          ? `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(168,85,247,0.18); color:#c084fc; border:1px solid rgba(168,85,247,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','cn')" title="当前为国际版 (www.codebuddy.ai)。点击切换为国内版">🌐 国际版</span>`
+          : `<span class="badge" style="font-size:9px; padding:1px 5px; background:rgba(2,132,199,0.18); color:#38bdf8; border:1px solid rgba(2,132,199,0.45); cursor:pointer;" onclick="switchAccountRegion('${a.uid}','intl')" title="当前为国内版 (www.codebuddy.cn)。点击切换为国际版">🇨🇳 国内版</span>`;
+
+        const isPinned = currentSettings && currentSettings.pinnedAccount === a.uid;
+        const pinBtn = isPinned
+          ? `<button class="btn-copy" style="background:#7e22ce; color:#fff; border-color:#a855f7; padding:3px 7px; font-size:11px;" onclick="pinAccount('')" title="当前全局锁定指定！点击取消并恢复自动轮换">⭐ 已指定</button>`
+          : `<button class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick="pinAccount('${a.uid}')" title="设置该账号为网关全局优先指定账号">⭐ 设为指定</button>`;
+
+        const tokenTip = `输入: ${(a.inputTokens || 0).toLocaleString()} tokens&#10;输出: ${(a.outputTokens || 0).toLocaleString()} tokens&#10;总计: ${(a.totalTokens || 0).toLocaleString()} tokens`;
+
+        let tokenExpiryHtml = '';
+        const daysColor = (a.daysRemaining !== null && a.daysRemaining <= (a.advanceDays || 7)) ? '#fb923c' : '#4ade80';
+        const daysLabel = a.daysRemaining !== null ? `剩 ${a.daysRemaining} 天` : '长效有效';
+
+        if (a.hasRefreshToken) {
+          const refreshBtn = a.isRefreshEligible
+            ? `<button class="btn-primary" style="padding:1px 6px; font-size:10px; margin-top:3px;" onclick="refreshTokenSingle('${a.uid}')" title="满足提前换发条件，点击立即换发新令牌">⚡ 提前续签</button>`
+            : `<button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px; opacity:0.75;" onclick="refreshTokenSingle('${a.uid}')" title="点击立即强制与官方换发新令牌">换发</button>`;
+
+          tokenExpiryHtml = `
+            <div style="font-size:12px;">
+              <span class="badge badge-ok" style="font-size:9px; padding:1px 4px;">自动续期</span>
+              <b style="color:${daysColor}; font-family:monospace; margin-left:2px;">${daysLabel}</b>
+              <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
+              ${refreshBtn}
+            </div>
+          `;
+        } else {
+          tokenExpiryHtml = `
+            <div style="font-size:12px;">
+              <span class="badge badge-cool" style="font-size:9px; padding:1px 4px;" title="手动录入或未记录 refreshToken，到期前需重新扫码">无刷新令牌</span>
+              <b style="color:${daysColor}; font-family:monospace; margin-left:2px;">${daysLabel}</b>
+              <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">至 ${a.expiresAtFmt}</span>
+              <button class="btn-outline" style="padding:1px 5px; font-size:10px; margin-top:3px;" onclick="startOAuth()" title="重新扫码授权即可获取长效 refreshToken 实现永久自动续签">扫码补齐</button>
+            </div>
+          `;
+        }
+
+        let lockPoolHtml = '';
+        if (a.lockedCount > 0) {
+          const listItems = (a.lockedModels || []).map(lm => `
+            <div style="font-size:12px; margin:4px 0; color:#fff; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+              <span>• <b>${escapeHtml(lm.modelId)}</b></span>
+              <span style="color:#facc15; font-size:11px; font-weight:bold; white-space:nowrap;">剩 ${lm.remainingSec}s</span>
+            </div>
+            <div style="font-size:10px; color:var(--text-muted); margin-bottom:4px; padding-left:8px;">原因: ${escapeHtml(lm.reason)}</div>
+          `).join('');
+
+          lockPoolHtml = `
+            <div class="probe-tip-wrap">
+              <span class="badge badge-err" style="cursor:help;">🔒 已锁 ${a.lockedCount} 款模型</span>
+              <div class="probe-tip-popover" style="border-color:rgba(239, 68, 68, 0.6); min-width:240px;">
+                <div style="font-weight:bold; color:#f87171; font-size:12px; margin-bottom:4px;">🔒 当前账号模型锁池清单:</div>
+                ${listItems}
+                <button class="btn-outline" style="font-size:10px; padding:3px 8px; margin-top:6px; width:100%; text-align:center; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')">🔓 一键解除锁池</button>
+              </div>
+            </div>
+          `;
+        } else if (a.isCooldown) {
+          lockPoolHtml = `<span class="badge badge-cool" title="账号处于全局冷却退避中">⏱️ 全局锁 (剩 ${a.cooldownRemainingSec || 0}s)</span>`;
+        } else {
+          lockPoolHtml = `<span class="badge badge-ok">🟢 全部模型可用</span>`;
+        }
+
+        const unlockBtn = (a.lockedCount > 0 || a.isCooldown)
+          ? `<button class="btn-outline" style="padding:3px 7px; font-size:11px; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')" title="立即解除锁池与冷却状态">🔓 解锁</button>`
+          : '';
+
+        return `
+          <tr>
+            <td><code>${a.uid}</code></td>
+            <td><b>${a.email || a.uid}</b></td>
+            <td>${noteHtml}<div style="margin-top:4px;">${regionBadge}</div></td>
+            <td>${tokenExpiryHtml}</td>
+            <td>
+              <b style="color:#4ade80; font-size:14px; cursor:pointer;" onclick="showCreditDetails('${a.uid}')" title="点击查看官方 plans-usage 积分构成明细">${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b>
+              <button class="btn-copy" style="margin-left:6px; font-size:10px; padding:1px 5px;" onclick="showCreditDetails('${a.uid}')" title="查看官方 plans-usage 积分构成明细">明细</button>
+              <span style="display:block; font-size:10px; color:var(--text-muted); margin-top:2px;" title="该账号积分最后一次从上游成功刷新的时间">${fmtAgo(a.creditsUpdatedAt)}</span>
+            </td>
+            <td>
+              <b style="color:var(--accent); font-family:monospace; font-size:13px; cursor:help;" title="${tokenTip}">${a.totalTokensDisplay || '0'}</b>
+              <span style="font-size:11px; color:var(--text-muted); display:block;">${(a.requests || 0)} 次请求</span>
+            </td>
+            <td>${checkinBadge}</td>
+            <td><span class="badge ${a.inFlight > 0 ? 'badge-blue' : ''}">${a.inFlight || 0} / ${maxLimit}</span></td>
+            <td>
+              ${a.status === 'unauthorized' ? '<span class="badge badge-err">Token失效</span>' : 
+                a.isCooldown ? '<span class="badge badge-cool">冷却退避</span>' : 
+                '<span class="badge badge-ok">健康活跃</span>'}
+            </td>
+            <td>${lockPoolHtml}</td>
+            <td style="white-space:nowrap;">
+              ${pinBtn}
+              ${unlockBtn}
+              <button class="btn-outline" style="padding:3px 8px; font-size:11px;" onclick="runCheckinSingle('${a.uid}')" title="同步积分">🔄 刷新</button>
+              <button class="btn-danger" onclick="deleteAccount('${a.uid}')">删除</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
     }
 
     // ─── [网关自有策略] 积分历史变动监控留痕 ──────────────────────────────────
