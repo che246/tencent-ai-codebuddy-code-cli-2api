@@ -1,6 +1,7 @@
 // ─── 账号池状态管理与刷新 ─────────────────────────────────────────────────
     let allAccountsData = [];
     let currentAccountRegionFilter = 'all'; // 'all' | 'cn' | 'intl'
+    let currentAccountDateRange = 'today';   // 'today' | 'yesterday' | '7d' | '30d' | 'all' (默认今天)
 
     function setAccountRegionFilter(filter) {
       currentAccountRegionFilter = filter;
@@ -12,6 +13,23 @@
         }
       });
       renderAccountList();
+    }
+
+    function setAccountDateRange(range) {
+      currentAccountDateRange = range;
+      ['today', 'yesterday', '7d', '30d', 'all'].forEach(r => {
+        const btn = document.getElementById('accDateBtn' + r.charAt(0).toUpperCase() + r.slice(1));
+        if (btn) {
+          if (r === range) btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+      });
+      const badge = document.getElementById('accTokenRangeBadge');
+      const labelMap = { today: '今日', yesterday: '昨日', '7d': '近7天', '30d': '近30天', all: '全部历史' };
+      if (badge) {
+        badge.innerText = labelMap[range] || '今日';
+      }
+      loadAccounts();
     }
 
     function updateAccountFilterCounts() {
@@ -30,7 +48,8 @@
       const oldText = btn?.innerText;
       if (btn) { btn.disabled = true; btn.innerText = '⏳ 刷新中...'; }
       try {
-        await fetch('/api/accounts?refresh=1').then(r => r.json());
+        const qs = '?refresh=1&range=' + encodeURIComponent(currentAccountDateRange || 'today');
+        await fetch('/api/accounts' + qs).then(r => r.json());
         await loadAccounts();
       } catch (e) {
         alert('刷新积分失败: ' + e.message);
@@ -45,13 +64,16 @@
         //   · creditsForceNext=true  → 带 ?refresh=1 强制拉上游（切页/手动刷新时置位）
         //   · silent=true（5 秒轮询）→ 带 ?stale=0 只读缓存，避免每 5 秒打一次计费接口
         //   · 其他情况               → 交给服务端判断 stale（>30s 才拉）
-        let qs = '';
+        //   · 日期范围               → 携带 ?range=today|yesterday|7d|30d|all (默认今日)
+        const params = new URLSearchParams();
         if (creditsForceNext) {
-          qs = '?refresh=1';
+          params.set('refresh', '1');
           creditsForceNext = false;
         } else if (silent) {
-          qs = '?stale=0';
+          params.set('stale', '0');
         }
+        params.set('range', currentAccountDateRange || 'today');
+        const qs = '?' + params.toString();
         const res = await fetch('/api/accounts' + qs);
         const data = await res.json();
 
@@ -269,7 +291,16 @@
           ? `<button class="btn-copy" style="background:#7e22ce; color:#fff; border-color:#a855f7; padding:3px 7px; font-size:11px;" onclick="pinAccount('')" title="当前全局锁定指定！点击取消并恢复自动轮换">⭐ 已指定</button>`
           : `<button class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick="pinAccount('${a.uid}')" title="设置该账号为网关全局优先指定账号">⭐ 设为指定</button>`;
 
-        const tokenTip = `输入: ${(a.inputTokens || 0).toLocaleString()} tokens&#10;输出: ${(a.outputTokens || 0).toLocaleString()} tokens&#10;总计: ${(a.totalTokens || 0).toLocaleString()} tokens`;
+        const rangeLabelMap = {
+          today: '今日',
+          yesterday: '昨日',
+          '7d': '近7天',
+          '30d': '近30天',
+          all: '全部历史'
+        };
+        const activeRangeLabel = rangeLabelMap[currentAccountDateRange] || '今日';
+        const isAllTime = currentAccountDateRange === 'all';
+        const tokenTip = `【${activeRangeLabel}用量】&#10;总消耗: ${(a.totalTokens || 0).toLocaleString()} tokens&#10;输入: ${(a.inputTokens || 0).toLocaleString()} tokens&#10;输出: ${(a.outputTokens || 0).toLocaleString()} tokens&#10;请求数: ${a.requests || 0} 次${isAllTime ? '' : `&#10;─────&#10;历史累计总消耗: ${(a.allTimeTokens || 0).toLocaleString()} tokens`}`;
 
         let tokenExpiryHtml = '';
         const daysColor = (a.daysRemaining !== null && a.daysRemaining <= (a.advanceDays || 7)) ? '#fb923c' : '#4ade80';
@@ -343,6 +374,7 @@
             <td>
               <b style="color:var(--accent); font-family:monospace; font-size:13px; cursor:help;" title="${tokenTip}">${a.totalTokensDisplay || '0'}</b>
               <span style="font-size:11px; color:var(--text-muted); display:block;">${(a.requests || 0)} 次请求</span>
+              ${(!isAllTime && (a.allTimeTokens || 0) > 0) ? `<span style="font-size:10px; color:var(--text-muted); opacity:0.8; display:block;" title="历史累计消耗: ${(a.allTimeTokens || 0).toLocaleString()} tokens">历史: ${a.allTimeTokensDisplay || '0'}</span>` : ''}
             </td>
             <td>${checkinBadge}</td>
             <td><span class="badge ${a.inFlight > 0 ? 'badge-blue' : ''}">${a.inFlight || 0} / ${maxLimit}</span></td>
@@ -944,7 +976,7 @@
     async function unlockAllPoolModels() {
       if (!confirm('确定一键解锁全池所有账号的模型锁池与冷却状态吗？')) return;
       try {
-        const res = await fetch('/api/accounts');
+        const res = await fetch('/api/accounts?range=all');
         const data = await res.json();
         let unlockedCount = 0;
         for (const a of data) {

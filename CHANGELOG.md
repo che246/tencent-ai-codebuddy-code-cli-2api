@@ -8,6 +8,28 @@
 
 ---
 
+## [2.179.0-gw.26] - 2026-11-19
+
+### 账号池运维状态与配额监控已消耗 Token 按日期筛选支持与默认今日显示 (Account Token Usage Filtering by Date & Default Today View)
+- **多维度时间区间 Token 用量聚合引擎 (`src/core/metrics.mjs`)**：
+  - **背景与需求**：满足用户实时监控今日（当天）各账号实际产生的 Token 消耗，同时支持灵活查看昨日、近7天、近30天及全部历史累计用量；
+  - **按时间区间统计引擎 (`getAccountStatsByRange`)**：
+    - 精确解构并聚合 `stats.daily[date].accounts` 按日日志与按账号统计结构；
+    - 支持标准时间区间筛选：`today`（今天，默认）、`yesterday`（昨天）、`7d`（近7天）、`30d`（近30天）、`all`（全量历史）；
+    - 内置账号 UID、邮箱与昵称双向别名快速匹配，确保即使多端点异名调用也能精准关联到目标账号。
+- **账号列表接口扩展 (`GET /api/accounts` in `src/web/routes.mjs`)**：
+  - 新增 `?range=today|yesterday|7d|30d|all` 查询参数，默认缺省值为 `today`（遵循用户首选习惯）；
+  - 返回对象补充 `tokenRange`、`totalTokens`、`totalTokensDisplay`、`requests` 以及全量累计 `allTimeTokens` 与 `allTimeTokensDisplay`。
+- **Web 控制台账号池工具栏与表格呈现升级 (`src/web/public/index.html` & `src/web/public/scripts/accounts.js`)**：
+  - **消耗日期筛选栏**：在区域筛选旁新增「消耗 Token 日期」快捷药丸组件（`今天 (默认)`、`昨天`、`近7天`、`近30天`、`全部历史`）；
+  - **表头动态标识**：表头「已消耗 Token」智能同步呈现当前时间区间标签（如 `今日`、`昨日`、`近7天` 等）；
+  - **用量与请求数明细展示**：
+    - 主数值显示所选日期范围内的消耗 Token 与请求频次；
+    - 鼠标悬停 Tooltip 呈现详细的区间输入/输出构成及历史累计总消耗；
+    - 非「全部」模式下直观标注历史累计用量提示，让当天消耗与历史用量一目了然。
+
+---
+
 ## [2.179.0-gw.25] - 2026-11-18
 
 ### 账号池负载均衡轮换区域范围策略支持 (Routing Region Scope: Domestic / International / All)

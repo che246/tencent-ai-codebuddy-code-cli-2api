@@ -41,7 +41,7 @@ import { LogDatabase } from '../core/database.mjs';
 import { AccountScheduler, getSessionAffinityStats, clearSessionStickyMap } from '../core/scheduler.mjs';
 import { TlsCertificateStack } from '../core/tls-certs.mjs';
 import { fetchDetailedModels } from '../upstream/models.mjs';
-import { getMetricsReport, loadStats, formatTokenNumber, pruneStatsByTime } from '../core/metrics.mjs';
+import { getMetricsReport, loadStats, formatTokenNumber, pruneStatsByTime, getAccountStatsByRange } from '../core/metrics.mjs';
 import { loadModelPrices, saveModelPrices, searchOfficialPricingOnline } from '../core/pricing.mjs';
 
 const HTML_FILE_PATH = path.resolve(ROOT_DIR, 'src/web/public/index.html');
@@ -546,28 +546,33 @@ export async function handleApiRoutes(req, res, url) {
   }
 
   // 6. 账号列表查询 (包含模型锁池状态、锁定剩余时间及原因)
+  //    支持 ?range=today|yesterday|7d|30d|all 过滤已消耗 Token 与请求数（默认 today 今日）；
   //    支持 ?refresh=1 强制刷新积分（忽略最小间隔）；
   //    默认行为：若某账号积分已超过 30s 未刷新则顺带拉一次上游，
   //    这样用户切到账号页看到的就是较新数据，不必等 5 分钟定时任务。
   if (url.pathname === '/api/accounts' && req.method === 'GET') {
     const forceRefresh = url.searchParams.get('refresh') === '1';
     const staleDisabled = url.searchParams.get('stale') === '0';
+    const range = url.searchParams.get('range') || 'today';
     if (forceRefresh || !staleDisabled) {
       try {
         await AccountScheduler.refreshStaleCredits(forceRefresh ? 0 : 30000, { force: forceRefresh });
       } catch (_) { /* 刷新失败不影响列表返回 */ }
     }
 
-    const stats = loadStats();
-    const accStatsMap = stats.accounts || {};
+    const accStatsMap = getAccountStatsByRange(range);
+    const allStatsMap = range === 'all' ? accStatsMap : getAccountStatsByRange('all');
     const advanceDays = (typeof config.tokenRefreshAdvanceDays === 'number' && config.tokenRefreshAdvanceDays > 0) ? config.tokenRefreshAdvanceDays : 7;
     const advanceMs = advanceDays * 24 * 60 * 60 * 1000;
     const now = Date.now();
+    const today = getTodayString();
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(accounts.map(a => {
       const accStats = accStatsMap[a.uid] || accStatsMap[a.email] || {};
       const tokens = accStats.totalTokens || 0;
+      const allTimeStats = allStatsMap[a.uid] || allStatsMap[a.email] || {};
+      const allTimeTokens = allTimeStats.totalTokens || 0;
       const daysRemaining = a.expiresAt ? Math.max(0, Number(((a.expiresAt - now) / (24 * 3600 * 1000)).toFixed(1))) : null;
       const canAutoRefresh = Boolean(a.refreshToken);
       const isRefreshEligible = canAutoRefresh && (!a.expiresAt || now > (a.expiresAt - advanceMs));
@@ -610,6 +615,9 @@ export async function handleApiRoutes(req, res, url) {
         inputTokens: accStats.inputTokens || 0,
         outputTokens: accStats.outputTokens || 0,
         requests: accStats.requests || 0,
+        tokenRange: range,
+        allTimeTokens,
+        allTimeTokensDisplay: formatTokenNumber(allTimeTokens),
         inFlight: a.inFlight || 0,
         status: a.status,
         expiresAt: a.expiresAt || 0,

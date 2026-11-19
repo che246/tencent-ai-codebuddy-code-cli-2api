@@ -345,6 +345,115 @@ export function getShiftedDateString(baseDateStr, daysShift) {
   return `${ry}-${rm}-${rd}`;
 }
 
+/**
+ * 按指定时间区间获取各账号的 Token 与请求统计映射表 (支持别名快速检索，默认今日)
+ * @param {'today' | 'yesterday' | '7d' | '30d' | 'all'} [range='today'] - 时间区间 (默认 today)
+ * @returns {Record<string, { uid: string, name: string, requests: number, successRequests: number, inputTokens: number, outputTokens: number, cachedTokens: number, totalTokens: number }>}
+ */
+export function getAccountStatsByRange(range = 'today') {
+  const stats = loadStats();
+  const validRanges = ['today', 'yesterday', '7d', '30d', 'all'];
+  if (!validRanges.includes(range)) range = 'today';
+
+  // 1. 全量历史
+  if (range === 'all') {
+    const result = {};
+    if (stats.accounts) {
+      for (const [key, acc] of Object.entries(stats.accounts)) {
+        const id = acc.uid || key;
+        if (!result[id]) {
+          result[id] = {
+            uid: id,
+            name: acc.name || id,
+            requests: acc.requests || 0,
+            successRequests: acc.successRequests || 0,
+            inputTokens: acc.inputTokens || 0,
+            outputTokens: acc.outputTokens || 0,
+            cachedTokens: acc.cachedTokens || 0,
+            totalTokens: acc.totalTokens || 0
+          };
+        }
+        if (key && key !== id && !result[key]) result[key] = result[id];
+        if (acc.name && acc.name !== id && !result[acc.name]) result[acc.name] = result[id];
+      }
+    }
+    if (stats.daily) {
+      for (const d of Object.values(stats.daily)) {
+        if (d && d.accounts) {
+          for (const [key, acc] of Object.entries(d.accounts)) {
+            const id = acc.uid || key;
+            if (!result[id]) {
+              result[id] = {
+                uid: id,
+                name: acc.name || id,
+                requests: 0,
+                successRequests: 0,
+                inputTokens: 0,
+                outputTokens: 0,
+                cachedTokens: 0,
+                totalTokens: 0
+              };
+            }
+            if (key && key !== id && !result[key]) result[key] = result[id];
+            if (acc.name && acc.name !== id && !result[acc.name]) result[acc.name] = result[id];
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  // 2. 指定时间区间：计算目标日期数组
+  const today = getTodayString();
+  const yesterday = getShiftedDateString(today, -1);
+  let targetDates = [];
+
+  if (range === 'today') {
+    targetDates = [today];
+  } else if (range === 'yesterday') {
+    targetDates = [yesterday];
+  } else if (range === '7d') {
+    for (let i = 0; i < 7; i++) targetDates.push(getShiftedDateString(today, -i));
+  } else if (range === '30d') {
+    for (let i = 0; i < 30; i++) targetDates.push(getShiftedDateString(today, -i));
+  }
+
+  const result = {};
+  if (stats.daily) {
+    for (const date of targetDates) {
+      const d = stats.daily[date];
+      if (d && d.accounts) {
+        for (const [key, acc] of Object.entries(d.accounts)) {
+          const id = acc.uid || key;
+          if (!result[id]) {
+            result[id] = {
+              uid: id,
+              name: acc.name || id,
+              requests: 0,
+              successRequests: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+              cachedTokens: 0,
+              totalTokens: 0
+            };
+          }
+          result[id].requests += (acc.requests || 0);
+          result[id].successRequests += (acc.successRequests || 0);
+          result[id].inputTokens += (acc.inputTokens || 0);
+          result[id].outputTokens += (acc.outputTokens || 0);
+          result[id].cachedTokens += (acc.cachedTokens || 0);
+          result[id].totalTokens += (acc.totalTokens || 0);
+
+          if (key && key !== id && !result[key]) result[key] = result[id];
+          if (acc.name && acc.name !== id && !result[acc.name]) result[acc.name] = result[id];
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 export function getMetricsReport(range = 'all') {
   const stats = loadStats();
   const today = getTodayString();
