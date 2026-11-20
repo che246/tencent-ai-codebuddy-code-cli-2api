@@ -397,7 +397,26 @@
       }).join('');
     }
 
-    // ─── [网关自有策略] 积分历史变动监控留痕与按账号筛选 ──────────────────────
+    // ─── [网关自有策略] 积分历史变动监控留痕与按账号/日期筛选 ─────────────────
+    let currentCreditHistoryDateRange = 'today'; // 默认今天
+
+    function setCreditHistoryDateRange(range) {
+      currentCreditHistoryDateRange = range;
+      ['today', 'yesterday', '7d', '30d', 'all'].forEach(r => {
+        const btn = document.getElementById('creditDateBtn' + r.charAt(0).toUpperCase() + r.slice(1));
+        if (btn) {
+          if (r === range) btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+      });
+      const badge = document.getElementById('creditHistoryDateRangeBadge');
+      const labelMap = { today: '今日', yesterday: '昨日', '7d': '近7天', '30d': '近30天', all: '全部' };
+      if (badge) {
+        badge.innerText = labelMap[range] || '今日';
+      }
+      loadCreditHistory();
+    }
+
     function populateCreditHistoryAccountFilter() {
       const sel = document.getElementById('creditHistoryAccountFilter');
       if (!sel || !Array.isArray(allAccountsData)) return;
@@ -477,6 +496,7 @@
 
       const params = new URLSearchParams();
       params.set('limit', limit);
+      params.set('range', currentCreditHistoryDateRange || 'today');
       if (forceRefresh) params.set('refresh', '1');
       if (selectedUid) params.set('uid', selectedUid);
 
@@ -489,13 +509,17 @@
         const records = data.records || [];
 
         if (records.length === 0) {
-          const emptyMsg = selectedUid
-            ? '该账号暂无积分变动记录'
-            : '暂无积分变动记录（每次真实查到余额与上次比对，变动即自动留痕）';
+          const dateLabelMap = { today: '今天', yesterday: '昨天', '7d': '近7天', '30d': '近30天', all: '全部历史' };
+          const activeDateLabel = dateLabelMap[currentCreditHistoryDateRange] || '今天';
+          const scopePrefix = selectedUid ? '该账号在' : '全池在';
+          const switchAllLink = currentCreditHistoryDateRange !== 'all'
+            ? `<div style="margin-top:6px;"><a href="javascript:void(0)" onclick="setCreditHistoryDateRange('all')" style="color:var(--accent); text-decoration:underline; font-size:12px;">切换查看全部历史记录 &rarr;</a></div>`
+            : '';
           tbody.innerHTML = `
             <tr>
               <td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">
-                ${emptyMsg}
+                ${scopePrefix}【${activeDateLabel}】暂无积分变动记录（每次真实查到余额与上次比对，变动即自动留痕）
+                ${switchAllLink}
               </td>
             </tr>
           `;

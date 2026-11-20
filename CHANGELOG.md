@@ -8,6 +8,24 @@
 
 ---
 
+## [2.179.0-gw.28] - 2026-11-20
+
+### 积分历史变动监控支持按日期筛选且默认显示今日 (Credit History Date Filtering & Default Today View)
+- **数据库查询引擎时间区间与日期索引扩展 (`src/core/database.mjs`)**：
+  - **背景与需求**：满足用户聚焦查看今日积分充盈、打卡奖励与扣减明细，同时支持灵活追溯昨日、近7天、近30天与全部历史变动；
+  - **按日索引与区间查询优化 (`LogDatabase.queryCreditHistory`)**：
+    - 引入 `idx_credit_history_date` 索引，确保大规模流水下按日与按时间范围毫秒级检索；
+    - 支持 `range` 参数：`today`（今天，默认）、`yesterday`（昨天）、`7d`（近7天）、`30d`（近30天）、`all`（全量历史）及特定日期精确过滤。
+- **接口扩展 (`GET /api/credits/history` in `src/web/routes.mjs`)**：
+  - 支持 `range` 与 `date` 参数透传，缺省默认返回 `today`；
+  - 响应报文透传当前生效的 `range` 与 `date` 字段，保障前后端状态一致性。
+- **Web 控制台积分历史看板工具栏日期筛选组件 (`src/web/public/index.html` & `src/web/public/scripts/accounts.js`)**：
+  - **变动日期快捷药丸**：在筛选账号旁新增「变动日期」筛选器（`[今天 (默认)]`、`[昨天]`、`[近7天]`、`[近30天]`、`[全部历史]`）；
+  - **表头动态标签**：表头时间列智能挂载 `[今日]`、`[昨日]` 等当前区间微标；
+  - **空态友好提示与快捷切换**：当所选日期内暂无记录时，智能提示并在空态区域提供一键切换至全部历史的引导链接。
+
+---
+
 ## [2.179.0-gw.27] - 2026-11-20
 
 ### 积分历史变动监控支持按账号筛选与联动定位 (Credit History Account Filtering & Interactive Jump)

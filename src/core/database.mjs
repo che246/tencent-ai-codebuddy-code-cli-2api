@@ -1,7 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { ROOT_DIR, LOG_FILE_PATH, config } from '../config.mjs';
+import { ROOT_DIR, LOG_FILE_PATH, config, getTodayString } from '../config.mjs';
+
+function getShiftedDate(baseDateStr, daysShift) {
+  const [y, m, d] = baseDateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + daysShift);
+  const ry = dt.getFullYear();
+  const rm = String(dt.getMonth() + 1).padStart(2, '0');
+  const rd = String(dt.getDate()).padStart(2, '0');
+  return `${ry}-${rm}-${rd}`;
+}
 
 const require = createRequire(import.meta.url);
 export const DB_PATH = path.resolve(ROOT_DIR, 'logs.db');
@@ -55,6 +65,7 @@ class LogDatabaseEngine {
         );
         CREATE INDEX IF NOT EXISTS idx_credit_history_created_at ON credit_history(created_at);
         CREATE INDEX IF NOT EXISTS idx_credit_history_uid ON credit_history(account_uid);
+        CREATE INDEX IF NOT EXISTS idx_credit_history_date ON credit_history(date);
       `);
 
       this.insertStmt = this.sqliteDb.prepare(`
@@ -326,7 +337,7 @@ class LogDatabaseEngine {
     }
   }
 
-  queryCreditHistory({ accountUid = null, limit = 100, offset = 0 } = {}) {
+  queryCreditHistory({ accountUid = null, range = 'today', date = null, limit = 100, offset = 0 } = {}) {
     if (!this.useSqlite || !this.sqliteDb) return { total: 0, records: [] };
     try {
       const conditions = [];
@@ -335,6 +346,30 @@ class LogDatabaseEngine {
         conditions.push('(account_uid = ? OR account_name = ?)');
         params.push(accountUid, accountUid);
       }
+
+      // 日期 / 时间范围过滤 (支持 today / yesterday / 7d / 30d / all 或精确指定 date: YYYY-MM-DD，默认今日)
+      const today = getTodayString();
+      if (date) {
+        conditions.push('date = ?');
+        params.push(date);
+      } else if (range === 'today') {
+        conditions.push('date = ?');
+        params.push(today);
+      } else if (range === 'yesterday') {
+        const yesterday = getShiftedDate(today, -1);
+        conditions.push('date = ?');
+        params.push(yesterday);
+      } else if (range === '7d') {
+        const startDate = getShiftedDate(today, -6);
+        conditions.push('date >= ? AND date <= ?');
+        params.push(startDate, today);
+      } else if (range === '30d') {
+        const startDate = getShiftedDate(today, -29);
+        conditions.push('date >= ? AND date <= ?');
+        params.push(startDate, today);
+      }
+      // range === 'all' 不追加日期过滤条件
+
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       const countSql = `SELECT count(*) as total FROM credit_history ${whereClause}`;
       const total = this.sqliteDb.prepare(countSql).get(...params)?.total || 0;

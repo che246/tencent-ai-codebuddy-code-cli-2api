@@ -392,13 +392,28 @@
             </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
-              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                <!-- 变动日期筛选 (默认今天) -->
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span style="font-size:12px; color:var(--text-muted); font-weight:600;">变动日期:</span>
+                  <div class="filter-bar" style="margin-bottom:0; display:inline-flex; gap:4px;" id="creditHistoryDateRangeTabs">
+                    <button type="button" class="filter-btn active" id="creditDateBtnToday" onclick="setCreditHistoryDateRange('today')">今天 (默认)</button>
+                    <button type="button" class="filter-btn" id="creditDateBtnYesterday" onclick="setCreditHistoryDateRange('yesterday')">昨天</button>
+                    <button type="button" class="filter-btn" id="creditDateBtn7d" onclick="setCreditHistoryDateRange('7d')">近7天</button>
+                    <button type="button" class="filter-btn" id="creditDateBtn30d" onclick="setCreditHistoryDateRange('30d')">近30天</button>
+                    <button type="button" class="filter-btn" id="creditDateBtnAll" onclick="setCreditHistoryDateRange('all')">全部历史</button>
+                  </div>
+                </div>
+
+                <!-- 账号筛选下拉选择框 -->
                 <div style="display:flex; align-items:center; gap:6px;">
                   <span style="font-size:12px; color:var(--text-muted); font-weight:600;">筛选账号:</span>
-                  <select id="creditHistoryAccountFilter" onchange="loadCreditHistory()" class="select-sm" style="background:var(--card-bg, #1e293b); color:var(--text-main, #f1f5f9); border:1px solid rgba(255,255,255,0.12); border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer; max-width:260px;">
+                  <select id="creditHistoryAccountFilter" onchange="loadCreditHistory()" class="select-sm" style="background:var(--card-bg, #1e293b); color:var(--text-main, #f1f5f9); border:1px solid rgba(255,255,255,0.12); border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer; max-width:240px;">
                     <option value="">全部账号 (全部显示)</option>
                   </select>
                 </div>
+
+                <!-- 条数限制下拉 -->
                 <div style="display:flex; align-items:center; gap:6px;">
                   <span style="font-size:12px; color:var(--text-muted); font-weight:600;">显示条数:</span>
                   <select id="creditHistoryLimit" onchange="loadCreditHistory()" class="select-sm" style="background:var(--card-bg, #1e293b); color:var(--text-main, #f1f5f9); border:1px solid rgba(255,255,255,0.12); border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer;">
@@ -409,6 +424,7 @@
                   </select>
                 </div>
               </div>
+
               <div style="display:flex; align-items:center; gap:8px;">
                 <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadCreditHistory(true)" title="立即与上游同步并刷新积分历史">🔄 刷新</button>
                 <button class="btn-outline" style="font-size:12px; padding:4px 10px; color:#f87171; border-color:rgba(248,113,113,0.3);" onclick="clearCreditHistory()" title="清空积分历史记录">🗑️ 清空</button>
@@ -419,7 +435,7 @@
               <table style="width:100%; min-width:800px; border-collapse:collapse;">
                 <thead>
                   <tr style="border-bottom:1px solid rgba(255,255,255,0.08); text-align:left;">
-                    <th style="padding:10px 12px; width:130px; font-size:12px; color:var(--text-muted);">时间</th>
+                    <th style="padding:10px 12px; width:140px; font-size:12px; color:var(--text-muted);">时间 <span id="creditHistoryDateRangeBadge" class="badge badge-blue" style="font-size:9.5px; padding:1px 5px; margin-left:2px; font-weight:normal;">今日</span></th>
                     <th style="padding:10px 12px; width:160px; font-size:12px; color:var(--text-muted);">账号</th>
                     <th style="padding:10px 12px; width:120px; font-size:12px; color:var(--text-muted);">变动</th>
                     <th style="padding:10px 12px; width:150px; font-size:12px; color:var(--text-muted);">变动后余额</th>

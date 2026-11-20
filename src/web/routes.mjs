@@ -703,7 +703,7 @@ export async function handleApiRoutes(req, res, url) {
   }
 
   // ─── [网关自有策略] 6.7. 积分监控与历史变动留痕接口 ───────────────────────
-  // GET /api/credits/history?limit=100&offset=0&refresh=1&uid=xxx
+  // GET /api/credits/history?limit=100&offset=0&refresh=1&uid=xxx&range=today|yesterday|7d|30d|all&date=YYYY-MM-DD
   if (url.pathname === '/api/credits/history' && req.method === 'GET') {
     const shouldRefresh = url.searchParams.get('refresh') === '1';
     if (shouldRefresh) {
@@ -714,9 +714,11 @@ export async function handleApiRoutes(req, res, url) {
     const limit = Math.min(1000, Math.max(1, parseInt(url.searchParams.get('limit') || '100', 10)));
     const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10));
     const uid = url.searchParams.get('uid') || null;
-    const historyData = LogDatabase.queryCreditHistory({ accountUid: uid, limit, offset });
+    const range = url.searchParams.get('range') || 'today';
+    const date = url.searchParams.get('date') || null;
+    const historyData = LogDatabase.queryCreditHistory({ accountUid: uid, range, date, limit, offset });
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, total: historyData.total, records: historyData.records }));
+    return res.end(JSON.stringify({ ok: true, total: historyData.total, records: historyData.records, range, date }));
   }
 
   // POST /api/credits/history/clear 清空变动历史记录
