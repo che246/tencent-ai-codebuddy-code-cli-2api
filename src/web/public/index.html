@@ -378,22 +378,36 @@
           </div>
 
           <!-- [网关自有策略] 积分历史 变动即留痕 -->
-          <div class="card" style="margin-top:18px;">
-            <div style="margin-bottom:14px;">
+          <div class="card" id="cardCreditHistory" style="margin-top:18px;">
+            <div style="margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
               <div style="display:flex; align-items:center; gap:10px;">
                 <span style="font-size:15px; font-weight:700; color:var(--text-main);">积分历史</span>
                 <span style="font-size:12px; color:var(--text-muted); font-weight:normal;">每次真实查到余额与上次比对，变动即留痕</span>
               </div>
+              <div id="badgeCreditHistoryFilterPill" style="display:none;">
+                <span class="badge badge-purple" style="font-size:11px; padding:3px 10px; cursor:pointer;" onclick="resetCreditHistoryAccountFilter()" title="点击取消账号筛选，查看全池历史">
+                  👤 已按账号筛选: <span id="labelCreditHistoryFilteredAcc">-</span> <span style="font-weight:bold; margin-left:4px;">✕</span>
+                </span>
+              </div>
             </div>
 
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <select id="creditHistoryLimit" onchange="loadCreditHistory()" class="select-sm" style="background:var(--card-bg, #1e293b); color:var(--text-main, #f1f5f9); border:1px solid rgba(255,255,255,0.12); border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer;">
-                  <option value="50">最近 50 条</option>
-                  <option value="100" selected>最近 100 条</option>
-                  <option value="200">最近 200 条</option>
-                  <option value="500">最近 500 条</option>
-                </select>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span style="font-size:12px; color:var(--text-muted); font-weight:600;">筛选账号:</span>
+                  <select id="creditHistoryAccountFilter" onchange="loadCreditHistory()" class="select-sm" style="background:var(--card-bg, #1e293b); color:var(--text-main, #f1f5f9); border:1px solid rgba(255,255,255,0.12); border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer; max-width:260px;">
+                    <option value="">全部账号 (全部显示)</option>
+                  </select>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span style="font-size:12px; color:var(--text-muted); font-weight:600;">显示条数:</span>
+                  <select id="creditHistoryLimit" onchange="loadCreditHistory()" class="select-sm" style="background:var(--card-bg, #1e293b); color:var(--text-main, #f1f5f9); border:1px solid rgba(255,255,255,0.12); border-radius:6px; padding:5px 12px; font-size:12px; cursor:pointer;">
+                    <option value="50">最近 50 条</option>
+                    <option value="100" selected>最近 100 条</option>
+                    <option value="200">最近 200 条</option>
+                    <option value="500">最近 500 条</option>
+                  </select>
+                </div>
               </div>
               <div style="display:flex; align-items:center; gap:8px;">
                 <button class="btn-outline" style="font-size:12px; padding:4px 10px;" onclick="loadCreditHistory(true)" title="立即与上游同步并刷新积分历史">🔄 刷新</button>

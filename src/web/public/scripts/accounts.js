@@ -176,6 +176,7 @@
 
         allAccountsData = Array.isArray(data) ? data : [];
         updateAccountFilterCounts();
+        populateCreditHistoryAccountFilter();
         renderAccountList();
 
         // 同步更新设置页中的指定账号下拉列表
@@ -369,6 +370,7 @@
             <td>
               <b style="color:#4ade80; font-size:14px; cursor:pointer;" onclick="showCreditDetails('${a.uid}')" title="点击查看官方 plans-usage 积分构成明细">${(a.creditsRemain || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</b>
               <button class="btn-copy" style="margin-left:6px; font-size:10px; padding:1px 5px;" onclick="showCreditDetails('${a.uid}')" title="查看官方 plans-usage 积分构成明细">明细</button>
+              <button class="btn-copy" style="margin-left:3px; font-size:10px; padding:1px 5px; color:#38bdf8; border-color:rgba(56,189,248,0.4);" onclick="filterCreditHistoryByAccount('${a.uid}')" title="筛选查看该账号的积分变动历史留痕">变动</button>
               <span style="display:block; font-size:10px; color:var(--text-muted); margin-top:2px;" title="该账号积分最后一次从上游成功刷新的时间">${fmtAgo(a.creditsUpdatedAt)}</span>
             </td>
             <td>
@@ -395,13 +397,90 @@
       }).join('');
     }
 
-    // ─── [网关自有策略] 积分历史变动监控留痕 ──────────────────────────────────
+    // ─── [网关自有策略] 积分历史变动监控留痕与按账号筛选 ──────────────────────
+    function populateCreditHistoryAccountFilter() {
+      const sel = document.getElementById('creditHistoryAccountFilter');
+      if (!sel || !Array.isArray(allAccountsData)) return;
+
+      const currentVal = sel.value || '';
+      let html = '<option value="">全部账号 (全部显示)</option>';
+
+      const cnAccounts = allAccountsData.filter(a => a.region === 'cn');
+      const intlAccounts = allAccountsData.filter(a => a.region !== 'cn');
+
+      if (cnAccounts.length > 0) {
+        html += '<optgroup label="🇨🇳 国内版账号">';
+        cnAccounts.forEach(a => {
+          const label = (a.nickname || a.email || a.uid) + (a.note ? ` [${a.note}]` : '') + ` (${a.uid.slice(-4)})`;
+          const selected = a.uid === currentVal ? 'selected' : '';
+          html += `<option value="${escapeAttr(a.uid)}" ${selected}>${escapeHtml(label)}</option>`;
+        });
+        html += '</optgroup>';
+      }
+
+      if (intlAccounts.length > 0) {
+        html += '<optgroup label="🌐 国际版账号">';
+        intlAccounts.forEach(a => {
+          const label = (a.nickname || a.email || a.uid) + (a.note ? ` [${a.note}]` : '') + ` (${a.uid.slice(-4)})`;
+          const selected = a.uid === currentVal ? 'selected' : '';
+          html += `<option value="${escapeAttr(a.uid)}" ${selected}>${escapeHtml(label)}</option>`;
+        });
+        html += '</optgroup>';
+      }
+
+      sel.innerHTML = html;
+      sel.value = currentVal;
+    }
+
+    function filterCreditHistoryByAccount(uid) {
+      if (!uid) return;
+      const sel = document.getElementById('creditHistoryAccountFilter');
+      if (sel) {
+        sel.value = uid;
+      }
+      loadCreditHistory();
+      const card = document.getElementById('cardCreditHistory');
+      if (card) {
+        card.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+
+    function resetCreditHistoryAccountFilter() {
+      const sel = document.getElementById('creditHistoryAccountFilter');
+      if (sel) {
+        sel.value = '';
+      }
+      loadCreditHistory();
+    }
+
     async function loadCreditHistory(forceRefresh = false) {
       const tbody = document.getElementById('creditHistoryBody');
       if (!tbody) return;
       const limitEl = document.getElementById('creditHistoryLimit');
       const limit = limitEl ? limitEl.value : 100;
-      const qs = forceRefresh ? `?limit=${limit}&refresh=1` : `?limit=${limit}`;
+      const accFilterEl = document.getElementById('creditHistoryAccountFilter');
+      const selectedUid = accFilterEl ? accFilterEl.value : '';
+
+      // 更新顶部筛选状态胶囊
+      const pill = document.getElementById('badgeCreditHistoryFilterPill');
+      const labelAcc = document.getElementById('labelCreditHistoryFilteredAcc');
+      if (pill && labelAcc) {
+        if (selectedUid) {
+          const matchAcc = allAccountsData.find(a => a.uid === selectedUid);
+          const name = matchAcc ? (matchAcc.nickname || matchAcc.email || matchAcc.uid) + (matchAcc.note ? ` [${matchAcc.note}]` : '') : selectedUid;
+          labelAcc.innerText = name;
+          pill.style.display = 'block';
+        } else {
+          pill.style.display = 'none';
+        }
+      }
+
+      const params = new URLSearchParams();
+      params.set('limit', limit);
+      if (forceRefresh) params.set('refresh', '1');
+      if (selectedUid) params.set('uid', selectedUid);
+
+      const qs = '?' + params.toString();
 
       try {
         const res = await fetch('/api/credits/history' + qs);
@@ -410,10 +489,13 @@
         const records = data.records || [];
 
         if (records.length === 0) {
+          const emptyMsg = selectedUid
+            ? '该账号暂无积分变动记录'
+            : '暂无积分变动记录（每次真实查到余额与上次比对，变动即自动留痕）';
           tbody.innerHTML = `
             <tr>
               <td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">
-                暂无积分变动记录（每次真实查到余额与上次比对，变动即自动留痕）
+                ${emptyMsg}
               </td>
             </tr>
           `;
@@ -433,7 +515,9 @@
                 ${escapeHtml(r.time || '')}
               </td>
               <td style="padding:10px 12px; font-size:13px; color:var(--text-main);">
-                ${escapeHtml(r.accountName || r.accountUid || '未知账号')}
+                <span style="cursor:pointer; color:var(--accent); text-decoration:underline; text-underline-offset:3px;" onclick="filterCreditHistoryByAccount('${escapeAttr(r.accountUid || '')}')" title="点击仅看此账号的变动记录">
+                  ${escapeHtml(r.accountName || r.accountUid || '未知账号')}
+                </span>
               </td>
               <td style="padding:10px 12px; font-family:monospace; font-size:13px; font-weight:700; color:${deltaColor};">
                 ${deltaFmt}

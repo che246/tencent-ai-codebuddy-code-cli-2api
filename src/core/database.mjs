@@ -332,8 +332,8 @@ class LogDatabaseEngine {
       const conditions = [];
       const params = [];
       if (accountUid && accountUid !== 'ALL') {
-        conditions.push('account_uid = ?');
-        params.push(accountUid);
+        conditions.push('(account_uid = ? OR account_name = ?)');
+        params.push(accountUid, accountUid);
       }
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       const countSql = `SELECT count(*) as total FROM credit_history ${whereClause}`;
