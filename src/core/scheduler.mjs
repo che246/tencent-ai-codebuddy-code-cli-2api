@@ -742,16 +742,76 @@ export class AccountScheduler {
     }
   }
 
-  // 国际版每日活跃对话打卡随机提示词池
-  static INTL_CHECKIN_PROMPTS = [
-    'Hi, please reply with "pong".',
-    'Hello! Give me a random motivational quote in one sentence.',
-    'Hi, please reply with "OK".',
-    'Hello, what is 1 + 1?',
-    'Hi! Reply with "Ready".',
-    'Hello, have a wonderful day!',
-    'Hi, ping!'
-  ];
+  /**
+   * 国际版拟真打卡对话动态生成器 (Anti-Pattern / Anti-Fingerprint)
+   * 结合多学科领域、动态技术术语、随机数学算式与浮动超参数，
+   * 组合生成 300+ 种完全不重样的开发者自然问答，彻底杜绝机械化固定词指纹与规律性检测。
+   */
+  static generateDynamicCheckinDialogue() {
+    const LANGS = ['Python', 'TypeScript', 'JavaScript', 'Go', 'Rust', 'Java', 'C++', 'Shell', 'SQL', 'Kotlin'];
+    const KEYWORDS = ['async/await', 'defer', 'match', 'yield', 'const', 'static', 'lambda', 'interface', 'struct', 'enum'];
+    const TOOLS = ['Git', 'Linux bash', 'Docker', 'cURL', 'Nginx', 'grep', 'jq'];
+    const ALGOS = ['QuickSort', 'Binary Search', 'Hash Table lookup', 'MergeSort', "Dijkstra's algorithm", 'LRU Cache'];
+    const HTTP_CODES = ['204 No Content', '301 Moved Permanently', '400 Bad Request', '401 Unauthorized', '403 Forbidden', '404 Not Found', '429 Too Many Requests', '500 Internal Error', '502 Bad Gateway', '503 Service Unavailable'];
+
+    const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+    const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+    const generators = [
+      // 1. 编程语言语法与工程小贴士
+      () => `How do I format an ISO date string in ${pick(LANGS)}? Give a one-line example.`,
+      () => `What is the recommended way to handle null or undefined in ${pick(LANGS)}? Brief tip.`,
+      () => `Give a concise 1-line ${pick(LANGS)} snippet to read environment variables.`,
+      () => `What does the '${pick(KEYWORDS)}' keyword do in ${pick(LANGS)}? Explain in one sentence.`,
+      () => `How do I safely parse a JSON string in ${pick(LANGS)}? Answer in one line.`,
+      () => `Show a quick ${pick(LANGS)} one-liner to filter out empty strings from an array or list.`,
+      () => `What is the idiomatic way to handle file I/O errors in ${pick(LANGS)}? Short tip.`,
+      () => `Give an example of a simple dictionary/map lookup with a fallback default in ${pick(LANGS)}.`,
+
+      // 2. 命令行与 DevOps / Linux 运维
+      () => `In ${pick(TOOLS)}, what command shows the recent commit summaries or status? Give just the command.`,
+      () => `In Linux bash, what command checks free memory or disk usage in human-readable format? Brief command.`,
+      () => `How do I pass a custom Authorization Bearer header using curl? Give the flag.`,
+      () => `What is the difference between git rebase and git merge in one sentence?`,
+      () => `How do I format or pretty-print a JSON file using the jq command line tool? Short example.`,
+      () => `In Linux, how do I find processes listening on a specific port using ss or lsof? One command.`,
+      () => `What command lists running Docker containers with their CPU and memory usage? One line.`,
+
+      // 3. 算法、数据结构与系统设计
+      () => `What is the average time complexity of ${pick(ALGOS)}? Answer in one line.`,
+      () => `In REST API design, why should a GET request be idempotent and safe? Brief note.`,
+      () => `What is the key difference between horizontal scaling and vertical scaling in cloud architecture?`,
+      () => `What is the main benefit of connection pooling in database drivers? Short answer.`,
+      () => `Explain what a race condition is in concurrent programming in one sentence.`,
+      () => `What does the CAP theorem state in distributed databases? Keep it under 20 words.`,
+
+      // 4. 通用日常与工程生活问答
+      () => `Give me an inspiring thought about engineering craftsmanship in under 15 words.`,
+      () => `Calculate ${randInt(11, 49)} + ${randInt(12, 58)} * ${randInt(2, 6)}. Return only the calculated number.`,
+      () => `Share one practical ergonomics tip for programmers sitting at a desk all day.`,
+      () => `What does HTTP status code ${pick(HTTP_CODES)} indicate? Explain in 5 words.`,
+      () => `Name three core principles of writing clean, maintainable software in bullet points.`,
+      () => `Give a friendly, polite one-sentence message thanking a colleague for a prompt code review.`,
+      () => `What is a good naming convention for boolean variables in code? Give two examples.`
+    ];
+
+    const promptText = pick(generators)();
+    // 随机浮动超参数：temperature 0.45 ~ 0.85，max_tokens 28 ~ 56
+    const temperature = Math.round((0.45 + Math.random() * 0.4) * 100) / 100;
+    const max_tokens = randInt(28, 56);
+
+    return { promptText, temperature, max_tokens };
+  }
+
+  // 兼容老调用引用的提示词列表
+  static get INTL_CHECKIN_PROMPTS() {
+    return [
+      'Give me an inspiring thought about engineering craftsmanship in under 15 words.',
+      'How do I safely parse a JSON string in Python? Answer in one line.',
+      'What does the CAP theorem state in distributed databases? Keep it under 20 words.',
+      'In Linux bash, what command checks free memory in human-readable format?'
+    ];
+  }
 
   static async dailyCheckin(acc, force = false) {
     if (!acc.accessToken) return { success: false, msg: '无有效 Token' };
@@ -854,16 +914,16 @@ export class AccountScheduler {
 
     try {
       const model = 'deepseek-v4.1-flash';
-      const prompt = AccountScheduler.INTL_CHECKIN_PROMPTS[Math.floor(Math.random() * AccountScheduler.INTL_CHECKIN_PROMPTS.length)];
-      let messages = [{ role: 'user', content: prompt }];
+      const { promptText, temperature, max_tokens } = AccountScheduler.generateDynamicCheckinDialogue();
+      let messages = [{ role: 'user', content: promptText }];
       messages = ensureLeadingSystemMessage(messages, 'intl');
 
       const upstreamPayload = {
         model,
         messages,
         stream: true,
-        temperature: 0.7,
-        max_tokens: 32,
+        temperature,
+        max_tokens,
         stream_options: { include_usage: true },
         extra_vars: {
           initiator: 'user',
@@ -938,7 +998,7 @@ export class AccountScheduler {
       acc.lastCheckinTime = getLocalTimeString();
       acc.lastCheckinMsg = userMsg;
 
-      Logger.info('CHECKIN', `国际版账号 [${formatAccountFullDesc(acc)}] 活跃对话打卡成功: ${userMsg} (上游回复: ${replyText.trim().slice(0, 30) || 'OK'})`);
+      Logger.info('CHECKIN', `国际版账号 [${formatAccountFullDesc(acc)}] 活跃对话打卡成功: [${promptText.slice(0, 50)}...] (上游回复: ${replyText.trim().slice(0, 30) || 'OK'})`);
 
       // 稍等 1 秒待上游入账后刷新积分
       await new Promise(r => setTimeout(r, 1200));
@@ -972,6 +1032,12 @@ export class AccountScheduler {
       if (!force && isAlreadyDoneToday) {
         skippedCount++;
         continue;
+      }
+
+      // 避免规律性连续突发：若目标账号为国际版且本次已有账号打卡，引入 8 ~ 20 秒随机休眠打散时序
+      if (resolveAccountRegion(acc) === REGION_INTL && checkedCount > 0) {
+        const jitterMs = Math.floor(8000 + Math.random() * 12000);
+        await new Promise(r => setTimeout(r, jitterMs));
       }
 
       // 未签到或已跨入新的一天，进行签到/打卡（国内版走签到接口，国际版走活跃对话）

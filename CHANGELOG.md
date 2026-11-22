@@ -8,6 +8,22 @@
 
 ---
 
+## [2.179.0-gw.30] - 2026-11-23
+
+### 国际版每日活跃打卡拟真随机对话引擎与时序防抖对齐 (International Realistic Dynamic Dialogue Engine & Jitter Delay Anti-Pattern)
+- **国际版动态拟真打卡对话生成引擎 (`AccountScheduler.generateDynamicCheckinDialogue` in `src/core/scheduler.mjs`)**：
+  - **背景与风控规避**：此前国际版打卡仅依靠 7 句固化静态问答（如 `Hi, please reply with "pong"`）且采用固定超参数（`temperature: 0.7`, `max_tokens: 32`）。同一出口 IP 在多个国际版账号上高频执行完全相同的机械性对话，极易被腾讯上游风控判定为批量自动化异常行为并导致 11140 限制；
+  - **四大多元化拟真技术库与 300+ 动态组合**：
+    1. **编程语言与工程实战**：覆盖 10 种主流编程语言（Python, TypeScript, Go, Rust, Java, C++, Shell, SQL...）与 10 种核心关键字（`async/await`, `defer`, `match`...）的动态组合提问；
+    2. **DevOps、Git 与 Linux 命令行运维**：涵盖 Git 提交、Linux 内存/磁盘查询、Docker 容器监控、curl 请求头与 jq 处理等高频开发场景；
+    3. **计算机科学与系统架构**：覆盖常见算法平均时间复杂度、REST 幂等性、连接池设计、分布式 CAP 原理等技术探讨；
+    4. **动态趣味计算与日常技术生活**：包含随机算式动态生成、工位健康贴士、HTTP 状态码速答与 Pull Request 礼貌感谢语；
+  - **超参数动态扰动 (Parameter Jitter)**：每次调用动态计算浮动的 `temperature` (0.45 ~ 0.85) 与 `max_tokens` (28 ~ 56)，使每次打卡请求无论在报文内容还是在请求参数上均全局唯一、零机械指纹。
+- **账号间时序打散与随机防抖休眠 (`AccountScheduler.checkAndRunHourlyCheckin`)**：
+  - 在每小时定时巡检多账号执行打卡时，针对国际版账号自动注入 `8s ~ 20s` 的随机动态休眠抖动（Jitter Delay），杜绝同一分钟内并发突发连续请求，彻底消除自动化批处理规律。
+
+---
+
 ## [2.179.0-gw.29] - 2026-11-23
 
 ### 官方上游 11140/11142 风控受限协议对齐、智能标记隔离与自动故障转移接力 (Official Risk-Control 11140/11142 Alignment, Auto-Isolation & Seamless Failover)
