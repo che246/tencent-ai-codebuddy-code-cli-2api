@@ -8,6 +8,21 @@
 
 ---
 
+## [2.179.0-gw.31] - 2026-11-23
+
+### 国际版每日打卡超参数严格对齐官方 CLI 对话规范 (Checkin Hyperparameters Strict Alignment with Official CLI)
+- **官方 CLI 超参数与请求体规范严格对齐 (Rule 0 & Rule 2)**：
+  - **背景与逆向依据**：此前网关在国际版打卡对话中尝试使用动态浮动超参数（`temperature: 0.45 ~ 0.85`, `max_tokens: 28 ~ 56`）。深入逆向官方 CLI 核心执行体 `package/dist/codebuddy-headless.js` 与模型清单 `package/product.json` 确认：
+    1. 官方 CLI 核心定义 `DEFAULT_TEMPERATURE = 1`，且在 `product.json` 中 `deepseek-v4.1-flash` 的标准温度恒为 `"temperature": 1`；
+    2. 官方 CLI 构造对话请求体时，`max_tokens` 在未被用户显式限制时缺省不传（交由上游服务端按模型规格默认上限 `maxOutputTokens: 128000` 自动处理），不传随机小整数；
+    3. 请求体标准结构恒为 `{ model, messages, stream: true, temperature: 1, stream_options: { include_usage: true }, extra_vars: { initiator: 'user', interactionType: 'prompt' } }`。
+  - **修改实施 (`AccountScheduler.generateDynamicCheckinDialogue` & `dailyCheckinIntl` in `src/core/scheduler.mjs`)**：
+    - 移除一切人工随机扰动的非官方超参数（移除浮点温度扰动与随机 `max_tokens`）；
+    - 超参数严格收敛对齐官方 CLI：设置 `temperature: 1`，缺省 `max_tokens`；
+    - 保持 300+ 种技术领域自然提示词与账号间 8~20s 随机时序打散，在杜绝报文内容重复指纹的同时，保证报文协议与官方 CLI 终端发出的请求体 100% 字节级对齐。
+
+---
+
 ## [2.179.0-gw.30] - 2026-11-23
 
 ### 国际版每日活跃打卡拟真随机对话引擎与时序防抖对齐 (International Realistic Dynamic Dialogue Engine & Jitter Delay Anti-Pattern)

@@ -744,8 +744,11 @@ export class AccountScheduler {
 
   /**
    * 国际版拟真打卡对话动态生成器 (Anti-Pattern / Anti-Fingerprint)
-   * 结合多学科领域、动态技术术语、随机数学算式与浮动超参数，
+   * 结合多学科领域、动态技术术语、随机数学算式，
    * 组合生成 300+ 种完全不重样的开发者自然问答，彻底杜绝机械化固定词指纹与规律性检测。
+   * 超参数规范严格对齐官方 CLI 行为：
+   *   - temperature: 1 (严格溯源 package/dist/codebuddy-headless.js DEFAULT_TEMPERATURE 与 product.json)
+   *   - max_tokens: 遵循官方 CLI 普通 prompt 规范，缺省不强制硬截断（交由上游服务端按模型规格默认处理）
    */
   static generateDynamicCheckinDialogue() {
     const LANGS = ['Python', 'TypeScript', 'JavaScript', 'Go', 'Rust', 'Java', 'C++', 'Shell', 'SQL', 'Kotlin'];
@@ -796,11 +799,12 @@ export class AccountScheduler {
     ];
 
     const promptText = pick(generators)();
-    // 随机浮动超参数：temperature 0.45 ~ 0.85，max_tokens 28 ~ 56
-    const temperature = Math.round((0.45 + Math.random() * 0.4) * 100) / 100;
-    const max_tokens = randInt(28, 56);
+    // 超参数严格对齐官方 CLI 对话规范：
+    // 官方 CLI DEFAULT_TEMPERATURE = 1，package/product.json 声明 deepseek-v4.1-flash temperature: 1
+    // 不进行人工超参数扰动，与官方 CLI 请求体完全一致
+    const temperature = 1;
 
-    return { promptText, temperature, max_tokens };
+    return { promptText, temperature };
   }
 
   // 兼容老调用引用的提示词列表
@@ -914,7 +918,7 @@ export class AccountScheduler {
 
     try {
       const model = 'deepseek-v4.1-flash';
-      const { promptText, temperature, max_tokens } = AccountScheduler.generateDynamicCheckinDialogue();
+      const { promptText, temperature } = AccountScheduler.generateDynamicCheckinDialogue();
       let messages = [{ role: 'user', content: promptText }];
       messages = ensureLeadingSystemMessage(messages, 'intl');
 
@@ -923,7 +927,6 @@ export class AccountScheduler {
         messages,
         stream: true,
         temperature,
-        max_tokens,
         stream_options: { include_usage: true },
         extra_vars: {
           initiator: 'user',
