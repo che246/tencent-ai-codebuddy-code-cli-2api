@@ -353,12 +353,14 @@
           `;
         } else if (a.isCooldown) {
           lockPoolHtml = `<span class="badge badge-cool" title="账号处于全局冷却退避中">⏱️ 全局锁 (剩 ${a.cooldownRemainingSec || 0}s)</span>`;
+        } else if (a.status === 'restricted') {
+          lockPoolHtml = `<span class="badge badge-err" style="background:rgba(239,68,68,0.15); color:#ef4444; border:1px solid rgba(239,68,68,0.35);" title="${escapeAttr(a.restrictedReason || '已被上游风控封锁')}">🚫 全局不可用</span>`;
         } else {
           lockPoolHtml = `<span class="badge badge-ok">🟢 全部模型可用</span>`;
         }
 
-        const unlockBtn = (a.lockedCount > 0 || a.isCooldown)
-          ? `<button class="btn-outline" style="padding:3px 7px; font-size:11px; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')" title="立即解除锁池与冷却状态">🔓 解锁</button>`
+        const unlockBtn = (a.lockedCount > 0 || a.isCooldown || a.status === 'restricted')
+          ? `<button class="btn-outline" style="padding:3px 7px; font-size:11px; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')" title="${a.status === 'restricted' ? '重置风控受限状态并解除锁池' : '立即解除锁池与冷却状态'}">🔓 解锁</button>`
           : '';
 
         return `
@@ -382,6 +384,7 @@
             <td><span class="badge ${a.inFlight > 0 ? 'badge-blue' : ''}">${a.inFlight || 0} / ${maxLimit}</span></td>
             <td>
               ${a.status === 'unauthorized' ? '<span class="badge badge-err">Token失效</span>' : 
+                a.status === 'restricted' ? `<span class="badge badge-err" style="background:rgba(239,68,68,0.2); color:#ef4444; border:1px solid rgba(239,68,68,0.4);" title="${escapeAttr(a.restrictedReason || '账号存在异常行为，已被上游限制使用 (11140)')}">🚫 风控受限</span>` :
                 a.isCooldown ? '<span class="badge badge-cool">冷却退避</span>' : 
                 '<span class="badge badge-ok">健康活跃</span>'}
             </td>
@@ -1060,7 +1063,7 @@
 
 // ─── 账号模型锁定解除 ─────────────────────────────────────────────────────
     async function unlockAccountModels(uid, modelId = null) {
-      const targetLabel = modelId ? `模型 [${modelId}]` : '所有模型的锁池与冷却状态';
+      const targetLabel = modelId ? `模型 [${modelId}]` : '所有模型的锁池、冷却与风控受限状态';
       if (!confirm(`确定为该账号解除 ${targetLabel} 吗？`)) return;
       try {
         const res = await fetch('/api/accounts/unlock-models', {

@@ -18,6 +18,7 @@ import { Logger } from './logger.mjs';
 import { LogDatabase } from './database.mjs';
 import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
 import { prepareUpstreamBody, ensureLeadingSystemMessage } from '../upstream/payload.mjs';
+import { ACCOUNT_RESTRICTED_CODES, extractStructuredBizCode } from '../upstream/errors.mjs';
 
 // ─── 官方 CLI 常量与时间基准（严格溯源 package/dist/codebuddy-headless.js）───────────
 //
@@ -754,6 +755,9 @@ export class AccountScheduler {
 
   static async dailyCheckin(acc, force = false) {
     if (!acc.accessToken) return { success: false, msg: '无有效 Token' };
+    if (acc.status === 'restricted') {
+      return { success: false, msg: '账号已被上游风控限制 (11140)，已跳过签到' };
+    }
     const region = resolveAccountRegion(acc);
     if (region === REGION_INTL) {
       return this.dailyCheckinIntl(acc, force);
@@ -880,11 +884,27 @@ export class AccountScheduler {
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
+        let parsedErr = {};
+        try { parsedErr = JSON.parse(errText); } catch (_) {}
+        const bizCode = extractStructuredBizCode(parsedErr) || parsedErr.code;
+
         acc.lastCheckinDate = today;
         acc.lastCheckinSuccess = false;
         acc.lastCheckinTime = getLocalTimeString();
+
+        if (ACCOUNT_RESTRICTED_CODES.has(bizCode) || res.status === 403) {
+          acc.status = 'restricted';
+          acc.restrictedAt = Date.now();
+          acc.restrictedReason = parsedErr.displayMsg?.zh || parsedErr.msg || '账号存在异常行为，已被限制使用 (11140)';
+          acc.lastCheckinMsg = `上游风控受限 (11140): ${acc.restrictedReason}`;
+          Logger.error('CHECKIN', `国际版账号 [${formatAccountFullDesc(acc)}] 触发上游风控限制 (HTTP 403 / ${bizCode || '11140'}): ${acc.restrictedReason}，已自动标记为受限并移出调度池`);
+          saveAccounts();
+          return { success: false, msg: acc.lastCheckinMsg };
+        }
+
         acc.lastCheckinMsg = `对话打卡失败 (HTTP ${res.status})`;
         Logger.error('CHECKIN', `国际版账号 [${formatAccountFullDesc(acc)}] 活跃对话打卡失败 HTTP ${res.status}: ${errText.slice(0, 150)}`);
+        saveAccounts();
         return { success: false, msg: acc.lastCheckinMsg };
       }
 

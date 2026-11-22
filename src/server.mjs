@@ -200,6 +200,21 @@ if (staleInFlightCleared > 0) {
   Logger.info('SYSTEM', `已重置历史残留的并发计数 (共 ${staleInFlightCleared} 个)，避免占用账号名额`);
 }
 
+// 启动时初始化：检测历史已记录的风控受限账号 (HTTP 403 / 11140)，确保状态标记为 restricted 并移出调度池
+let initialRestrictedCount = 0;
+for (const acc of accounts) {
+  if (acc.status === 'healthy' && acc.lastCheckinMsg?.includes('HTTP 403')) {
+    acc.status = 'restricted';
+    acc.restrictedAt = acc.restrictedAt || Date.now();
+    acc.restrictedReason = '账号存在异常行为，已被限制使用 (11140)';
+    initialRestrictedCount++;
+  }
+}
+if (initialRestrictedCount > 0) {
+  saveAccounts();
+  Logger.warn('AUTH', `启动初始化：已自动识别并标记 ${initialRestrictedCount} 个上游风控受限账号 (HTTP 403 / 11140)，已移出可用调度池`);
+}
+
 for (const acc of accounts) {
   AccountScheduler.refreshCredits(acc);
 }

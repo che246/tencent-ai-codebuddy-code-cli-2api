@@ -620,6 +620,8 @@ export async function handleApiRoutes(req, res, url) {
         allTimeTokensDisplay: formatTokenNumber(allTimeTokens),
         inFlight: a.inFlight || 0,
         status: a.status,
+        restrictedReason: a.restrictedReason || '',
+        restrictedAt: a.restrictedAt || 0,
         expiresAt: a.expiresAt || 0,
         expiresAtFmt: a.expiresAt ? new Date(a.expiresAt).toLocaleDateString() : '未知',
         hasRefreshToken: canAutoRefresh,
@@ -1122,11 +1124,17 @@ export async function handleApiRoutes(req, res, url) {
           acc.modelCooldowns = {};
           acc.modelCooldownReasons = {};
           acc.cooldownUntil = 0;
+          if (acc.status === 'restricted') {
+            acc.status = 'healthy';
+            delete acc.restrictedAt;
+            delete acc.restrictedReason;
+            Logger.info('COOLDOWN', `已手动解除账号 [${formatAccountFullDesc(acc)}] 的风控受限状态，已恢复健康活跃`);
+          }
           Logger.info('COOLDOWN', `已手动一键解除账号 [${formatAccountFullDesc(acc)}] 的所有模型锁池与冷却状态`);
         }
         saveAccounts();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true, msg: '锁池状态已成功解除' }));
+        return res.end(JSON.stringify({ ok: true, msg: '锁池与受限状态已成功解除' }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: e.message }));

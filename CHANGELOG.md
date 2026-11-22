@@ -8,6 +8,31 @@
 
 ---
 
+## [2.179.0-gw.29] - 2026-11-23
+
+### 官方上游 11140/11142 风控受限协议对齐、智能标记隔离与自动故障转移接力 (Official Risk-Control 11140/11142 Alignment, Auto-Isolation & Seamless Failover)
+- **官方上游 11140/11142 业务错误码与状态机对齐 (Rule 0 & Rule 2)**：
+  - **背景与逆向依据**：当账号触发腾讯上游安全风控策略时，上游返回 HTTP 403 `{"code":11140,"msg":"request illegal","displayMsg":{"zh":"账号存在异常行为，已被限制使用"}}`。逆向 `package/dist/codebuddy-headless.js` 确认，官方 CLI 将 `11140` 与 `11142` 严格归类为 `{ category: "auth", subcategory: "auth_forbidden" }`，并在 `rf = new Set([11140, 11141, 11142, 17271...])` 集合中将其排除在普通 Token 过期（`auth_expired`）之外，明确判定为账号级风控拦截（不可通过刷新 Token 恢复）；
+  - **枚举与映射体系 (`src/upstream/errors.mjs`)**：
+    - 新增 `ServerErrorCode.AccountRestricted = 11140` 与 `ServerErrorCode.AccountForbidden = 11142` 枚举；
+    - 建立 `ACCOUNT_RESTRICTED_CODES` 集合，统一判定账号风控拦截；
+    - 在 `formatOpenAIError` 中映射为 `type: "permission_error"`, `code: "account_restricted"`。
+- **协议适配层自愈熔断与平滑故障转移 (`src/adapters/openai.mjs` & `src/adapters/anthropic.mjs`)**：
+  - **智能识别与状态沉降**：当推理调用命中 `ACCOUNT_RESTRICTED_CODES` (11140/11142) 时，自动将该账号标记为 `acc.status = 'restricted'`，记录受限原因与时间戳并立即持久化落盘（`saveAccounts()`）；
+  - **无感故障转移 (Failover)**：自动清理受限账号的粘性会话绑定（Sticky Session），立即调度池中其他可用健康账号（如国内版主力账号）无缝接力续跑当前模型，终端用户调用完全无感知、不报错；
+  - **模型降级闭环**：若全池账号均受限，自动触发模型降级链切换备选模型，杜绝死锁与空等。
+- **巡检打卡任务风控感知与日志降噪 (`src/core/scheduler.mjs`)**：
+  - **打卡接口感知**：`dailyCheckinIntl` 请求上游若捕获 HTTP 403 / 11140，自动将账号沉降为 `restricted` 状态，免除后续无谓重试；
+  - **定时巡检抑制**：`checkAndRunHourlyCheckin` 与 `dailyCheckin` 自动跳过 `restricted` 账号，彻底消除每小时定时任务对受限账号的无效重试与日志刷屏。
+- **启动状态初始化与自适应修复 (`src/server.mjs`)**：
+  - 网关服务启动时自动巡检全量账号，若账号最近一次打卡已确认为 HTTP 403 风控限制，直接将其初始化为 `restricted` 并移出活跃调度池，保障国内正常流量 100% 命中健康账号。
+- **Web 控制台全链路可视化与一键解锁 (`src/web/public/scripts/accounts.js` & `src/web/routes.mjs`)**：
+  - **状态徽章直观呈现**：账号列表中受限账号显示醒目的 `🚫 风控受限` 红色徽章，鼠标悬停浮窗呈现上游官方原因（“账号存在异常行为，已被限制使用 (11140)”）；
+  - **调度锁池呈现**：模型可用性列展示 `🚫 全局不可用`；
+  - **一键重置与申诉复原**：操作列与一键解锁逻辑中支持管理员在申诉成功或需人工复查时，点击 `🔓 解锁` 即可一键清除受限状态并恢复为 `🟢 健康活跃`。
+
+---
+
 ## [2.179.0-gw.28] - 2026-11-20
 
 ### 积分历史变动监控支持按日期筛选且默认显示今日 (Credit History Date Filtering & Default Today View)

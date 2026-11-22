@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { endpointsFor, config, formatAccountLogName, formatAccountFullDesc, isModelBlacklisted, isStepUnavailableByBlacklist, getLoggingPolicy } from '../config.mjs';
+import { endpointsFor, config, saveAccounts, formatAccountLogName, formatAccountFullDesc, isModelBlacklisted, isStepUnavailableByBlacklist, getLoggingPolicy } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { AccountScheduler, sessionStickyMap, extractSessionKey } from '../core/scheduler.mjs';
 import { buildOfficialUpstreamHeaders } from '../upstream/headers.mjs';
@@ -8,6 +8,7 @@ import {
   formatOpenAIError,
   MODEL_FALLBACK_CODES,
   QUOTA_EXHAUSTED_CODES,
+  ACCOUNT_RESTRICTED_CODES,
   ServerErrorCode
 } from '../upstream/errors.mjs';
 import {
@@ -348,7 +349,42 @@ export async function handleOpenAiChatCompletions(req, res, rawBody) {
                 if (wasPinned) {
                   Logger.warn('FAILOVER', `全局指定账号 [${formatAccountLogName(acc)}] Token 失效 (HTTP 401)，已自动切换回账号池动态轮换！`);
                 }
+                saveAccounts();
                 continue; // 切换其他账号
+              } else if (ACCOUNT_RESTRICTED_CODES.has(bizCode) || (upstreamRes.status === 403 && ACCOUNT_RESTRICTED_CODES.has(bizCode))) {
+                acc.status = 'restricted';
+                acc.restrictedAt = Date.now();
+                acc.restrictedReason = parsedErr.displayMsg?.zh || parsedErr.msg || '账号存在异常行为，已被限制使用 (11140)';
+                Logger.error('AUTH', `账号 [${formatAccountLogName(acc)}] 触发上游风控限制 (HTTP 403 / 业务码: ${bizCode || '11140'}): ${acc.restrictedReason}，已自动标记为受限并移出调度池`);
+                saveAccounts();
+                if (sessionKey && sessionStickyMap.get(sessionKey)?.uid === acc.uid) {
+                  sessionStickyMap.delete(sessionKey);
+                }
+
+                // 触发账号自动故障转移 (Failover)
+                const canFailoverAccount = config.accountFailoverEnabled !== false;
+                const otherAcc = canFailoverAccount ? AccountScheduler.selectAccount(curModel, sessionKey, { excludeUids: Array.from(attemptedUids), region: curRegion }) : null;
+                if (otherAcc) {
+                  const wasPinned = config.pinnedAccount && (
+                    config.pinnedAccount === acc.uid ||
+                    config.pinnedAccount === acc.email ||
+                    (acc.note && config.pinnedAccount.toLowerCase() === acc.note.toLowerCase())
+                  );
+                  const failoverMsg = wasPinned
+                    ? `全局指定账号 [${formatAccountLogName(acc)}] 触发上游风控受限 (11140)，已自动切换回账号池动态轮换，由账号 [${formatAccountLogName(otherAcc)}] 接力服务！`
+                    : `账号 [${formatAccountLogName(acc)}] 触发上游风控受限 (11140)，自动切换至账号池中可用账号 [${formatAccountLogName(otherAcc)}] 续跑该模型！`;
+                  Logger.warn('FAILOVER', failoverMsg);
+                  continue; // 换账号重试当前模型
+                }
+
+                // 若池中无其他可用账号，检查是否还有下一个备选降级模型
+                if (modelIndex + 1 < candidateSteps.length) {
+                  const nextStep = candidateSteps[modelIndex + 1];
+                  const nextModel = nextStep.region ? `${nextStep.region}:${nextStep.model}` : nextStep.model;
+                  Logger.warn('REROUTE', `账号池当前账号均受限，自动降级切换至备用模型 [${nextModel}] (${modelIndex + 1}/${candidateSteps.length - 1})`);
+                  modelIndex++;
+                  break;
+                }
               }
 
               return { ok: false, status: upstreamRes.status, errText, bizCode, acc };

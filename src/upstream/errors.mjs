@@ -17,6 +17,8 @@ export const ServerErrorCode = {
                                 //   2) User-Agent 命中风控（如含 "python-requests"）
                                 //      返回 {"code":11128,"msg":"request illegal"}
   InvalidParams: 11133,
+  AccountRestricted: 11140,     // 账号存在异常行为已被限制使用 (auth_forbidden, 对齐 package/dist/codebuddy-headless.js rf 集合)
+  AccountForbidden: 11142,      // 账号被禁止使用 (auth_forbidden)
   ModelNotAllowed: 11158,       // 模型不被当前用户类型允许（如个人免费账号访问 GPT/Grok）
   UsageLimitExceeded: 14001,    // 个人额度用尽
   ConversationChatTooMany: 14002,
@@ -52,6 +54,12 @@ export const QUOTA_EXHAUSTED_CODES = new Set([
   ServerErrorCode.UsageLimitNoTokenBudget,
   ServerErrorCode.UsageLimitExceededDepartment,
   ServerErrorCode.UsageLimitEnterprisePackageExhausted
+]);
+
+// 触发账号状态置为受限 (restricted) 的上游风控封禁错误码集合 (对齐 CLI rf 集合与 auth_forbidden)
+export const ACCOUNT_RESTRICTED_CODES = new Set([
+  ServerErrorCode.AccountRestricted, // 11140
+  ServerErrorCode.AccountForbidden   // 11142
 ]);
 
 // 瞬时抖动限流 (短窗口)
@@ -138,6 +146,9 @@ export function formatOpenAIError(status, upstreamText) {
     } else if (status === 402 || QUOTA_EXHAUSTED_CODES.has(bizCode)) {
       code = "insufficient_quota";
       type = "insufficient_quota";
+    } else if (ACCOUNT_RESTRICTED_CODES.has(bizCode) || (status === 403 && ACCOUNT_RESTRICTED_CODES.has(bizCode))) {
+      code = "account_restricted";
+      type = "permission_error";
     }
     return { error: { message: msg, type, code, param: null } };
   } catch (_) {
