@@ -8,6 +8,19 @@
 
 ---
 
+## [2.179.0-gw.32] - 2026-11-25
+
+### 功能增强 (Features)：账号池运维状态与配额监控新增健康状态筛选
+- **背景与诉求**：账号池同时存在国内版与国际版账号，且账号可能处于「健康活跃」「风控受限 (11140)」「冷却退避」「Token失效」等不同运维状态，需要在「账号池运维状态与配额监控」工具栏按健康状态快速筛选定位。
+- **具体改动**：
+  - **[index.html](file:///d:/AI/tencent-ai-codebuddy-code/src/web/public/index.html)**：在「账号池运维状态与配额监控」筛选工具栏新增 `健康状态:` 按钮组（`全部`、`🟢 健康活跃`、`🚫 风控受限`、`⏱️ 冷却退避`、`🔴 Token失效`），并附带实时数量角标。
+  - **[accounts.js](file:///d:/AI/tencent-ai-codebuddy-code/src/web/public/scripts/accounts.js)**：
+    - 提取统一的 `getAccountHealthState()` 状态判定函数，确保列表过滤、筛选计数角标与表格「健康状态」列徽章 100% 同源一致；
+    - 实现 `setAccountHealthFilter()`、`resetAccountFilters()` 以及区域筛选与健康状态筛选的交叉联动计数 (`updateAccountFilterCounts()`)；
+    - 空列表提示自动汇总当前激活的区域、健康状态与搜索条件，并提供一键「重置筛选」按钮。
+
+---
+
 ## [2.179.0-gw.31] - 2026-11-23
 
 ### 国际版每日打卡超参数严格对齐官方 CLI 对话规范 (Checkin Hyperparameters Strict Alignment with Official CLI)

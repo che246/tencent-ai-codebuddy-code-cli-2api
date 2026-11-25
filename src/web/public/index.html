@@ -314,9 +314,9 @@
               </div>
             </div>
 
-            <!-- 账号池区域与日期筛选工具栏 -->
+            <!-- 账号池区域、健康状态与日期筛选工具栏 -->
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.06);">
-              <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:12px 16px; flex-wrap:wrap;">
                 <!-- 区域筛选 -->
                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                   <span style="font-size:12px; color:var(--text-muted); font-weight:600;">区域筛选:</span>
@@ -329,6 +329,28 @@
                     </button>
                     <button type="button" class="filter-btn" id="accFilterBtnIntl" onclick="setAccountRegionFilter('intl')">
                       🌐 国际版 (国外) <span id="accCountIntl" style="opacity:0.85; font-size:11px;">(0)</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 健康状态筛选 -->
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                  <span style="font-size:12px; color:var(--text-muted); font-weight:600;">健康状态:</span>
+                  <div class="filter-bar" style="margin-bottom:0; display:inline-flex; gap:6px;" id="accHealthFilterTabs">
+                    <button type="button" class="filter-btn active" id="accHealthBtnAll" onclick="setAccountHealthFilter('all')">
+                      全部 <span id="accHealthCountAll" style="opacity:0.85; font-size:11px;">(0)</span>
+                    </button>
+                    <button type="button" class="filter-btn" id="accHealthBtnHealthy" onclick="setAccountHealthFilter('healthy')">
+                      🟢 健康活跃 <span id="accHealthCountHealthy" style="opacity:0.85; font-size:11px;">(0)</span>
+                    </button>
+                    <button type="button" class="filter-btn" id="accHealthBtnRestricted" onclick="setAccountHealthFilter('restricted')">
+                      🚫 风控受限 <span id="accHealthCountRestricted" style="opacity:0.85; font-size:11px;">(0)</span>
+                    </button>
+                    <button type="button" class="filter-btn" id="accHealthBtnCooldown" onclick="setAccountHealthFilter('cooldown')">
+                      ⏱️ 冷却退避 <span id="accHealthCountCooldown" style="opacity:0.85; font-size:11px;">(0)</span>
+                    </button>
+                    <button type="button" class="filter-btn" id="accHealthBtnUnauthorized" onclick="setAccountHealthFilter('unauthorized')">
+                      🔴 Token失效 <span id="accHealthCountUnauthorized" style="opacity:0.85; font-size:11px;">(0)</span>
                     </button>
                   </div>
                 </div>

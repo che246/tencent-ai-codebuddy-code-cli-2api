@@ -1,29 +1,88 @@
 // ─── 账号池状态管理与刷新 ─────────────────────────────────────────────────
     let allAccountsData = [];
     let currentAccountRegionFilter = 'all'; // 'all' | 'cn' | 'intl'
+    let currentAccountHealthFilter = 'all'; // 'all' | 'healthy' | 'restricted' | 'cooldown' | 'unauthorized'
     let currentAccountDateRange = 'today';   // 'today' | 'yesterday' | '7d' | '30d' | 'all' (默认今天)
+
+    const ACCOUNT_REGION_BTN_IDS = {
+      all: 'accFilterBtnAll',
+      cn: 'accFilterBtnCn',
+      intl: 'accFilterBtnIntl'
+    };
+
+    const ACCOUNT_HEALTH_BTN_IDS = {
+      all: 'accHealthBtnAll',
+      healthy: 'accHealthBtnHealthy',
+      restricted: 'accHealthBtnRestricted',
+      cooldown: 'accHealthBtnCooldown',
+      unauthorized: 'accHealthBtnUnauthorized'
+    };
+
+    const ACCOUNT_DATE_BTN_IDS = {
+      today: 'accDateBtnToday',
+      yesterday: 'accDateBtnYesterday',
+      '7d': 'accDateBtn7d',
+      '30d': 'accDateBtn30d',
+      all: 'accDateBtnAll'
+    };
+
+    const ACCOUNT_REGION_LABELS = {
+      cn: '国内版',
+      intl: '国际版 (国外)'
+    };
+
+    const ACCOUNT_HEALTH_LABELS = {
+      healthy: '健康活跃',
+      restricted: '风控受限',
+      cooldown: '冷却退避',
+      unauthorized: 'Token失效'
+    };
+
+    /**
+     * 统一提取账号的健康展示状态，确保筛选计数、行过滤与状态徽章判定保持一致
+     */
+    function getAccountHealthState(acc) {
+      if (acc.status === 'unauthorized') return 'unauthorized';
+      if (acc.status === 'restricted') return 'restricted';
+      if (acc.isCooldown) return 'cooldown';
+      return 'healthy';
+    }
+
+    function updateFilterButtonActiveState(btnMap, activeKey) {
+      Object.entries(btnMap).forEach(([key, btnId]) => {
+        const btn = document.getElementById(btnId);
+        if (btn) btn.classList.toggle('active', key === activeKey);
+      });
+    }
 
     function setAccountRegionFilter(filter) {
       currentAccountRegionFilter = filter;
-      ['all', 'cn', 'intl'].forEach(f => {
-        const btn = document.getElementById('accFilterBtn' + f.charAt(0).toUpperCase() + f.slice(1));
-        if (btn) {
-          if (f === filter) btn.classList.add('active');
-          else btn.classList.remove('active');
-        }
-      });
+      updateFilterButtonActiveState(ACCOUNT_REGION_BTN_IDS, filter);
+      updateAccountFilterCounts();
+      renderAccountList();
+    }
+
+    function setAccountHealthFilter(filter) {
+      currentAccountHealthFilter = filter;
+      updateFilterButtonActiveState(ACCOUNT_HEALTH_BTN_IDS, filter);
+      updateAccountFilterCounts();
+      renderAccountList();
+    }
+
+    function resetAccountFilters() {
+      currentAccountRegionFilter = 'all';
+      currentAccountHealthFilter = 'all';
+      const searchEl = document.getElementById('accSearchInput');
+      if (searchEl) searchEl.value = '';
+      updateFilterButtonActiveState(ACCOUNT_REGION_BTN_IDS, 'all');
+      updateFilterButtonActiveState(ACCOUNT_HEALTH_BTN_IDS, 'all');
+      updateAccountFilterCounts();
       renderAccountList();
     }
 
     function setAccountDateRange(range) {
       currentAccountDateRange = range;
-      ['today', 'yesterday', '7d', '30d', 'all'].forEach(r => {
-        const btn = document.getElementById('accDateBtn' + r.charAt(0).toUpperCase() + r.slice(1));
-        if (btn) {
-          if (r === range) btn.classList.add('active');
-          else btn.classList.remove('active');
-        }
-      });
+      updateFilterButtonActiveState(ACCOUNT_DATE_BTN_IDS, range);
       const badge = document.getElementById('accTokenRangeBadge');
       const labelMap = { today: '今日', yesterday: '昨日', '7d': '近7天', '30d': '近30天', all: '全部历史' };
       if (badge) {
@@ -33,14 +92,39 @@
     }
 
     function updateAccountFilterCounts() {
-      const cnCount = allAccountsData.filter(a => a.region === 'cn').length;
-      const intlCount = allAccountsData.filter(a => a.region === 'intl').length;
-      const elAll = document.getElementById('accCountAll');
-      const elCn = document.getElementById('accCountCn');
-      const elIntl = document.getElementById('accCountIntl');
-      if (elAll) elAll.innerText = `(${allAccountsData.length})`;
-      if (elCn) elCn.innerText = `(${cnCount})`;
-      if (elIntl) elIntl.innerText = `(${intlCount})`;
+      // 区域计数按当前健康状态联动；健康状态计数按当前区域联动，保证按钮括号数量与点击后列表一致
+      const healthScoped = allAccountsData.filter(a =>
+        currentAccountHealthFilter === 'all' || getAccountHealthState(a) === currentAccountHealthFilter
+      );
+      const regionCounts = {
+        accCountAll: healthScoped.length,
+        accCountCn: healthScoped.filter(a => a.region === 'cn').length,
+        accCountIntl: healthScoped.filter(a => a.region === 'intl').length
+      };
+      Object.entries(regionCounts).forEach(([id, count]) => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = `(${count})`;
+      });
+
+      const regionScoped = allAccountsData.filter(a =>
+        currentAccountRegionFilter === 'all' || a.region === currentAccountRegionFilter
+      );
+      const healthCountMap = { all: regionScoped.length, healthy: 0, restricted: 0, cooldown: 0, unauthorized: 0 };
+      regionScoped.forEach(a => {
+        const state = getAccountHealthState(a);
+        healthCountMap[state] = (healthCountMap[state] || 0) + 1;
+      });
+      const healthCountEls = {
+        all: 'accHealthCountAll',
+        healthy: 'accHealthCountHealthy',
+        restricted: 'accHealthCountRestricted',
+        cooldown: 'accHealthCountCooldown',
+        unauthorized: 'accHealthCountUnauthorized'
+      };
+      Object.entries(healthCountEls).forEach(([state, id]) => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = `(${healthCountMap[state] || 0})`;
+      });
     }
 
     async function forceRefreshCredits() {
@@ -238,8 +322,8 @@
 
       const q = (document.getElementById('accSearchInput')?.value || '').trim().toLowerCase();
       const filtered = allAccountsData.filter(a => {
-        if (currentAccountRegionFilter === 'cn' && a.region !== 'cn') return false;
-        if (currentAccountRegionFilter === 'intl' && a.region !== 'intl') return false;
+        if (currentAccountRegionFilter !== 'all' && a.region !== currentAccountRegionFilter) return false;
+        if (currentAccountHealthFilter !== 'all' && getAccountHealthState(a) !== currentAccountHealthFilter) return false;
         if (q) {
           const uid = (a.uid || '').toLowerCase();
           const email = (a.email || '').toLowerCase();
@@ -253,8 +337,15 @@
       });
 
       if (filtered.length === 0) {
-        const filterName = currentAccountRegionFilter === 'cn' ? '国内版' : (currentAccountRegionFilter === 'intl' ? '国际版 (国外)' : '');
-        tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配${filterName ? '【' + filterName + '】' : ''}的账号</td></tr>`;
+        const activeFilterLabels = [];
+        if (ACCOUNT_REGION_LABELS[currentAccountRegionFilter]) activeFilterLabels.push(ACCOUNT_REGION_LABELS[currentAccountRegionFilter]);
+        if (ACCOUNT_HEALTH_LABELS[currentAccountHealthFilter]) activeFilterLabels.push(ACCOUNT_HEALTH_LABELS[currentAccountHealthFilter]);
+        if (q) activeFilterLabels.push(`关键字: ${escapeHtml(q)}`);
+        const hasFilters = activeFilterLabels.length > 0;
+        const resetBtnHtml = hasFilters
+          ? ` <button type="button" class="btn-outline" style="margin-left:8px; padding:2px 8px; font-size:11px;" onclick="resetAccountFilters()">重置筛选</button>`
+          : '';
+        tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:30px;">未找到匹配${hasFilters ? '【' + activeFilterLabels.join(' / ') + '】' : ''}的账号${resetBtnHtml}</td></tr>`;
         return;
       }
 
@@ -359,8 +450,17 @@
           lockPoolHtml = `<span class="badge badge-ok">🟢 全部模型可用</span>`;
         }
 
-        const unlockBtn = (a.lockedCount > 0 || a.isCooldown || a.status === 'restricted')
-          ? `<button class="btn-outline" style="padding:3px 7px; font-size:11px; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')" title="${a.status === 'restricted' ? '重置风控受限状态并解除锁池' : '立即解除锁池与冷却状态'}">🔓 解锁</button>`
+        const healthState = getAccountHealthState(a);
+        const healthBadgeMap = {
+          unauthorized: '<span class="badge badge-err">Token失效</span>',
+          restricted: `<span class="badge badge-err" style="background:rgba(239,68,68,0.2); color:#ef4444; border:1px solid rgba(239,68,68,0.4);" title="${escapeAttr(a.restrictedReason || '账号存在异常行为，已被上游限制使用 (11140)')}">🚫 风控受限</span>`,
+          cooldown: '<span class="badge badge-cool">冷却退避</span>',
+          healthy: '<span class="badge badge-ok">健康活跃</span>'
+        };
+        const healthBadgeHtml = healthBadgeMap[healthState] || healthBadgeMap.healthy;
+
+        const unlockBtn = (a.lockedCount > 0 || a.isCooldown || healthState === 'restricted')
+          ? `<button class="btn-outline" style="padding:3px 7px; font-size:11px; color:#38bdf8; border-color:#38bdf8;" onclick="unlockAccountModels('${a.uid}')" title="${healthState === 'restricted' ? '重置风控受限状态并解除锁池' : '立即解除锁池与冷却状态'}">🔓 解锁</button>`
           : '';
 
         return `
@@ -382,12 +482,7 @@
             </td>
             <td>${checkinBadge}</td>
             <td><span class="badge ${a.inFlight > 0 ? 'badge-blue' : ''}">${a.inFlight || 0} / ${maxLimit}</span></td>
-            <td>
-              ${a.status === 'unauthorized' ? '<span class="badge badge-err">Token失效</span>' : 
-                a.status === 'restricted' ? `<span class="badge badge-err" style="background:rgba(239,68,68,0.2); color:#ef4444; border:1px solid rgba(239,68,68,0.4);" title="${escapeAttr(a.restrictedReason || '账号存在异常行为，已被上游限制使用 (11140)')}">🚫 风控受限</span>` :
-                a.isCooldown ? '<span class="badge badge-cool">冷却退避</span>' : 
-                '<span class="badge badge-ok">健康活跃</span>'}
-            </td>
+            <td>${healthBadgeHtml}</td>
             <td>${lockPoolHtml}</td>
             <td style="white-space:nowrap;">
               ${pinBtn}
