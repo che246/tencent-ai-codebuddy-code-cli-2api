@@ -8,6 +8,34 @@
 
 ---
 
+## [2.179.0-gw.36] - 2026-11-29
+
+### 功能调整 (Features)：会话粘性默认时长调整为 7 天
+
+- **背景与诉求**：粘性会话（Sticky Session）此前沿用 CLI 原始基准——空闲 5 分钟、绝对存活 30 分钟。该基准是为**单进程单会话消费端**设计的，目的是贴合上游 Prompt Cache 的 5 分钟保留期。但网关面向多个长期挂载的下游客户端（编辑器 / 脚本 / Web 前端），用户可能隔数小时甚至隔天才继续同一对话；沿用 30 分钟窗口会让会话频繁过期重新选号，导致同一用户的连续对话在不同账号间跳变，既打散 Prompt Cache 又让账号池负载抖动。按 VG 决策，默认调整为 **7 天**。
+
+- **关键约束（本轮最重要的发现）**：解绑条件是 `isIdleExpired || isLifetimeExpired`，即**任一超限即解绑**。若只把空闲 TTL 调到 7 天而保留 30 分钟的 `maxLifetime`，后者会先到期把会话清掉，7 天设置**形同虚设**。因此两个值必须同时调整。
+
+- **具体改动**：
+  - **`src/config.mjs`**：新增导出常量 `STICKY_DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000`（604,800,000 ms）；`stickySessionTtlMs` 与 `stickySessionMaxLifetimeMs` 默认值均改为该常量；新增启动期防御——若历史配置里 `maxLifetime < ttl`，自动抬到与 `ttl` 同值，避免老配置把新默认截断。同步把该处注释改写为「网关自有策略，无 CLI 对应实现」并说明放宽理由。
+  - **`src/web/routes.mjs`**：`/api/settings` GET 的兜底默认值由 `300000` / `1800000` 改为 `STICKY_DEFAULT_TTL_MS`；POST 新增 `stickySessionMaxLifetimeMs` 接收分支，并对两个字段同时加上 `[10秒, 365天]` 钳制；保存后执行同一条防御性对齐。
+  - **`src/web/public/index.html`**：输入框 `max` 由 `3600` 放宽到 `2592000`（30 天）——原上限会把 7 天（604800 秒）直接截断，是必须同步修的隐藏限制；默认 `value` 改为 `604800`；徽章由「官方 CLI: 300s」改为「网关默认: 7天」，并说明 maxLifetime 已同步放宽。
+  - **`src/web/public/scripts/settings.js`**：回显默认值同步改为 `604800000`；保存时**同时下发** `stickySessionTtlMs` 与 `stickySessionMaxLifetimeMs`（原实现只发前者，会让服务端保留旧的 30 分钟 maxLifetime）；提示文案改为显示天数。
+  - **`src/core/scheduler.mjs`**：三个 `CLI_*` 常量（3e5 / 6e4 / 18e5）保留为语义参考与回退兜底，注释明确标注网关实际窗口由 config 决定，并说明这属于网关自有策略。
+
+- **实测验证（Node v26.13.1）**：
+  - 默认值：`stickySessionTtlMs = 604800000 (7.00 天)`，`stickySessionMaxLifetimeMs = 604800000 (7.00 天)`，`/api/settings` 与 `sessionStats` 均正确反映；
+  - 场景 A（历史遗留小 maxLifetime）：先设 `max=30分钟, ttl=10秒`，再只把 `ttl` 提到 7 天 → 实际 `ttl=7.00天, max=7.00天`，**确认 7 天不会被 30 分钟截断**；
+  - 场景 B（ttl 调小）：设 `ttl=3天` 而 `max=7天` → max 保持 7 天未被反向压缩，实际生效窗口 = `min(3天, 7天) = 3天`，符合用户意图；
+  - 边界：输入 `9999 天` → 被钳制为 `365 天`；
+  - 落盘：`config.json` 正确写入 `604800000`；
+  - 全量 26 个模块语法检查通过。
+
+- **涉及文件**：`src/config.mjs`、`src/core/scheduler.mjs`、`src/web/routes.mjs`、`src/web/public/index.html`、`src/web/public/scripts/settings.js`。
+
+- **运维提示**：已有部署若 `config.json` 中已写入旧值（`300000` / `1800000`），需通过 Web 控制台「会话闲置保活超时」改一次，或直接删除这两个键让其回落到新默认。启动期防御只能保证 `maxLifetime ≥ ttl`，不会主动把已有的 5 分钟 ttl 抬到 7 天。
+---
+
 ## [2.179.0-gw.35] - 2026-11-28
 
 ### 缺陷修复 (Fixes)：修复 5 项 P0 级安全与可用性缺陷

@@ -770,10 +770,10 @@
                 <div id="stickySessionConfigRow" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.05); font-size:12px;">
                   <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                     <span style="color:var(--text-muted);">会话闲置保活超时:</span>
-                    <input type="number" id="inputStickySessionTtl" class="search-input" style="width:70px; padding:4px 8px; font-size:12px; font-family:monospace; text-align:center;" min="10" max="3600" value="300" onchange="saveStickySessionTtl()">
+                    <input type="number" id="inputStickySessionTtl" class="search-input" style="width:88px; padding:4px 8px; font-size:12px; font-family:monospace; text-align:center;" min="10" max="2592000" value="604800" onchange="saveStickySessionTtl()">
                     <span style="color:var(--text-muted);">秒</span>
-                    <span class="badge badge-cool" style="font-size:10px;" title="基于 package/dist/codebuddy-headless.js 官方实现常量 COMPLETED_TASK_TTL_MS = 3e5 (5分钟)">官方 CLI: 300s (5分钟)</span>
-                    <span class="badge badge-cool" style="font-size:10px;" title="官方 CLI PROMPT_TIMEOUT_MS = 18e5 (30分钟)">最大存活: 30分钟</span>
+                    <span class="badge badge-ok" style="font-size:10px;" title="网关自有策略：默认 7 天（604800 秒）。CLI 原始基准为 COMPLETED_TASK_TTL_MS = 3e5（5 分钟），网关面向多客户端长会话场景已放宽。">网关默认: 7天</span>
+                    <span class="badge badge-cool" style="font-size:10px;" title="官方 CLI PROMPT_TIMEOUT_MS = 18e5 (30分钟)；网关默认已同步放宽至与闲置保活一致（7天），否则短的一方会先到期">最大存活: 同 7天</span>
                   </div>
                   <div>
                     <button class="btn-outline" style="padding:4px 10px; font-size:11px; white-space:nowrap; color:#f87171; border-color:rgba(248,113,113,0.3);" onclick="clearStickySessions()" title="手动清空网关内存中保存的会话与账号绑定关系">🧹 清空会话绑定</button>

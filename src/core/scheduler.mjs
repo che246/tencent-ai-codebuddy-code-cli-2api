@@ -22,10 +22,16 @@ import { ACCOUNT_RESTRICTED_CODES, extractStructuredBizCode } from '../upstream/
 
 // ─── 官方 CLI 常量与时间基准（严格溯源 package/dist/codebuddy-headless.js）───────────
 //
+// 说明：以下三个常量保留为"CLI 原始基准值"，仅作为语义参考与回退兜底。
+// 网关的会话粘性实际生效时长由 config.stickySessionTtlMs / stickySessionMaxLifetimeMs 决定，
+// 默认值见 src/config.mjs（当前为 7 天）。这是【网关自有策略，无 CLI 对应实现】：
+// CLI 是单进程单会话消费端，5 分钟/30 分钟的窗口是为了匹配上游 Prompt Cache 保留期；
+// 而网关需要让多个下游客户端在长时间闲置后仍回到同一账号，避免频繁换号造成的
+// 缓存失效与账号池抖动，因此默认窗口显著长于 CLI。
+
 // 1. 会话空闲保活 TTL: 3e5 = 300,000 ms (5 分钟)
 //    - CLI 源码变量: COMPLETED_TASK_TTL_MS (3e5), DEFAULT_PROMPT_TIMEOUT (3e5), STREAM_SAFE_TIMEOUT_MS (3e5)
-//    - 依据与语义: 任务/会话空闲保活超时窗口；同时严格对齐 Anthropic Claude 3.5/3.7 与 OpenAI
-//      官方 Prompt Cache 5 分钟保留期，确保同一会话连续调用命中 Prompt 缓存，首字延迟与计算开销大幅降低。
+//    - 依据与语义: 任务/会话空闲保活超时窗口；对齐 Prompt Cache 5 分钟保留期。
 export const CLI_COMPLETED_TASK_TTL_MS = 3e5; // 300,000 ms (5分钟)
 
 // 2. 清理扫描周期: 6e4 = 60,000 ms (1 分钟)
@@ -35,7 +41,7 @@ export const CLI_CLEANUP_INTERVAL_MS = 6e4; // 60,000 ms (1分钟)
 
 // 3. 会话绝对最大存活期: 18e5 = 1,800,000 ms (30 分钟)
 //    - CLI 源码变量: PROMPT_TIMEOUT_MS (18e5), DEFAULT_RUN_TIMEOUT_MS (18e5), ACCUMULATOR_TTL_MS (18e5)
-//    - 依据与语义: 单一会话/任务全生命周期上限，防止单一会话无限期锁定某个账号，保障账号池均衡。
+//    - 依据与语义: 单一会话/任务全生命周期上限。
 export const CLI_PROMPT_TIMEOUT_MS = 18e5; // 1,800,000 ms (30分钟)
 
 // ─── 会话粘性映射 (Sticky Session Affinity) ──────────────────────────────────

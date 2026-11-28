@@ -35,7 +35,8 @@ import {
   isValidApiKey,
   normalizeAccount,
   robustParseJson,
-  formatUptime
+  formatUptime,
+  STICKY_DEFAULT_TTL_MS
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -257,8 +258,8 @@ export async function handleApiRoutes(req, res, url) {
       accountFailoverEnabled: config.accountFailoverEnabled !== false,
       pinnedAccount: config.pinnedAccount || '',
       stickySessionEnabled: config.stickySessionEnabled !== false,
-      stickySessionTtlMs: config.stickySessionTtlMs || 300000,
-      stickySessionMaxLifetimeMs: config.stickySessionMaxLifetimeMs || 1800000,
+      stickySessionTtlMs: config.stickySessionTtlMs || STICKY_DEFAULT_TTL_MS,
+      stickySessionMaxLifetimeMs: config.stickySessionMaxLifetimeMs || STICKY_DEFAULT_TTL_MS,
       sessionStats: getSessionAffinityStats(),
       modelFallbackEnabled: config.modelFallbackEnabled !== false,
       modelFallback: config.modelFallback || {},
@@ -346,7 +347,20 @@ export async function handleApiRoutes(req, res, url) {
           config.stickySessionEnabled = body.stickySessionEnabled;
         }
         if (typeof body.stickySessionTtlMs === 'number') {
-          config.stickySessionTtlMs = Math.max(10000, body.stickySessionTtlMs);
+          // 下限 10 秒；上限 365 天，防止误输入天文数字导致 Map 永不清理
+          config.stickySessionTtlMs = Math.min(Math.max(10000, body.stickySessionTtlMs), 365 * 86400000);
+        }
+        if (typeof body.stickySessionMaxLifetimeMs === 'number') {
+          config.stickySessionMaxLifetimeMs = Math.min(Math.max(10000, body.stickySessionMaxLifetimeMs), 365 * 86400000);
+        }
+        // 解绑条件是「空闲超时 OR 绝对存活超时」任一命中，短的一方会先清掉会话。
+        // 这里做一次防御性对齐：只要 maxLifetime 小于 ttl，就抬到与 ttl 同值，
+        // 避免用户只调整 ttl 时被旧的 30 分钟 maxLifetime 静默截断。
+        if (typeof config.stickySessionTtlMs === 'number'
+          && typeof config.stickySessionMaxLifetimeMs === 'number'
+          && config.stickySessionMaxLifetimeMs > 0
+          && config.stickySessionMaxLifetimeMs < config.stickySessionTtlMs) {
+          config.stickySessionMaxLifetimeMs = config.stickySessionTtlMs;
         }
         if (typeof body.routingStrategy === 'string') {
           config.routingStrategy = body.routingStrategy;

@@ -388,15 +388,41 @@ export function loadJsonWithBackup(mainPath, defaultValue) {
 export let config = loadJsonWithBackup(CONFIG_PATH, {});
 export let accounts = loadJsonWithBackup(ACCOUNTS_PATH, []).map(a => normalizeAccount(a)).filter(Boolean);
 
-// 会话粘性 (Sticky Session) 默认配置（严格对齐官方 CLI 常量：COMPLETED_TASK_TTL_MS=3e5, PROMPT_TIMEOUT_MS=18e5）
+// ─── 会话粘性 (Sticky Session) 默认配置 ─────────────────────────────────────
+//
+// [网关自有策略，无 CLI 对应实现] 默认 7 天，由 VG 明确指定。
+//
+// 背景：CLI 的原始基准是「空闲 5 分钟 / 绝对存活 30 分钟」
+// （COMPLETED_TASK_TTL_MS=3e5, PROMPT_TIMEOUT_MS=18e5），那是为单进程单会话
+// 消费端设计的，目的是贴合上游 Prompt Cache 的 5 分钟保留期。
+//
+// 网关的诉求不同：多个下游客户端（编辑器 / 脚本 / Web 前端）会长时间挂着同一会话，
+// 每隔数小时甚至隔天才继续对话。若沿用 30 分钟窗口，会话一旦过期就会重新选号，
+// 导致同一用户的连续对话在不同账号间跳变，既打散 Prompt Cache 又让账号池负载抖动。
+// 因此默认拉长到 7 天。
+//
+// 注意：两个值必须同时满足才生效——解绑条件是
+//   isIdleExpired || isLifetimeExpired
+// 即「任一超限即解绑」。只把空闲 TTL 调到 7 天而保留 30 分钟的绝对存活期，
+// 后者会先到期把会话清掉，7 天设置形同虚设。故两者都设为 7 天。
+export const STICKY_DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 天 = 604,800,000 ms
+
 if (config.stickySessionEnabled === undefined) {
   config.stickySessionEnabled = true;
 }
 if (config.stickySessionTtlMs === undefined) {
-  config.stickySessionTtlMs = 300000; // 3e5 ms = 5 分钟
+  config.stickySessionTtlMs = STICKY_DEFAULT_TTL_MS; // 7 天（空闲未活动即过期）
 }
 if (config.stickySessionMaxLifetimeMs === undefined) {
-  config.stickySessionMaxLifetimeMs = 1800000; // 18e5 ms = 30 分钟
+  config.stickySessionMaxLifetimeMs = STICKY_DEFAULT_TTL_MS; // 7 天（绝对存活上限）
+}
+// 防御：若历史配置里 maxLifetime 小于 ttl，以 ttl 为准，
+// 否则短的那个会先到期，导致用户设置的 ttl 不生效。
+if (typeof config.stickySessionTtlMs === 'number'
+  && typeof config.stickySessionMaxLifetimeMs === 'number'
+  && config.stickySessionMaxLifetimeMs > 0
+  && config.stickySessionMaxLifetimeMs < config.stickySessionTtlMs) {
+  config.stickySessionMaxLifetimeMs = config.stickySessionTtlMs;
 }
 // 账号池负载均衡轮换区域范围（all: 全部轮换, cn: 仅国内版, intl: 仅国外/国际版）
 if (!config.routingRegionScope) {

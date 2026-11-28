@@ -71,7 +71,7 @@
           document.getElementById('badgeActiveSessions').innerText = `活跃会话: ${actCnt}`;
         }
         if (document.getElementById('inputStickySessionTtl')) {
-          document.getElementById('inputStickySessionTtl').value = Math.round((s.stickySessionTtlMs || 300000) / 1000);
+          document.getElementById('inputStickySessionTtl').value = Math.round((s.stickySessionTtlMs || 604800000) / 1000);
         }
         if (document.getElementById('stickySessionConfigRow')) {
           document.getElementById('stickySessionConfigRow').style.display = isStickyOn ? 'flex' : 'none';
@@ -540,9 +540,11 @@
       await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stickySessionTtlMs: val * 1000 })
+        // 同时下发 maxLifetime：解绑条件是「空闲超时 OR 绝对存活超时」任一命中，
+        // 只改前者会被后者提前清掉（服务端虽有防御性对齐，但显式同步更清晰）
+        body: JSON.stringify({ stickySessionTtlMs: val * 1000, stickySessionMaxLifetimeMs: val * 1000 })
       });
-      alert(`已将会话闲置保活超时设置为 ${val} 秒 (CLI基准 300秒)`);
+      alert(`已将会话闲置保活超时设置为 ${val} 秒（${(val / 86400).toFixed(1)} 天）`);
       await loadSettings();
     }
 
