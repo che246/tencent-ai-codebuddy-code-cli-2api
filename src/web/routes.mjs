@@ -48,20 +48,55 @@ import { loadModelPrices, saveModelPrices, searchOfficialPricingOnline } from '.
 const HTML_FILE_PATH = path.resolve(ROOT_DIR, 'src/web/public/index.html');
 
 // ─── Web 控制台鉴权校验工具函数 ─────────────────────────────────────────────
+//
+// [P0 安全修复] 控制台身份必须与 API 消费者身份解耦。
+//
+// 修复前的问题：未配置 webPassword 时，verifyWebAuthToken 会回落到
+// isValidApiKey(token)，而 isValidApiKey 遍历全部启用的网关 API Key。
+// 后果：任何只应"调用模型"的下游客户端（Cursor / 脚本 / 第三方前端），
+// 只要拿自己的 sk- 密钥请求一次 /api/settings，就能读到全部密钥、
+// 关闭 Web 鉴权、替换密钥池、删除账号 —— 从"用网关"升级为"接管网关"。
+//
+// 修复策略：
+//   · webPassword 显式配置时 → 只认 webPassword；
+//   · 未配置 webPassword 时 → 只认 config.apiKey 这一枚"主控密钥"，
+//     不再遍历 apiKeys（多密钥池里的任何一枚都不能直接进后台）；
+//   · 两条路径都用常量时间比对。
+//
+// 注意：config.apiKey 同时用于 /v1/* 鉴权，因此"主控密钥"仍可进后台。
+// 这是刻意的向后兼容取舍——升级到独立 webPassword 前，至少要把风险面
+// 从"所有下游 Key"收敛到"唯一的主密钥"。运维应尽快配置独立 webPassword。
+
 export function getWebAuthPassword() {
   if (config.webPassword && typeof config.webPassword === 'string' && config.webPassword.trim()) {
     return config.webPassword.trim();
   }
-  return (config.apiKey && typeof config.apiKey === 'string') ? config.apiKey.trim() : '';
+  // 未配置独立密码：返回空串，表示"无独立控制台口令"
+  return '';
+}
+
+/** 是否已配置独立控制台口令 */
+export function hasDedicatedWebPassword() {
+  return Boolean(config.webPassword && typeof config.webPassword === 'string' && config.webPassword.trim());
 }
 
 export function verifyWebAuthToken(token) {
   if (config.webAuthEnabled === false) return true;
   if (!token || typeof token !== 'string') return false;
-  if (config.webPassword && typeof config.webPassword === 'string' && config.webPassword.trim()) {
+
+  // 1) 优先：独立控制台口令
+  if (hasDedicatedWebPassword()) {
     return safeCompareTokens(token, config.webPassword.trim());
   }
-  return isValidApiKey(token);
+
+  // 2) 未配置独立口令：只允许主控密钥（config.apiKey），
+  //    不再回落到 isValidApiKey 的"任意一枚 Key 均可"语义。
+  if (typeof config.apiKey === 'string' && config.apiKey.trim()) {
+    return safeCompareTokens(token, config.apiKey.trim());
+  }
+
+  // 3) 既无 webPassword 也无 apiKey：拒绝，避免默认放行
+  return false;
 }
 
 // ─── Web 控制台静态页渲染 (支持服务端零构建组件化自动拼装) ─────────────────
@@ -114,16 +149,18 @@ export async function handleApiRoutes(req, res, url) {
       try {
         const body = JSON.parse(b);
         const inputPass = (body.password || body.token || '').trim();
-        const expected = getWebAuthPassword();
-        const isAuthSuccess = config.webAuthEnabled === false ||
-          (config.webPassword ? safeCompareTokens(inputPass, config.webPassword) : isValidApiKey(inputPass));
+        // [P0] 与 verifyWebAuthToken 保持同一判定口径，不再单独回落到 isValidApiKey，
+        // 否则登录端点会成为绕过上一步修复的后门。
+        const isAuthSuccess = config.webAuthEnabled === false || verifyWebAuthToken(inputPass);
         if (isAuthSuccess) {
           Logger.info('AUTH', `Web 控制台授权成功通过 (IP: ${req.socket.remoteAddress})`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({
             ok: true,
-            token: config.webAuthEnabled === false ? '' : (expected || inputPass),
-            webAuthEnabled: config.webAuthEnabled !== false
+            // 回显给前端的口令：独立口令优先；未配置时用输入值（即已校验通过的主控密钥）
+            token: config.webAuthEnabled === false ? '' : (getWebAuthPassword() || inputPass),
+            webAuthEnabled: config.webAuthEnabled !== false,
+            hasDedicatedPassword: hasDedicatedWebPassword()
           }));
         } else {
           Logger.warn('AUTH', `Web 控制台授权凭据错误 (IP: ${req.socket.remoteAddress})`);
@@ -186,13 +223,33 @@ export async function handleApiRoutes(req, res, url) {
 
   // 1. 策略设置读取接口
   if (url.pathname === '/api/settings' && req.method === 'GET') {
+    // [P0] 凭据脱敏：不再明文回传 apiKey / apiKeys[].key / webPassword / rootDir。
+    // 控制台只需要"是否已配置""有几枚""是哪一枚在用"这类元信息，
+    // 明文密钥仅通过 /api/keys 的显式"显示"操作按需获取。
+    const keys = getApiKeys();
+    const maskedKeys = keys.map(k => ({
+      id: k.id,
+      note: k.note,
+      createdAt: k.createdAt,
+      enabled: k.enabled !== false,
+      // 仅保留首尾便于辨认，中间打码
+      keyPreview: typeof k.key === 'string' && k.key.length > 12
+        ? k.key.slice(0, 8) + '****' + k.key.slice(-4)
+        : '****',
+      isPrimary: k.key === config.apiKey
+    }));
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({
       port: config.port,
-      apiKey: config.apiKey,
-      apiKeys: getApiKeys(),
+      apiKeyPreview: typeof config.apiKey === 'string' && config.apiKey.length > 12
+        ? config.apiKey.slice(0, 8) + '****' + config.apiKey.slice(-4)
+        : '****',
+      hasApiKey: Boolean(config.apiKey),
+      apiKeys: maskedKeys,
       webAuthEnabled: config.webAuthEnabled !== false,
-      webPassword: config.webPassword || '',
+      hasWebPassword: hasDedicatedWebPassword(),
+      webPassword: '',
       concurrencyLimitEnabled: config.concurrencyLimitEnabled !== false,
       maxInFlightPerAccount: config.maxInFlightPerAccount || 3,
       routingStrategy: config.routingStrategy || 'least-inflight',
@@ -215,8 +272,7 @@ export async function handleApiRoutes(req, res, url) {
       loggingPolicy: getLoggingPolicy(),
       requestClientInfo: config.requestClientInfo !== false,
       requestArchiveContext: Boolean(config.requestArchiveContext),
-      privateDataPolicy: getPrivateDataPolicy(),
-      rootDir: ROOT_DIR
+      privateDataPolicy: getPrivateDataPolicy()
     }));
   }
 
@@ -358,12 +414,29 @@ export async function handleApiRoutes(req, res, url) {
   }
 
   // 2.5 API Key 独立多密钥管理接口
+  //
+  // [P0 关联修复] 默认脱敏返回，避免任何一次普通的页面轮询就把全部明文密钥
+  // 送到浏览器。只有显式传 ?reveal=1（用户点击"显示明文"）才返回完整值，
+  // 让"密钥可见"成为一个有意识的操作，而不是默认副作用。
   if (url.pathname === '/api/keys' && req.method === 'GET') {
+    const reveal = url.searchParams.get('reveal') === '1';
+    const keys = getApiKeys().map(k => ({
+      id: k.id,
+      note: k.note,
+      createdAt: k.createdAt,
+      enabled: k.enabled !== false,
+      isPrimary: k.key === config.apiKey,
+      key: reveal
+        ? k.key
+        : (typeof k.key === 'string' && k.key.length > 12 ? k.key.slice(0, 8) + '****' + k.key.slice(-4) : '****')
+    }));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({
       ok: true,
-      apiKey: config.apiKey,
-      keys: getApiKeys()
+      revealed: reveal,
+      apiKey: reveal ? config.apiKey : (typeof config.apiKey === 'string' && config.apiKey.length > 12
+        ? config.apiKey.slice(0, 8) + '****' + config.apiKey.slice(-4) : '****'),
+      keys
     }));
   }
 
@@ -870,7 +943,15 @@ export async function handleApiRoutes(req, res, url) {
     let b = '';
     req.on('data', c => b += c);
     req.on('end', async () => {
-      const { state, region: bodyRegion } = JSON.parse(b || '{}');
+      // P0：请求体解析失败不能抛到事件循环（会终止进程），必须先接住
+      let parsedBody;
+      try {
+        parsedBody = JSON.parse(b || '{}');
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: '请求体不是合法 JSON' }));
+      }
+      const { state, region: bodyRegion } = parsedBody;
       const pollRegion = normalizeRegion(bodyRegion || url.searchParams.get('region'));
       const ep = endpointsFor({ region: pollRegion });
       try {
@@ -956,7 +1037,26 @@ export async function handleApiRoutes(req, res, url) {
           AccountScheduler.refreshCredits(newAcc);
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ ok: true, account: newAcc }));
+          // [P0] 不回传 accessToken / refreshToken。
+          // 账号卡片只需要 uid/email/region/额度/状态等展示字段，
+          // 长效 refreshToken 一旦进入浏览器就多了一条被盗路径（XSS / 插件 / 共享工位）。
+          // 令牌已落盘在 accounts.json，服务端持有即可，前端无需可见。
+          return res.end(JSON.stringify({
+            ok: true,
+            account: {
+              uid: newAcc.uid,
+              uin: newAcc.uin,
+              email: newAcc.email,
+              phoneNumber: newAcc.phoneNumber,
+              type: newAcc.type,
+              region: newAcc.region,
+              expiresAt: newAcc.expiresAt,
+              creditsRemain: newAcc.creditsRemain,
+              status: newAcc.status,
+              inFlight: newAcc.inFlight,
+              hasRefreshToken: Boolean(refreshToken)
+            }
+          }));
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -996,7 +1096,15 @@ export async function handleApiRoutes(req, res, url) {
     let b = '';
     req.on('data', c => b += c);
     req.on('end', async () => {
-      const { uid, force } = JSON.parse(b);
+      // P0：请求体解析失败不能抛到事件循环（会终止进程），必须先接住
+      let payload;
+      try {
+        payload = JSON.parse(b);
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: '请求体不是合法 JSON' }));
+      }
+      const { uid, force } = payload;
       const acc = accounts.find(a => a.uid === uid);
       if (!acc) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -1283,7 +1391,15 @@ export async function handleApiRoutes(req, res, url) {
     let b = '';
     req.on('data', c => b += c);
     req.on('end', () => {
-      const { uid } = JSON.parse(b);
+      // P0：同步监听器里的异常会直接冒泡到事件循环并终止进程
+      let payload;
+      try {
+        payload = JSON.parse(b);
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: '请求体不是合法 JSON' }));
+      }
+      const { uid } = payload;
       const idx = accounts.findIndex(a => a.uid === uid);
       if (idx !== -1) {
         const removed = accounts.splice(idx, 1)[0];

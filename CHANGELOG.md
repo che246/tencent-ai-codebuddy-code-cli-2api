@@ -8,6 +8,64 @@
 
 ---
 
+## [2.179.0-gw.35] - 2026-11-28
+
+### 缺陷修复 (Fixes)：修复 5 项 P0 级安全与可用性缺陷
+
+本节所有缺陷均来自 `docs/DEEP-ANALYSIS-2026-11-28.md` 的 P0 清单，且均已实证复现与验证。
+
+#### P0-1 单个畸形请求即可终止整个网关进程
+
+- **根因（三处叠加）**：
+  1. `server.mjs` 的 `req.on('end')` 里直接 `handler(req, res, rawBody)`，async handler 返回的 Promise 被丢弃；
+  2. 全项目无 `unhandledRejection` / `uncaughtException` 兜底；
+  3. 另有"响应头已发送后再 writeHead"的路径（SSE 流开始后抛错 → `ERR_HTTP_HEADERS_SENT`）。
+- **修复**：
+  - 新增进程级 `unhandledRejection` / `uncaughtException` 兜底，记录日志但不退出进程（网关是多账号长连接服务，单请求异常不该导致全量中断）；连续异常超阈值时额外告警，是否重启交由 systemd 策略；
+  - `handler()` 调用改为 `Promise.resolve().then(() => handler(...)).catch(err => handleRequestFailure(res, err))`；
+  - 新增 `handleRequestFailure()`：响应头未发送时返回 500 JSON；**已发送时不再 writeHead**，仅尽力 `res.end()` 收尾，避免二次异常。
+- **实证**：修复前非法 JSON 使进程 `[exit code: 1]` 退出；修复后同一请求返回 400 且进程存活。另构造"流已开始后抛错"场景，`ERR_HTTP_HEADERS_SENT` 被兜底捕获并记日志，`/healthz` 仍返回 200。
+
+#### P0-2 三处 `JSON.parse` 未受 try 保护
+
+- **影响端点**：`/api/oauth/poll`(L873)、`/api/checkin-single`(L999)、`/api/accounts/delete`(L1286)。
+- **修复**：三处均改为先 `try { JSON.parse } catch` 解析，失败返回 400「请求体不是合法 JSON」，不再让异常逃逸到事件循环。
+- **实证**：审计脚本确认 `routes.mjs` 内未受保护的 `JSON.parse` 由 3 处降为 **0 处**；5 个端点发送畸形体均返回 400 且进程存活。
+
+#### P0-3 API Key 即 Web 控制台管理员（权限提升）
+
+- **根因**：未配置 `webPassword` 时，`verifyWebAuthToken` 回落到 `isValidApiKey()`，而后者遍历**全部**启用的 API Key。任何只应"调用模型"的下游客户端，拿自己的 `sk-` 密钥请求一次 `/api/settings` 即可读取全部密钥、关闭 Web 鉴权、替换密钥池。
+- **修复**：
+  - `verifyWebAuthToken` 不再回落 `isValidApiKey`：独立 `webPassword` 优先；未配置时**只**允许 `config.apiKey`（主控密钥）这一枚；两者都无则拒绝（默认不放行）；
+  - 新增 `hasDedicatedWebPassword()` 供前端判断状态；
+  - `/api/auth/login` 改为复用 `verifyWebAuthToken()`，消除独立实现的旁路。
+- **实证**：用 `apiKey` 访问 `/api/settings` 由修复前的 200 变为 **401**；`/api/auth/login` 用 `apiKey` 登录变为 **403**；`webPassword` 两条路径均正常。
+
+#### P0-4 `/api/settings` 明文回传全部凭据
+
+- **根因**：GET `/api/settings` 回传 `apiKey`、`apiKeys[].key`、`webPassword`、`rootDir` 绝对路径。
+- **修复**：
+  - `apiKey` → `apiKeyPreview`（`sk-codeb****oken` 形式掩码）+ `hasApiKey`；
+  - `apiKeys[]` 逐项掩码为 `keyPreview`，附 `isPrimary` 标识；
+  - `webPassword` 恒返回空串，新增 `hasWebPassword` 布尔；
+  - 移除 `rootDir`。
+- **关联修复（超出原清单但同源）**：`/api/keys` GET 原先把明文密钥池直接下发，会架空上面所有脱敏。改为默认脱敏、仅 `?reveal=1` 时返回明文，使"密钥可见"成为有意识的显式操作。
+- **前端适配**：`settings.js` 5 处依赖旧字段的逻辑同步改造——密码框改为占位提示「留空则不修改」；生效口令改为掩码展示；`rootDir` 缺失时回退占位路径；「显示明文/复制口令」改为按需请求 `reveal=1`，不再从缓存读掩码冒充明文。
+- **实证**：`/api/settings` 响应中 `apiKey`、`rootDir` 字段消失，`webPassword` 为空，`apiKeyPreview` 为掩码；`/api/keys` 默认 `revealed:false` 且全部掩码，`?reveal=1` 才返回明文。
+
+#### P0-5 `/api/oauth/poll` 向前端回传长效 refreshToken
+
+- **根因**：OAuth 授权成功后直接把 `newAcc`（含 `accessToken` / `refreshToken`）返回给浏览器，而账号卡片并不需要令牌。
+- **修复**：改为只返回展示字段（`uid`/`email`/`region`/`expiresAt`/`creditsRemain`/`status`/`hasRefreshToken`），令牌仅服务端落盘持有。
+- **实证**：`/api/oauth/poll` 响应体不再含 `accessToken` 字段。
+
+- **回归验证**：`/v1/models`、`/api/metrics`（含运行时长）、首页加载均正常；全量 26 个模块语法检查通过；P0 端到端 16 项用例全部通过。
+
+- **涉及文件**：`src/server.mjs`、`src/web/routes.mjs`、`src/web/public/scripts/settings.js`。
+
+- **遗留说明**：本版本只做"止血"，以下 P1/P2 项未在本轮处理——`/api/*` 请求体无体积上限、登录无防爆破限速、CORS 仍为 `*`、无 `X-Frame-Options`/CSP/HSTS、`promptPolicy.file` 未限制在 `ROOT_DIR` 内、`executeRequestChain` 双适配器重复。详见分析报告 §7。
+---
+
 ## [2.179.0-gw.34] - 2026-11-28
 
 ### 功能增强 (Features)：新增网关运行时长显示

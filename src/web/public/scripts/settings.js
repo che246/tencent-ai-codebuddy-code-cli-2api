@@ -105,11 +105,14 @@
           document.getElementById('webPasswordSection').style.display = isWebAuthOn ? 'flex' : 'none';
         }
         if (document.getElementById('inputWebPassword')) {
-          document.getElementById('inputWebPassword').value = s.webPassword || '';
+          // [P0] 服务端不再回传明文口令，输入框留空并提示"保持空白即不修改"
+        const pwdInput = document.getElementById('inputWebPassword');
+        pwdInput.value = '';
+        pwdInput.placeholder = s.hasWebPassword ? '已设置（留空则不修改）' : '未设置（留空则继续使用主密钥）';
         }
-        const effectivePwd = s.webPassword || s.apiKey || '';
+        const effectivePwd = s.hasWebPassword ? '(已设置专属密码)' : (s.apiKeyPreview || '');
         if (document.getElementById('lblCurrentWebPasswordNote')) {
-          document.getElementById('lblCurrentWebPasswordNote').innerText = s.webPassword ? '(已设置专属密码)' : '(未单独设置，回落使用 apiKey)';
+          document.getElementById('lblCurrentWebPasswordNote').innerText = s.hasWebPassword ? '(已设置专属密码)' : '(未单独设置，回落使用主密钥)';
         }
         if (document.getElementById('txtActiveWebPassword')) {
           document.getElementById('txtActiveWebPassword').innerText = isActiveWebPasswordShown ? effectivePwd : '••••••••';
@@ -137,9 +140,11 @@
           if (document.getElementById('inputPromptFile')) {
             document.getElementById('inputPromptFile').value = s.promptPolicy.file || '';
           }
-          if (s.rootDir && document.getElementById('txtLinuxPromptExample')) {
-            const sep = s.rootDir.includes('\\') ? '\\' : '/';
-            const normalizedRoot = s.rootDir.replace(/[/\\]+$/, '');
+          // [P0] 服务端不再回传绝对路径 rootDir，缺失时用占位符避免示例错乱
+          if (document.getElementById('txtLinuxPromptExample')) {
+            const rootDirSafe = s.rootDir || '/path/to/gateway';
+            const sep = rootDirSafe.includes('\\') ? '\\' : '/';
+            const normalizedRoot = rootDirSafe.replace(/[/\\]+$/, '');
             document.getElementById('txtLinuxPromptExample').innerText = `${normalizedRoot}${sep}v1.1.40_prompt.txt`;
           }
           updatePromptUiState();
@@ -585,14 +590,41 @@
       const btn = document.getElementById('btnToggleActiveWebPassword');
       if (!txt) return;
       isActiveWebPasswordShown = !isActiveWebPasswordShown;
-      const effectivePwd = cachedSettings?.webPassword || cachedSettings?.apiKey || '';
-      txt.innerText = isActiveWebPasswordShown ? effectivePwd : '••••••••';
+      if (isActiveWebPasswordShown) {
+        // [P0] 明文不再随设置下发，点击"显示"时才单独请求 reveal=1。
+        // 未配置独立密码时，展示的是主密钥明文（等同管理员凭据），
+        // 因此只在本次点击后短暂显示在页面上，不写入任何持久化存储。
+        revealActiveWebPassword().then(pwd => {
+          txt.innerText = pwd || '(未设置)';
+        });
+      } else {
+        txt.innerText = '••••••••';
+      }
       if (btn) btn.innerText = isActiveWebPasswordShown ? '🙈 隐藏明文' : '👁️ 显示明文';
     }
 
-    function copyCurrentWebPassword() {
-      const effectivePwd = cachedSettings?.webPassword || cachedSettings?.apiKey || '';
-      if (!effectivePwd) return alert('当前暂无密码');
+    /** 按需拉取当前生效口令明文（仅用于用户主动点击"显示/复制"） */
+    async function revealActiveWebPassword() {
+      try {
+        const res = await fetch('/api/keys?reveal=1', {
+          headers: { 'x-web-token': localStorage.getItem('cb_web_token') || '' }
+        });
+        if (!res.ok) return '';
+        const j = await res.json();
+        // 已配置独立口令时服务端不返回它（只返回密钥池），此时用掩码提示
+        if (cachedSettings?.hasWebPassword) return '(已设置专属密码，不回显)';
+        return j.apiKey || '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    async function copyCurrentWebPassword() {
+      // [P0] 与显示逻辑共用同一条按需拉取路径，避免从 cachedSettings 读到掩码
+      const effectivePwd = await revealActiveWebPassword();
+      if (!effectivePwd || effectivePwd.startsWith('(')) {
+        return alert('当前口令不可回显；如需复制，请在"设置口令"处重新设置一个独立密码。');
+      }
       copyToClipboard(effectivePwd, '✅ 当前生效控制台密码已复制到剪贴板！');
     }
 

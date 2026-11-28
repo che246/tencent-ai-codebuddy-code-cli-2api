@@ -32,6 +32,36 @@ function flushAllOnShutdown() {
     LogDatabase.close();
   } catch (_) {}
 }
+
+// ─── 进程级异常兜底 (P0) ────────────────────────────────────────────────────
+// 背景：HTTP 总线里的 handler 调用不 await、不 catch（见下方 readRequestBody），
+// async handler 内部的 rejection 会变成 unhandledRejection；Node >= 15 默认终止进程。
+// 一个畸形的 /api 请求体（非法 JSON）就能打挂整个网关，这是不可接受的可用性缺陷。
+//
+// 处理策略：
+//   · 记录下来并按 error 级别落日志，便于事后定位；
+//   · 不退出进程——网关是多账号长连接服务，单请求异常不该导致全量中断；
+//   · 连续异常过多时（可能处于异常风暴）打印一次显式警告，但不主动退出，
+//     避免把"上游抖动"误判成"必须自杀"，交由外部 systemd Restart 策略兜底。
+let unhandledCount = 0;
+let lastUnhandledWarnAt = 0;
+function recordProcessAnomaly(kind, err) {
+  unhandledCount++;
+  const msg = err instanceof Error ? (err.stack || err.message) : String(err);
+  try {
+    Logger.error('SYSTEM', `${kind} 已捕获并忽略（累计 ${unhandledCount} 次）: ${String(msg).split('\n')[0].slice(0, 300)}`);
+  } catch (_) {}
+  const now = Date.now();
+  if (unhandledCount >= 10 && now - lastUnhandledWarnAt > 60000) {
+    lastUnhandledWarnAt = now;
+    try {
+      Logger.error('SYSTEM', `进程级异常累计达 ${unhandledCount} 次，请检查是否有客户端反复发送畸形请求；进程继续运行。`);
+    } catch (_) {}
+  }
+}
+process.on('unhandledRejection', (reason) => recordProcessAnomaly('unhandledRejection', reason));
+process.on('uncaughtException', (err) => recordProcessAnomaly('uncaughtException', err));
+
 process.on('SIGINT', () => {
   flushAllOnShutdown();
   process.exit(0);
@@ -49,6 +79,33 @@ TlsCertificateStack.init();
 
 // 请求体 50MB 保护上限，防止超大 Prompt 或大量 base64 图片引发 V8 OOM 崩溃
 const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024;
+
+/**
+ * 统一处理请求处理器抛出的异常（P0 兜底）。
+ *
+ * 关键分支：
+ *   · 响应头尚未发送 → 返回 500 JSON，客户端能拿到明确错误；
+ *   · 响应头已发送（典型：SSE 流已开始）→ 不能再 writeHead，否则会抛
+ *     ERR_HTTP_HEADERS_SENT 引发第二次异常；此时只尝试结束流并记录。
+ */
+function handleRequestFailure(res, err) {
+  const message = err instanceof Error ? err.message : String(err);
+  Logger.error('SERVER', `请求处理器异常: ${message}`);
+
+  try {
+    if (res.writableEnded) return;
+    if (res.headersSent) {
+      // 已经在流式输出中途，无法再改状态码；尽力收尾，避免连接悬挂
+      try { res.end(); } catch (_) {}
+      return;
+    }
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Internal gateway error', type: 'api_error' } }));
+  } catch (e) {
+    Logger.error('SERVER', `请求处理器异常后收尾失败: ${e instanceof Error ? e.message : String(e)}`);
+    try { res.destroy(); } catch (_) {}
+  }
+}
 
 /**
  * 安全读取请求体并分发给处理器，带 Content-Length 预检、实时字节流限额以及底层 Socket 错误保护
@@ -81,7 +138,12 @@ function readRequestBody(req, res, handler, maxBytes = MAX_REQUEST_BODY_BYTES) {
 
   req.on('end', () => {
     if (aborted) return;
-    handler(req, res, rawBody);
+    // handler 是 async 函数，必须显式接住 rejection。
+    // 之前这里直接 `handler(req, res, rawBody)`，返回值 Promise 被丢弃，
+    // 任何内部异常都会变成 unhandledRejection 并终止进程（P0）。
+    Promise.resolve()
+      .then(() => handler(req, res, rawBody))
+      .catch(err => handleRequestFailure(res, err));
   });
 
   req.on('error', (err) => {
