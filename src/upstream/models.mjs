@@ -1,67 +1,38 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { CONFIG_URL, endpointsFor, resolveAccountRegion, REGION_CN, REGION_INTL, REGION_BASE, USER_AGENT, accounts, ROOT_DIR } from '../config.mjs';
+import { endpointsFor, resolveAccountRegion, REGION_CN, REGION_INTL, USER_AGENT, accounts, ROOT_DIR } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 
 // ─── 动态获取可用模型矩阵 ───────────────────────────────────────────────────
-// 策略：在线时从上游 /v3/config 拉取，并把结果写入 product.json；
-//       离线/冷启动时只读 product.json 一个文件，不依赖 package/ 目录。
-export const PRODUCT_JSON_PATH = path.resolve(ROOT_DIR, 'product.json');
+// [网关自有策略，无 CLI 对应实现 · 决策由 VG 明确指定]
+// 模型列表**只以上游 /v3/config 为准**，不做任何磁盘快照与离线回放：
+//   · 不写 product.json，不读 product.json，也不回落 package/product.json；
+//   · 进程内保留 5 分钟内存缓存，仅为降低对上游的请求频率，不构成第二数据源；
+//   · 上游不可达时如实返回空列表，由调用方感知失败，而不是用陈旧快照掩盖问题。
+// 理由：模型矩阵随上游随时漂移（上下架、改价、改能力位），陈旧的本地快照会让下游
+// 客户端选到已下架或已无权限的模型，产生难以归因的 4xx，比"列表短暂为空"更糟。
+// CLI 侧对应实现：ProductManager 以 48e4(8 分钟) TTL 懒刷新 + 事件强制刷新，
+// 同样不依赖本地模型快照做业务回放（磁盘缓存仅为加速启动，非权威源）。
+// TTL 取 5 分钟而非 CLI 的 8 分钟：网关面向多个下游客户端，需要更快跟上上游变更。
 
 let cachedRawUpstreamModels = null;
 let cachedRawPromotions = [];
 let lastModelFetchTimestamp = 0;
 
+// 上一个进程周期遗留的 product.json：仅用于启动时提示运维删除，不再作为数据源读取。
+const LEGACY_PRODUCT_JSON_PATH = path.resolve(ROOT_DIR, 'product.json');
+
 /**
- * 把上游返回的模型矩阵和促销活动持久化到 product.json（保留原有其他字段）。
- * 上游只提供 models / agents / productFeatures / modelPromotions，prompts/tools 等由官方文件自带；
- * 这里采用"合并"而非"覆盖"，避免丢失本地已有的非模型字段。
+ * 一次性检查：若磁盘上仍残留历史 product.json 快照，提示运维删除。
+ * 该文件已不再被读取，留着只会让人误以为模型列表来自本地缓存。
  */
-function persistModelsToProductJson(models, promotions = []) {
-  if (!Array.isArray(models) || models.length === 0) return false;
+export function warnLegacyProductSnapshot() {
   try {
-    let base = {};
-    if (fs.existsSync(PRODUCT_JSON_PATH)) {
-      try { base = JSON.parse(fs.readFileSync(PRODUCT_JSON_PATH, 'utf8')); } catch (_) { base = {}; }
+    if (fs.existsSync(LEGACY_PRODUCT_JSON_PATH)) {
+      Logger.warn('CONFIG', `检测到历史遗留快照 product.json（${LEGACY_PRODUCT_JSON_PATH}）。该文件已不再作为模型列表数据源，可安全删除。`);
     }
-    const prevIds = new Set((base.models || []).map(m => m.id));
-    base.models = models;
-    if (Array.isArray(promotions) && promotions.length > 0) {
-      base.modelPromotions = promotions;
-    }
-    base.modelsSyncedAt = new Date().toISOString();
-    fs.writeFileSync(PRODUCT_JSON_PATH, JSON.stringify(base, null, 2), 'utf8');
-
-    const added = models.map(m => m.id).filter(id => !prevIds.has(id));
-    if (added.length > 0) {
-      Logger.info('CONFIG', `product.json 已更新模型矩阵 (${models.length} 款，新增: ${added.join(', ')}，活动: ${(promotions || []).length} 项)`);
-    } else {
-      Logger.info('CONFIG', `product.json 已同步模型矩阵 (${models.length} 款，活动: ${(promotions || []).length} 项)`);
-    }
-    return true;
-  } catch (e) {
-    Logger.warn('CONFIG', `写入 product.json 失败: ${e.message}`);
-    return false;
-  }
-}
-
-/** 从 product.json 读取促销活动矩阵（优先根目录快照，缺失时回落至 package/ 官方内置快照） */
-function loadPromotionsFromProductJson() {
-  if (fs.existsSync(PRODUCT_JSON_PATH)) {
-    try {
-      const p = JSON.parse(fs.readFileSync(PRODUCT_JSON_PATH, 'utf8'));
-      if (Array.isArray(p.modelPromotions) && p.modelPromotions.length > 0) return p.modelPromotions;
-    } catch (_) {}
-  }
-  const builtinPath = path.resolve(ROOT_DIR, 'package', 'product.json');
-  if (fs.existsSync(builtinPath)) {
-    try {
-      const p = JSON.parse(fs.readFileSync(builtinPath, 'utf8'));
-      if (Array.isArray(p.modelPromotions) && p.modelPromotions.length > 0) return p.modelPromotions;
-    } catch (_) {}
-  }
-  return [];
+  } catch (_) {}
 }
 
 /**
@@ -172,25 +143,6 @@ export function resolveModelPromotion(m, promotions = []) {
   return null;
 }
 
-/** 从 product.json 读取模型矩阵（优先根目录快照，缺失时回落至 package/ 官方内置快照） */
-function loadModelsFromProductJson() {
-  if (fs.existsSync(PRODUCT_JSON_PATH)) {
-    try {
-      const p = JSON.parse(fs.readFileSync(PRODUCT_JSON_PATH, 'utf8'));
-      if (Array.isArray(p.models) && p.models.length > 0) return p.models;
-    } catch (_) {}
-  }
-  // 官方 CLI 内置 product.json 兜底
-  const builtinPath = path.resolve(ROOT_DIR, 'package', 'product.json');
-  if (fs.existsSync(builtinPath)) {
-    try {
-      const p = JSON.parse(fs.readFileSync(builtinPath, 'utf8'));
-      if (Array.isArray(p.models) && p.models.length > 0) return p.models;
-    } catch (_) {}
-  }
-  return [];
-}
-
 let cachedBusyMap = {};
 let lastBusyFetchTimestamp = 0;
 
@@ -267,17 +219,22 @@ export async function fetchDetailedModels(forceRefresh = false) {
         m.busy_level = m.busy;
       }
     }
-    return attachProbeStatus(cachedRawUpstreamModels, cachedRawPromotions.length > 0 ? cachedRawPromotions : loadPromotionsFromProductJson());
+    // 缓存命中：促销活动同样只来自上次真实上游响应，不回落本地文件
+    return attachProbeStatus(cachedRawUpstreamModels, cachedRawPromotions);
   }
 
-  // 1) 在线优先：按账号所属区域分别拉取，合并去重
+  // 1) 只以上游为准：按账号所属区域分别拉取，合并去重
   //    国内版与国际版的模型集合不同（国际版有 gpt-6-astra/grok-4.7 等），
   //    两个区域都拉到才能让客户端看到完整可用列表。
-  //    优化：同区域由首个可用账号成功拉取后即标记完成，无需对同区全池重复请求
+  //    优化：同区域由首个可用账号成功拉取后即标记完成，无需对同区全池重复请求。
+  //    注意：某区域本次未拉取成功时，**不会**用任何本地快照补齐——宁可少一个区域的模型，
+  //    也不让下游看到上游已下架/已改能力的陈旧条目。
   const merged = new Map();
   const mergedPromotions = new Map();
   const regionStat = {};
   const fetchedRegions = new Set();
+  const failedRegions = [];
+  const regionErrors = new Map();   // region -> 首个失败原因（用于末尾汇总日志）
 
   for (const acc of accounts) {
     if (acc.status !== 'healthy' || !acc.accessToken) continue;
@@ -316,32 +273,20 @@ export async function fetchDetailedModels(forceRefresh = false) {
           }
         }
       }
-    } catch (_) {}
-  }
-
-  // 2) 跨区域容灾保持：若某区域在此次拉取中未响应，保留本地快照中该区域已有模型，杜绝单区超时抹除全量数据
-  const existingSnapshot = loadModelsFromProductJson();
-  if (existingSnapshot.length > 0) {
-    const knownRegions = [REGION_CN, REGION_INTL];
-    for (const r of knownRegions) {
-      if (!regionStat[r]) {
-        // 当前区域拉取失败或无可用账号，从既有快照补充该区域的模型
-        for (const m of existingSnapshot) {
-          if (!m || !m.id) continue;
-          const mRegions = Array.isArray(m.regions) ? m.regions : (m.region ? [m.region] : [REGION_CN]);
-          if (mRegions.includes(r)) {
-            const exist = merged.get(m.id);
-            if (exist) {
-              if (!exist.regions.includes(r)) exist.regions.push(r);
-            } else {
-              merged.set(m.id, { ...m, regions: [r] });
-            }
-          }
-        }
-      }
+    } catch (e) {
+      // 同一区域会有多个账号依次尝试，这里只记录首个失败原因，末尾统一汇总，
+      // 避免一次拉取失败刷出十几条重复 warn。
+      if (!regionErrors.has(region)) regionErrors.set(region, e.message);
     }
   }
 
+  // 记录本次未拿到数据的区域，供日志与调用方判断"列表是否完整"
+  for (const r of [REGION_CN, REGION_INTL]) {
+    if (!regionStat[r]) failedRegions.push(r);
+  }
+
+  // 2) 只有真正从上游拿到数据，才更新内存缓存并返回。
+  //    这里不再有任何"跨区域快照补齐"或"离线快照回放"——模型列表必须与上游同步。
   if (merged.size > 0) {
     const models = [...merged.values()];
     const allIds = models.map(m => m.id);
@@ -353,7 +298,8 @@ export async function fetchDetailedModels(forceRefresh = false) {
       }
     }
 
-    const activePromotions = mergedPromotions.size > 0 ? [...mergedPromotions.values()] : loadPromotionsFromProductJson();
+    // 促销活动同样只认本次上游下发的 modelPromotions，不再回落到本地文件
+    const activePromotions = [...mergedPromotions.values()];
     cachedRawUpstreamModels = models;
     cachedRawPromotions = activePromotions;
     lastModelFetchTimestamp = now;
@@ -362,32 +308,20 @@ export async function fetchDetailedModels(forceRefresh = false) {
     const bothCount = models.filter(m => m.regions && m.regions.includes(REGION_CN) && m.regions.includes(REGION_INTL)).length;
     const cnAccCount = accounts.filter(a => a.status === 'healthy' && resolveAccountRegion(a) === REGION_CN).length;
     const intlAccCount = accounts.filter(a => a.status === 'healthy' && resolveAccountRegion(a) === REGION_INTL).length;
-    Logger.info('CONFIG', `成功从上游拉取模型矩阵 (全局去重共 ${models.length} 款；国内版: ${cnCount} 款 [${cnAccCount} 账号]，国际版: ${intlCount} 款 [${intlAccCount} 账号]，两区通用: ${bothCount} 款，活动: ${activePromotions.length} 项)`);
-    persistModelsToProductJson(models, activePromotions);
+    Logger.info('CONFIG', `成功从上游拉取模型矩阵 (全局去重共 ${models.length} 款；国内版: ${cnCount} 款 [${cnAccCount} 账号]，国际版: ${intlCount} 款 [${intlAccCount} 账号]，两区通用: ${bothCount} 款，活动: ${activePromotions.length} 项${failedRegions.length > 0 ? `，本次未拉到: ${failedRegions.join('/')}` : ''})`);
     return attachProbeStatus(models, activePromotions);
   }
 
-  // 3) 离线兜底：只读 product.json 或内置快照
-  const fallbackModels = existingSnapshot.map(m => (
-    Array.isArray(m?.regions) && m.regions.length ? m : { ...m, regions: [REGION_CN] }
-  ));
-  const fallbackPromotions = loadPromotionsFromProductJson();
-  if (fallbackModels.length > 0) {
-    const allIds = fallbackModels.map(m => m.id);
-    const busyMap = await fetchUpstreamModelBusyLevels(allIds, forceRefresh);
-    for (const m of fallbackModels) {
-      if (busyMap[m.id.toLowerCase()]) {
-        m.busy = busyMap[m.id.toLowerCase()];
-        m.busy_level = m.busy;
-      }
-    }
-    cachedRawUpstreamModels = fallbackModels;
-    cachedRawPromotions = fallbackPromotions;
-    Logger.info('CONFIG', `上游不可达，已从 product.json 加载离线模型矩阵 (共 ${fallbackModels.length} 款，活动: ${fallbackPromotions.length} 项)`);
-    return attachProbeStatus(fallbackModels, fallbackPromotions);
-  }
-
-  Logger.warn('CONFIG', '上游不可达且 product.json 无模型数据，模型列表为空');
+  // 3) 上游完全拿不到数据：如实返回空列表，不做任何本地回放。
+  //    同时清空内存缓存，避免上一次的陈旧结果在下一轮被当作"仍然有效"。
+  cachedRawUpstreamModels = null;
+  cachedRawPromotions = [];
+  lastModelFetchTimestamp = 0;
+  const errDetail = failedRegions
+    .filter(r => regionErrors.has(r))
+    .map(r => `${r}: ${regionErrors.get(r)}`)
+    .join('；');
+  Logger.warn('CONFIG', `上游 /v3/config 全部不可达（未拉到: ${failedRegions.join('/') || '未知'}${errDetail ? `，原因: ${errDetail}` : ''}），模型列表返回空。请检查账号健康度与网络连通性。`);
   return attachProbeStatus([], []);
 }
 

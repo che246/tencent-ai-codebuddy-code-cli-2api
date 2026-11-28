@@ -338,13 +338,13 @@ curl http://127.0.0.1:8317/v1/fetch \
 - **启动横幅**：改为按实际账号池推导区域构成（只有国内版账号显示「国内版」，只有国际版显示「国际版」，两者都有显示「国内版 + 国际版 双区域」），并新增账号池构成、上游区域、模型区隔三行；
 - **上游请求头**：对齐官方 CLI 2.179.0，`Accept` 改为 `application/json`，补齐 `X-Product: SaaS`、`X-IDE-Type/Name: CLI`、`X-Agent-Runtime: other`、`X-Requested-With`、`X-Agent-Purpose`、`X-Agent-Type`、`X-CodeBuddy-Request`、`X-Root-Request-Id`，移除 `X-Session-ID` / `X-Wb-Uid` / `X-Model-ID` / `X-Client-Platform` / `X-Client-Version` / `X-Product-Version`；
 - **无缓存命中的折算公式**：由固定按 80% 命中估算，改为按上游实际回传的 `prompt_cache_hit_tokens` 精确计算；
-- **模型矩阵数据源**：不再引用 `package/` 目录，统一从上游 `/v3/config` 拉取并写入根目录 `product.json`，离线时只读该文件兜底；
+- **模型矩阵数据源**：只以上游 `/v3/config` 为准，**不写、不读任何本地快照**。进程内保留 5 分钟内存缓存以降低上游请求频率；上游不可达时如实返回空列表（不再用陈旧快照掩盖问题）；
 - **Node.js 要求**：`>= 18` 更正为 `>= 22`（`node:sqlite` 于 22 引入）。
 
 #### ⚠️ 升级注意
 
 1. **`config.json` 不再入库**：拉取新版本后，若本地无 `config.json`，执行 `cp config.example.json config.json` 并填写 `apiKey` / `webPassword`；
-2. **`product.json` 不再入库**：首次启动时由 `/v3/config` 自动生成，离线环境需从旧版本目录拷入；
+2. **`product.json` 已废弃**：模型列表不再落盘，历史目录中残留的 `product.json` 可安全删除（启动时会给出提示）；
 3. **老账号自动兼容**：`region` 字段缺失时按 `endpoint` 推断，无需手工补；
 4. **`config.json` 结构变更**：新增 `modelBlacklist`（数组，默认空）；`modelFallback` 的值统一为**数组**（旧版单字符串仍兼容，会被规范化为单元素数组）；
 5. **重启生效**：本版本改动涉及配置结构，升级后需重启网关进程。
@@ -379,7 +379,7 @@ curl http://127.0.0.1:8317/v1/fetch \
 │           └── index.html      # 独立的单页 Web 控制台 (支持原生高亮编辑与免转义维护)
 ├── gateway.mjs                 # 根目录启动垫片 (兼容既有 node gateway.mjs 启动命令)
 ├── pack.ps1                    # 一键打包脚本 (生成含账号的可运行发布包)
-├── product.json                # 模型矩阵快照 (首次启动时从上游 /v3/config 自动生成，不入库)
+├── product.json                # [已废弃] 历史模型矩阵快照，可安全删除（启动时会提示）
 ├── config.example.json         # 配置模板 (config.json 含凭据，不入库)
 ├── accounts.example.json       # 账号模板 (accounts.json 含令牌，不入库)
 ├── config.json                 # 运行配置文件 (含 apiKey / webPassword，本地生成)

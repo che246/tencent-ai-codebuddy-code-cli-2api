@@ -18,6 +18,7 @@ import { handleOpenAiModels, handleOpenAiChatCompletions } from './adapters/open
 import { handleAnthropicMessages } from './adapters/anthropic.mjs';
 import { handleSearch, handleWebFetch } from './adapters/tools.mjs';
 import { handleDashboard, handleApiRoutes } from './web/routes.mjs';
+import { warnLegacyProductSnapshot } from './upstream/models.mjs';
 import { saveStatsSync } from './core/metrics.mjs';
 import { LogDatabase } from './core/database.mjs';
 
@@ -184,6 +185,10 @@ if (config.autoCheckin !== false) {
 
 // 启动时初始化：清理过期日志并主动预热刷新所有账号积分
 Logger.pruneOldLogs(3);
+
+// 模型列表已改为只以上游 /v3/config 为准（不再使用磁盘快照）。
+// 若磁盘上仍残留历史 product.json，提示运维删除，避免误以为是本地缓存生效。
+warnLegacyProductSnapshot();
 
 // inFlight 是「当前进行中的请求数」，属于进程内瞬态状态。
 // 它会被 saveAccounts() 一并持久化，若上次进程异常退出（崩溃/强杀）就会把
