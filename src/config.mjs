@@ -583,6 +583,31 @@ export function getLocalTimeString(d = new Date()) {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+/**
+ * 把毫秒时长格式化成人类可读的「运行时长」字符串。
+ *
+ * 输出策略：
+ *   < 1 分钟      → "42 秒"
+ *   < 1 小时      → "12 分 34 秒"
+ *   < 1 天        → "3 小时 05 分"
+ *   >= 1 天       → "2 天 07 小时"
+ *
+ * 只保留两个量级，避免 "2 天 7 小时 13 分 42 秒" 这种过长文本挤坏控制台卡片。
+ * 负数与非法值一律归零，不抛异常——调用方是探活接口，不能因统计数据异常而 500。
+ */
+export function formatUptime(ms) {
+  const total = Number(ms);
+  if (!Number.isFinite(total) || total <= 0) return '0 秒';
+  const sec = Math.floor(total / 1000);
+  if (sec < 60) return `${sec} 秒`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} 分 ${String(sec % 60).padStart(2, '0')} 秒`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 小时 ${String(min % 60).padStart(2, '0')} 分`;
+  const day = Math.floor(hour / 24);
+  return `${day} 天 ${String(hour % 24).padStart(2, '0')} 小时`;
+}
+
 // ─── 统一账号展示标识工具函数 (强制附带备注，防止同昵称混淆) ───────────────
 export function formatAccountLogName(acc) {
   if (!acc) return '未知账号';

@@ -1,4 +1,40 @@
 // ─── 概览与看板指标 ───────────────────────────────────────────────────────
+
+    // ─── 网关运行时长：服务端快照 + 前端本地递增 ───────────────────────────
+    // 服务端每次轮询返回 uptimeMs，这里记下基准值，再按本地时钟补足两次轮询之间的增量。
+    let uptimeBaseMs = null;
+    let uptimeBaseAt = 0;
+    let uptimeTimer = null;
+
+    /** 与服务端 config.mjs 的 formatUptime 保持一致的分档规则 */
+    function formatUptimeClient(ms) {
+      const total = Number(ms);
+      if (!Number.isFinite(total) || total <= 0) return '0 秒';
+      const sec = Math.floor(total / 1000);
+      if (sec < 60) return sec + ' 秒';
+      const min = Math.floor(sec / 60);
+      if (min < 60) return min + ' 分 ' + String(sec % 60).padStart(2, '0') + ' 秒';
+      const hour = Math.floor(min / 60);
+      if (hour < 24) return hour + ' 小时 ' + String(min % 60).padStart(2, '0') + ' 分';
+      const day = Math.floor(hour / 24);
+      return day + ' 天 ' + String(hour % 24).padStart(2, '0') + ' 小时';
+    }
+
+    function renderUptime() {
+      const el = document.getElementById('repUptime');
+      if (!el || uptimeBaseMs === null) return;
+      el.innerText = formatUptimeClient(uptimeBaseMs + (Date.now() - uptimeBaseAt));
+    }
+
+    /** 每秒刷新一次读数，页面隐藏时自动跳过，避免无谓的 DOM 写入 */
+    function startUptimeTicker() {
+      if (uptimeTimer) return;
+      uptimeTimer = setInterval(() => {
+        if (document.hidden) return;
+        renderUptime();
+      }, 1000);
+    }
+
     function switchMetricsRange(range, el) {
       currentMetricsRange = range;
       document.querySelectorAll('#metricsRangeTabs .filter-btn').forEach(b => b.classList.remove('active'));
@@ -78,6 +114,21 @@
           const sa = m.sessionAffinity;
           stickyEl.innerText = sa.enabled ? `开启 (${sa.activeSessions || 0}会话)` : '已关闭';
           stickyEl.className = 'badge ' + (sa.enabled ? 'badge-ok' : 'badge-cool');
+        }
+
+        // 网关运行时长：服务端只给快照值，前端在两次轮询之间本地递增，
+        // 避免概览页 5 秒轮询间隔里读数"卡住不动"。
+        if (typeof m.uptimeMs === 'number' && m.uptimeMs >= 0) {
+          uptimeBaseMs = m.uptimeMs;
+          uptimeBaseAt = Date.now();
+          renderUptime();
+          const stEl = document.getElementById('repStartedAt');
+          if (stEl && m.startedAt) {
+            const d = new Date(m.startedAt);
+            stEl.innerText = isNaN(d.getTime()) ? ''
+              : `自 ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+            stEl.title = '网关进程启动时间（本地时区）';
+          }
         }
 
         // 1. 统计概览 7 卡片 (缓存命中率成为主指标，官网折算价降为辅助信息)
@@ -235,4 +286,7 @@
         alert('网络异常: ' + e.message);
       }
     }
+
+    // 页面加载即启动运行时长秒表（首次数据到达前显示 "-"）
+    startUptimeTicker();
 

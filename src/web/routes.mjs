@@ -34,7 +34,8 @@ import {
   removeApiKey,
   isValidApiKey,
   normalizeAccount,
-  robustParseJson
+  robustParseJson,
+  formatUptime
 } from '../config.mjs';
 import { Logger } from '../core/logger.mjs';
 import { LogDatabase } from '../core/database.mjs';
@@ -174,6 +175,11 @@ export async function handleApiRoutes(req, res, url) {
     const report = getMetricsReport(range);
     report.currentAccount = AccountScheduler.getCurrentActiveAccountInfo();
     report.sessionAffinity = getSessionAffinityStats();
+    // 网关连续运行时长：取进程真实存活时间，供控制台顶部展示
+    const uptimeMs = Math.round(process.uptime() * 1000);
+    report.uptimeMs = uptimeMs;
+    report.uptime = formatUptime(uptimeMs);
+    report.startedAt = new Date(Date.now() - uptimeMs).toISOString();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(report));
   }

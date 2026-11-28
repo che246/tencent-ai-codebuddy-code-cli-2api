@@ -8,6 +8,31 @@
 
 ---
 
+## [2.179.0-gw.34] - 2026-11-28
+
+### 功能增强 (Features)：新增网关运行时长显示
+
+- **背景与诉求**：此前控制台只能看到「账号池」「请求量」等业务指标，无法判断网关进程本身已连续运行多久。排查问题时（例如怀疑 5 分钟模型缓存长期未刷新、或判断是否需要重启以生效新代码）缺少一个直观依据。
+
+- **具体改动**：
+  - **`src/config.mjs`**：新增 `formatUptime(ms)`，把毫秒格式化为人类可读时长。分档规则：<1 分钟显示「N 秒」、<1 小时「N 分 SS 秒」、<1 天「N 小时 MM 分」、≥1 天「N 天 HH 小时」；只保留两个量级避免文本过长挤坏卡片；负数与非法值统一归零且不抛异常（调用方是探活接口，不能因统计异常而 500）。
+  - **`src/server.mjs`**：`GET /healthz` 新增 `uptimeMs`（数值）、`uptime`（文案）、`startedAt`（ISO 启动时刻）三个字段，便于外部监控直接消费。
+  - **`src/web/routes.mjs`**：`GET /api/metrics` 同样返回上述三个字段，供控制台使用。
+  - **`index.html`**：概览页「当前服务账号」横幅右侧状态区新增「运行时长」一项，主值黄色等宽字体，后跟「自 YYYY-MM-DD HH:MM」的启动时刻小字。
+  - **`overview.js`**：新增 `uptimeBaseMs` / `uptimeBaseAt` 基准与 `renderUptime()`；服务端只给快照值，前端在两次轮询之间按本地时钟补足增量并每秒刷新，避免 5 秒轮询间隔里读数「卡住不动」；页面 `hidden` 时跳过刷新，减少无谓 DOM 写入。前端 `formatUptimeClient` 与服务端 `formatUptime` 采用完全相同的分档规则。
+
+- **取数依据**：使用 `process.uptime()` 而非自记时间戳。它是 Node 进程真实存活秒数，以单调时钟为基准，不受系统时钟回拨或 NTP 校时影响；`startedAt` 由 `Date.now() - uptimeMs` 反推，仅用于展示。
+
+- **实测验证（Node v26.13.1）**：
+  - `formatUptime` 边界值：`0/999→"0 秒"`、`1000→"1 秒"`、`59999→"59 秒"`、`60000→"1 分 00 秒"`、`3599000→"59 分 59 秒"`、`3600000→"1 小时 00 分"`、`86400000→"1 天 00 小时"`、`191742000→"2 天 05 小时"`；`-5/NaN/null/undefined/"abc"` 全部安全归零；
+  - `/healthz` 实测返回 `{"status":"ok","activeAccounts":4,"uptimeMs":7987,"uptime":"7 秒","startedAt":"..."}`，3 秒后再取 `uptimeMs` 由 7987 增至 11008（增量 3021ms，符合真实时间）；
+  - `/api/metrics` 返回同样三字段，与 `/healthz` 的 `uptimeMs` 差 7ms（同一进程内连续调用），`startedAt` 完全一致；5 秒后增量 5014ms；
+  - 前端 `formatUptimeClient` 与服务端 `formatUptime` 在 21 个用例（含全部边界与非法值）上输出**逐个一致，0 处不符**；
+  - 控制台首页实测包含 `repUptime`、`repStartedAt` 元素与 `formatUptimeClient`、`startUptimeTicker()` 调用。
+
+- **涉及文件**：`src/config.mjs`、`src/server.mjs`、`src/web/routes.mjs`、`src/web/public/index.html`、`src/web/public/scripts/overview.js`。
+---
+
 ## [2.179.0-gw.33] - 2026-11-28
 
 ### 功能增强与行为变更 (Features & Breaking)：模型列表改为只以上游 /v3/config 为准，彻底移除磁盘快照
