@@ -1,0 +1,6 @@
+# 本地构建产物
+/gateway.exe
+/gateway
+/bin/
+*.test
+*.out

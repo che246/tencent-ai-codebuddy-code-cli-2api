@@ -1,5 +1,8 @@
 # 角色与重构任务
 
+> **勘误说明（2026-11-29）**：本文为早期总览稿，以下三处与源码不符，已就地修正并以 `GOLANG_REFACTOR_PROMPT_KIT.md` + `docs/GO-MIGRATION-SPEC-CARDS.md` 为权威：
+> ① 会话粘性 TTL 为 **7 天**（`config.mjs:408`），非 1 小时；② 链路 ID 为 **两对**同值，非 4 组同值（`headers.mjs`）；③ 网关**无**"最多重试 8 次"计数器，CLI 的 8/15 仅作对照。
+
 你是一名资深的 **Go 语言系统架构师与协议逆向专家**。
 你的任务是将现有的基于 Node.js 22+ 开发的 **Tencent CodeBuddy CLI 2API 网关项目** 完整重构成一个 **高性能、纯 Go 实现、零 CGO 依赖、单二进制交付** 的生产级网关系统。
 
@@ -33,7 +36,7 @@ codebuddy-gateway-go/
 │   ├── core/
 │   │   ├── scheduler/               # 选号引擎: least-inflight / round-robin / credits
 │   │   │   ├── scheduler.go
-│   │   │   └── sticky.go            # 1小时 TTL 会话粘性映射
+│   │   │   └── sticky.go            # 7 天 TTL（config 默认，可改 [10s,365d]）会话粘性映射
 │   │   ├── database/                # SQLite 日志表 (logs) 与 积分历史表 (credit_history)
 │   │   │   └── sqlite.go            # 尺寸熔断、自动压缩、按日期精准检索
 │   │   ├── metrics/                 # 报表统计计数 (stats.json) 与 Token 吞吐
@@ -41,7 +44,7 @@ codebuddy-gateway-go/
 │   │   └── tlscerts/                # 跨平台 (Windows/Linux/macOS) 系统根证书自动提取注入
 │   ├── upstream/                    # 腾讯官方协议族深度对齐 (关键模块)
 │   │   ├── endpoints.go             # cn (国内) 与 intl (国际) 双区同构端点路由
-│   │   ├── headers.go               # UUIDv7 毫秒时间戳生成、4 组同值链路 ID、UA 清洗
+│   │   ├── headers.go               # UUIDv7 毫秒时间戳生成、两对同值链路 ID、UA 清洗
 │   │   ├── stream_guard.go          # 20分钟看门狗、空流三标志分类、SSE 心跳保活
 │   │   ├── payload.go               # 指纹清洗、国际版 System 兜底、平铺推理参数规整
 │   │   ├── errors.go                # extractStructuredBizCode 6层下钻业务码递归解析
@@ -68,12 +71,11 @@ codebuddy-gateway-go/
 ### 1. 请求头指纹与风控对抗（`headers.go`）
 - **UUID v7 规范**：
   必须基于真实当前毫秒时间戳（大端编码前 6 字节）实现 UUID v7，输出 36 字符标准带连字符形式与 32 位无连字符 Hex。
-- **4 组同值链路 ID**（抓包实测绝对一致）：
-  同一次上游请求中，以下 4 个请求头必须**完全取同一个 32 位 Hex ID**：
-  - `X-Request-ID`
-  - `X-Conversation-Message-ID`
-  - `X-Conversation-Request-ID`
-  - `X-Root-Request-ID`
+- **两对同值链路 ID**（源码 `headers.mjs` 核实）：
+  同一次上游请求中，以下两组各自取同一个 32 位 Hex ID，两组之间**不同**：
+  - 第一对：`X-Request-ID` = `X-Conversation-Message-ID`（messageId）
+  - 第二对：`X-Conversation-Request-ID` = `X-Root-Request-ID`（conversationRequestId）
+  完整 38 个请求头见 `docs/GO-MIGRATION-SPEC-CARDS.md` §5.1。
 - **会话与跟踪 ID**：
   - `X-Conversation-ID`：必须为 36 字符的标准 UUID v7 结构（带连字符）；
   - `X-Trace-ID`：独立的 32 位 Hex UUID；

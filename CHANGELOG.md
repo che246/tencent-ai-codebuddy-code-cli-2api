@@ -8,6 +8,52 @@
 
 ---
 
+## [2.179.0-gw.37] - 2026-11-29
+
+### 功能增强 (Features)：Go 语言版网关完整实现（`golang/`），与 Node 版行为等价
+
+- **背景与诉求**：Node 版（`src/`）已稳定运行，但单进程 JS 运行时在长连接 SSE、内存占用、部署体积（需随包携带 Node 运行时）上有天然短板。用户要求按《Go 重构提示词包》（`GOLANG_REFACTOR_PROMPT_KIT.md` + `docs/GO-MIGRATION-{DIAGNOSIS,ARCHITECTURE,SPEC-CARDS}.md`）把整个项目重构为 Go 版，保存到 `golang/`，并且**一切网关行为仍以官方 CLI 产物为唯一依据**。
+- **交付范围**：`golang/` 下 12 个包、约 1.6 万行（含测试），`go build ./...`、`go vet ./...`、`gofmt -l .` 全部干净；`go test -race ./...` 10 个测试包全绿；真实二进制冒烟通过（TLS 根证书栈装载 171 张、API Key 自动生成、`/healthz`、控制台模板渲染、登录、`/api/metrics`、`/v1/models` 鉴权放行/拒绝、数据文件落盘）。
+- **包结构与对应关系**：
+
+  | Go 包 | 对应 Node 模块 | 要点 |
+  |---|---|---|
+  | `internal/config` | `src/config.mjs` | 多密钥 / 黑名单 / 思考·提示词·日志·私有数据策略 / 原子写 + 备份 / `NormalizeAccount` |
+  | `internal/core/database` | `src/core/database.mjs` | SQLite 日志 + 积分流水，按大小 / 按时间裁剪 |
+  | `internal/core/logger` | `src/core/logger.mjs` | SQLite 同步写入 + 环形缓冲 + `gateway.log` |
+  | `internal/core/tlscerts` | `src/core/tls-certs.mjs` | 官方同款系统 / 企业根证书栈 |
+  | `internal/upstream` | `src/upstream/*` | 请求头 / gzip / 错误码 / 模型矩阵 / 载荷策略 / 流守卫 / CLI 常量 |
+  | `internal/core/scheduler` | `src/core/scheduler.mjs` | 选号 / 粘性会话（`UnbindSticky`）/ 冷却 / 积分刷新 / 打卡 |
+  | `internal/core/metrics` | `src/core/metrics.mjs` + `log-parser.mjs` | 用量统计 / 区间报表 / `FormatTokenNumber` |
+  | `internal/core/pricing` | `src/core/pricing.mjs` | 定价表 / 成本核算 / 联网检索官网价格 |
+  | `internal/adapters` | `src/adapters/*` | OpenAI / Anthropic 转译、降级链、联网检索 / 抓取 |
+  | `internal/web` | `src/server.mjs` + `src/web/routes.mjs` | 路由总线 / API Key 鉴权 / 控制台鉴权 / 约 40 个 `/api/*` / 前端 `go:embed` |
+  | `cmd/gateway` | `gateway.mjs` + `server.mjs` 启动段 | 装配、后台定时任务、启动初始化、优雅停机 |
+
+- **CLI 依据（常量均在 `internal/upstream/cliconsts.go` 等处以 `// CLI: <变量>=<值>` 标注，可追溯）**：
+
+  | 项 | 值 | CLI 变量 |
+  |---|---|---|
+  | 首 token 超时 | 1,200,000 ms | `CODEBUDDY_FIRST_TOKEN_TIMEOUT_MS` |
+  | 流总时长 | 1,200,000 ms | `CODEBUDDY_STREAM_TIMEOUT_MS` |
+  | 空流重试窗口 / 静默看门狗 | 300,000 ms | `mb` |
+  | finish_reason 宽限 | 5,000 ms | `tf` |
+  | 请求最大重试 | 8（硬上限 15） | `mC` / `mv` |
+  | 思考期保活 | 默认关闭 | `CODEBUDDY_REASONING_KEEPALIVE_INTERVAL_MS` |
+
+  空流判定沿用 `hasSubstantiveContent` 语义（思考不算实质产出、不把缺 `finish_reason` 当错误），实现于 `internal/upstream/streamguard.go` 的 `createDeltaClassifier`。网关自有策略（粘性 TTL 7 天、tools 超时 15s 等）均在注释中标注「网关自有策略，无 CLI 对应实现」。
+- **本轮实现期修正**：
+  - `pricing.Store` 的 `SaveModelPrices` 嵌套加锁死锁 → 抽出 `loadLocked()`，`LoadModelPrices` / `SaveModelPrices` 共用；
+  - `upstream.Truthy` 对类型化 nil `*Obj` 误判为真值（JS `null`）→ 增加 `case *Obj: return t != nil`；
+  - `adapters.resolveClientInfo` / `web.remoteIP` 对无括号的 `::ffff:a.b.c.d:port` 形态去端口失败 → 增加末段端口剥离；
+  - metrics 测试期望值按 Node 实际输出修正（7d 总量 8800 / 87.5% 等），`stats.json`/`pricing.json` 2 空格缩进。
+- **与 Node 版的已知差异（语义等价，详见 `golang/README.md`）**：`config.json` 键序为字母序；`expiresAtFmt` 固定 `YYYY/M/D`（对应 zh-CN `toLocaleDateString()`）；进程级异常兜底改为 HTTP 总线 `recover` + 后台任务 `safeGo`；前端静态文件改为编译期 `go:embed`。
+- **验证**：`go test -race -count=1 -timeout 300s ./...` → `adapters / database / logger / metrics / pricing / scheduler / upstream / web` 全部 `ok`；冒烟：`/healthz` 返回 `{status:"ok",activeAccounts:0,uptimeMs:3956,uptime:"3 秒"}`，`/` 返回 297,923 字节且无 `{{` 残留，`/api/auth/login` 以自动生成 Key 登录 `ok=true`，`/api/metrics` 返回 `range=all`，`/v1/models` 带 Key 200 / 无 Key 401 `Invalid API Key`。
+- **涉及文件**：`golang/**`（新增）、`CHANGELOG.md`、`GOLANG_REFACTOR_PROMPT.md`（勘误）、`GOLANG_REFACTOR_PROMPT_KIT.md`、`docs/GO-MIGRATION-*.md`（新增）。
+- **运维提示**：Go 版与 Node 版共用同一套 `config.json` / `accounts.json`，可直接指向现有数据目录切换；切换前请先停 Node 实例避免端口冲突。局域网打包部署（`pack.ps1` + `tools/deploy_lan.py`）本轮**未执行**，由用户决定是否对 `192.168.1.201` 热部署。
+
+---
+
 ## [2.179.0-gw.36] - 2026-11-29
 
 ### 功能调整 (Features)：会话粘性默认时长调整为 7 天
